@@ -1,0 +1,27 @@
+--cpu=Cortex-M4.fp.sp
+"boot\startup_stm32f407xx.o"
+"boot\main.o"
+"boot\gpio.o"
+"boot\dma.o"
+"boot\usart.o"
+"boot\stm32f4xx_it.o"
+"boot\stm32f4xx_hal_msp.o"
+"boot\stm32f4xx_hal_uart.o"
+"boot\stm32f4xx_hal_rcc.o"
+"boot\stm32f4xx_hal_rcc_ex.o"
+"boot\stm32f4xx_hal_flash.o"
+"boot\stm32f4xx_hal_flash_ex.o"
+"boot\stm32f4xx_hal_flash_ramfunc.o"
+"boot\stm32f4xx_hal_gpio.o"
+"boot\stm32f4xx_hal_dma_ex.o"
+"boot\stm32f4xx_hal_dma.o"
+"boot\stm32f4xx_hal_pwr.o"
+"boot\stm32f4xx_hal_pwr_ex.o"
+"boot\stm32f4xx_hal_cortex.o"
+"boot\stm32f4xx_hal.o"
+"boot\stm32f4xx_hal_exti.o"
+"boot\system_stm32f4xx.o"
+--strict --scatter "BOOT\BOOT.sct"
+--summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
+--info sizes --info totals --info unused --info veneers
+--list "BOOT.map" -o BOOT\BOOT.axf
