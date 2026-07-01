@@ -19,12 +19,16 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "dma.h"
+#include "iwdg.h"
+#include "rtc.h"
 #include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "boot_config.h"
+#include <string.h>
+#include <stdio.h>                    // 后续 log 用
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -34,7 +38,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define APP_VALID_MAGIC       0x4F54412E  // ".OTA" 魔数，随意定义
 
+/* 备份域访问宏，简化书写 */
+#define BKP_READ(reg)   HAL_RTCEx_BKUPRead(&hrtc, (reg))
+#define BKP_WRITE(reg, val) HAL_RTCEx_BKUPWrite(&hrtc, (reg), (val))
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -45,13 +53,18 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+/* 私有变量 */
+static volatile uint8_t upgrade_flag = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-
+static void MX_IWDG_Start(void);        // 启动独立看门狗
+static void Log_Init(void);             // 初始化日志串口
+static uint8_t CheckAppValid(uint32_t addr);
+static void JumpToApp(uint32_t addr);
+static void EnterUpgradeMode(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -90,8 +103,37 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_USART1_UART_Init();
+  // MX_IWDG_Init();
+  MX_RTC_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  /* 启动独立看门狗 */
+  MX_IWDG_Start();
 
+  /* 初始化日志 */
+  Log_Init();
+  printf("BOOT Started.\r\n");
+
+    /* 检查升级标志 */
+  if (BKP_READ(RTC_BKP_DR1) == BOOT_FLAG_UPGRADE)
+  {
+      printf("Upgrade flag set. Entering upgrade mode.\r\n");
+      EnterUpgradeMode();
+  }
+  else
+  {
+      /* 检查 APP 是否有效 */
+      if (CheckAppValid(APP_BASE_ADDR))
+      {
+          printf("APP valid, jumping to APP...\r\n");
+          JumpToApp(APP_BASE_ADDR);
+      }
+      else
+      {
+          printf("APP invalid, entering upgrade mode.\r\n");
+          EnterUpgradeMode();
+      }
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -101,6 +143,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    HAL_IWDG_Refresh(&hiwdg);   // 一旦升级模式退出，我们仍喂狗防止复位
+
   }
   /* USER CODE END 3 */
 }
@@ -122,8 +166,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 8;
@@ -151,6 +196,102 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+/**
+  * @brief  启动独立看门狗（一旦启动，无法软件关闭，直至复位）
+  */
+static void MX_IWDG_Start(void)
+{
+    /* 使能备份域和电源接口时钟（需要用到时已由 RTC 初始化做了，这里可省略）*/
+    __HAL_RCC_PWR_CLK_ENABLE();
+    HAL_PWR_EnableBkUpAccess();
+
+    /* 初始化并启动 IWDG */
+    hiwdg.Instance = IWDG;
+    hiwdg.Init.Prescaler = IWDG_PRESCALER;
+    hiwdg.Init.Reload = IWDG_RELOAD;
+    if (HAL_IWDG_Init(&hiwdg) != HAL_OK)
+    {
+        // 初始化失败通常是因为已经启动，我们直接喂狗即可
+        HAL_IWDG_Refresh(&hiwdg);
+    }
+}
+/**
+  * @brief  初始化日志串口（USART2, 115200-8-N-1）
+  */
+static void Log_Init(void)
+{
+    // CubeMX 已经生成 MX_USART2_UART_Init()，所以无需额外初始化
+    // 如果需要 printf 重定向，可在 usart.c 中实现 fputc，此处先留空
+}
+/**
+  * @brief  检查 APP 固件有效性
+  * @param  addr: APP 基地址
+  * @retval 1 有效，0 无效
+  */
+static uint8_t CheckAppValid(uint32_t addr)
+{
+    uint32_t magic = *((volatile uint32_t *)(addr + 4));   // 假设头 4 字节是栈顶，后 4 字节是魔数
+    if (magic == APP_VALID_MAGIC)
+    {
+        // 可进一步添加 CRC32 校验头部（暂略）
+        return 1;
+    }
+    return 0;
+}
+/**
+  * @brief  跳转到 APP 固件
+  * @param  addr: APP 基地址（必须为 0x08010000 对齐）
+  */
+static void JumpToApp(uint32_t addr)
+{
+    uint32_t app_stack = *((volatile uint32_t *)addr);      // 首 4 字节是 MSP 初始值
+    uint32_t app_reset = *((volatile uint32_t *)(addr + 4));// 次 4 字节是复位向量（即入口地址）
+
+    /* 关闭所有外设中断（避免跳转后触发未初始化中断） */
+    __disable_irq();
+
+    /* 关闭所有可能在 BOOT 中开启的外设（可选，视情况） */
+    // HAL_DeInit(); 等
+
+    /* 设置向量表偏移 */
+    SCB->VTOR = addr;
+
+    /* 设置主栈指针 */
+    __set_MSP(app_stack);
+
+    /* 跳转到 APP 复位处理函数 */
+    ((void (*)(void))app_reset)();
+}
+/**
+  * @brief  进入升级模式（等待接收固件）
+  */
+static void EnterUpgradeMode(void)
+{
+    // 此处未来将放置 Ymodem 协议接收、安全校验、Flash 烧写等
+    // 目前先打印日志并死循环喂狗
+    printf("Entering upgrade mode...\r\n");
+
+    while (1)
+    {
+        HAL_IWDG_Refresh(&hiwdg);
+        // 等待升级流程（后续实现）
+        /* 检测到 USART1 接收到一帧数据 */
+        if (uart1_rx_complete)
+        {
+            uart1_rx_complete = 0;   // 清除标志
+
+            printf("Received %d bytes: ", uart1_rx_len);
+            for (uint16_t i = 0; i < uart1_rx_len; i++)
+            {
+                printf("%02X ", uart1_rx_buf[i]);
+            }
+            printf("\r\n");
+
+            /* 简易测试：将收到的原样发回（可选择） */
+            HAL_UART_Transmit(&huart1, uart1_rx_buf, uart1_rx_len, HAL_MAX_DELAY);
+        }
+    }
+}
 
 /* USER CODE END 4 */
 
