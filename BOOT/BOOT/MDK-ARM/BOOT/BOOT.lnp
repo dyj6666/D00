@@ -8,6 +8,8 @@
 "boot\usart.o"
 "boot\stm32f4xx_it.o"
 "boot\stm32f4xx_hal_msp.o"
+"boot\crc32.o"
+"boot\ymodem.o"
 "boot\stm32f4xx_hal_iwdg.o"
 "boot\stm32f4xx_hal_rcc.o"
 "boot\stm32f4xx_hal_rcc_ex.o"
@@ -26,7 +28,7 @@
 "boot\stm32f4xx_hal_rtc_ex.o"
 "boot\stm32f4xx_hal_uart.o"
 "boot\system_stm32f4xx.o"
---strict --scatter "BOOT\BOOT.sct"
+--library_type=microlib --strict --scatter "BOOT\BOOT.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers
 --list "BOOT.map" -o BOOT\BOOT.axf

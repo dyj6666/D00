@@ -22,6 +22,7 @@
 
 /* USER CODE BEGIN 0 */
 #include <stdio.h>
+#include "ymodem.h"
 
 uint8_t uart1_rx_buf[UART1_RX_BUF_SIZE];    //接受缓冲区
 volatile uint16_t uart1_rx_len = 0;         // 当前帧接收长度
@@ -231,6 +232,20 @@ PUTCHAR_PROTOTYPE
     // 使用 USART2 发送字符（日志专用串口）
     HAL_UART_Transmit(&huart2, (uint8_t *)&ch, 1, HAL_MAX_DELAY);
     return ch;
+}
+
+/**
+ * @brief  Ymodem发送一个字节（阻塞）
+ */
+int ymodem_send_char(uint8_t ch) {
+    return HAL_UART_Transmit(&huart1, &ch, 1, 100) == HAL_OK ? 0 : -1;
+}
+
+/**
+ * @brief  Ymodem接收一个字节（带超时，返回0成功，-1超时）
+ */
+int ymodem_recv_byte(uint8_t *ch, uint32_t timeout_ms) {
+    return HAL_UART_Receive(&huart1, ch, 1, timeout_ms) == HAL_OK ? 0 : -1;
 }
 /* USER CODE END 1 */
 

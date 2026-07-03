@@ -29,6 +29,7 @@
 #include "boot_config.h"
 #include <string.h>
 #include <stdio.h>                    // 后续 log 用
+#include "ymodem.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -76,7 +77,7 @@ static void EnterUpgradeMode(void);
   * @brief  The application entry point.
   * @retval int
   */
-int main(void)
+ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
@@ -267,29 +268,29 @@ static void JumpToApp(uint32_t addr)
   */
 static void EnterUpgradeMode(void)
 {
-    // 此处未来将放置 Ymodem 协议接收、安全校验、Flash 烧写等
-    // 目前先打印日志并死循环喂狗
     printf("Entering upgrade mode...\r\n");
 
-    while (1)
-    {
+    ymodem_t ctx;
+    ymodem_status_t status;
+
+    /* 调用Ymodem接收，将数据起始地址设为 DOWNLOAD_BASE_ADDR（暂不写Flash） */
+    status = ymodem_receive_file(&ctx, DOWNLOAD_BASE_ADDR);
+
+    if (status == YMODEM_OK) {
+        printf("Upgrade file received successfully!\r\n");
+        // 未来这里进行解密、验签、烧写
+        // 清除升级标志，跳转APP
+        BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
+        printf("Rebooting to APP...\r\n");
+        HAL_Delay(100);
+        NVIC_SystemReset();
+    } else {
+        printf("Upgrade failed with code: %d\r\n", status);
+        // 停留在此，等待再次升级
+    }
+
+    while (1) {
         HAL_IWDG_Refresh(&hiwdg);
-        // 等待升级流程（后续实现）
-        /* 检测到 USART1 接收到一帧数据 */
-        if (uart1_rx_complete)
-        {
-            uart1_rx_complete = 0;   // 清除标志
-
-            printf("Received %d bytes: ", uart1_rx_len);
-            for (uint16_t i = 0; i < uart1_rx_len; i++)
-            {
-                printf("%02X ", uart1_rx_buf[i]);
-            }
-            printf("\r\n");
-
-            /* 简易测试：将收到的原样发回（可选择） */
-            HAL_UART_Transmit(&huart1, uart1_rx_buf, uart1_rx_len, HAL_MAX_DELAY);
-        }
     }
 }
 
