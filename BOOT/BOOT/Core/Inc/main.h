@@ -32,6 +32,7 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdint.h>                   //使用typdef的变量类型
+#include "ymodem_port.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/

@@ -10,6 +10,8 @@
 "boot\stm32f4xx_hal_msp.o"
 "boot\crc32.o"
 "boot\ymodem.o"
+"boot\fifo.o"
+"boot\ymodem_port.o"
 "boot\stm32f4xx_hal_iwdg.o"
 "boot\stm32f4xx_hal_rcc.o"
 "boot\stm32f4xx_hal_rcc_ex.o"

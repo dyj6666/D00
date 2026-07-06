@@ -207,16 +207,9 @@ void SysTick_Handler(void)
 void USART1_IRQHandler(void)
 {
   /* USER CODE BEGIN USART1_IRQn 0 */
-  if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_IDLE) != RESET)
-  {
-      __HAL_UART_CLEAR_IDLEFLAG(&huart1);                     // 清除 IDLE 标志
-      HAL_UART_DMAStop(&huart1);                               // 暂停 DMA
-      uart1_rx_len = UART1_RX_BUF_SIZE - __HAL_DMA_GET_COUNTER(huart1.hdmarx); // 计算接收长度
-      uart1_rx_complete = 1;                                   // 标记接收完成
-      HAL_UART_Receive_DMA(&huart1, uart1_rx_buf, UART1_RX_BUF_SIZE); // 重新启动 DMA
-  }
+  ymodem_uart_isr_handler();
   /* USER CODE END USART1_IRQn 0 */
-  HAL_UART_IRQHandler(&huart1);
+  // HAL_UART_IRQHandler(&huart1);
   /* USER CODE BEGIN USART1_IRQn 1 */
 
   /* USER CODE END USART1_IRQn 1 */

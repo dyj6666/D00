@@ -7,3 +7,4 @@ void     crc32_update(uint32_t *crc, const uint8_t *data, uint32_t len);
 uint32_t crc32_finalize(uint32_t *crc);
 
 #endif
+

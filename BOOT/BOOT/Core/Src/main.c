@@ -266,31 +266,23 @@ static void JumpToApp(uint32_t addr)
 /**
   * @brief  进入升级模式（等待接收固件）
   */
-static void EnterUpgradeMode(void)
-{
-    printf("Entering upgrade mode...\r\n");
+void EnterUpgradeMode(void) {
+    printf("Entering upgrade mode (top-tier FSM)...\r\n");
 
-    ymodem_t ctx;
-    ymodem_status_t status;
+    ymodem_port_init();   // 初始化 UART FIFO 及 RXNE 中断
 
-    /* 调用Ymodem接收，将数据起始地址设为 DOWNLOAD_BASE_ADDR（暂不写Flash） */
-    status = ymodem_receive_file(&ctx, DOWNLOAD_BASE_ADDR);
+    ymodem_ctx_t ctx;
+    ymodem_status_t status = ymodem_receive(&ctx, DOWNLOAD_BASE_ADDR);
 
     if (status == YMODEM_OK) {
-        printf("Upgrade file received successfully!\r\n");
-        // 未来这里进行解密、验签、烧写
-        // 清除升级标志，跳转APP
-        BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
-        printf("Rebooting to APP...\r\n");
-        HAL_Delay(100);
-        NVIC_SystemReset();
+        printf("OTA success. File: %s, Size: %lu\r\n", ctx.file_name, ctx.received_size);
+        // TODO: 解密、验签、烧写 APP
     } else {
-        printf("Upgrade failed with code: %d\r\n", status);
-        // 停留在此，等待再次升级
+        printf("OTA failed, status: %d\r\n", status);
     }
 
     while (1) {
-        HAL_IWDG_Refresh(&hiwdg);
+        ymodem_feed_watchdog();
     }
 }
 
