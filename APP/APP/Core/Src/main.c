@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "rtc.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -34,7 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define BOOT_FLAG_UPGRADE  0x5A5A
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -45,17 +46,34 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+volatile uint8_t upgrade_request = 0;   /* 升级请求标志 */
+uint8_t rx_byte;                        /* 接收缓冲 */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-
+static void EnterBootloader(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+/**
+ * @brief  中断回调：USART2 每收到一字节触发
+ *         检测到 'U' 则置位升级请求，并重新启动接收
+ */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART2) {
+        if (rx_byte == 'U') {
+            upgrade_request = 1;
+        }
+        /* 清除可能残留的错误标志（ORE/FE/NE） */
+        __HAL_UART_CLEAR_OREFLAG(huart);   /* 清除溢出错误 */
+        /* 重新启动中断接收 */
+        HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
+    }
+}
 
 /* USER CODE END 0 */
 
@@ -73,10 +91,10 @@ int main(void)
   IWDG->KR = 0xAAAA;
 
   /* Enable GPIOF clock and set PF9 high (LED on) */
-  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOFEN;
-  GPIOF->MODER &= ~(3 << (9 * 2));
-  GPIOF->MODER |= (1 << (9 * 2));      /* Output */
-  GPIOF->BSRR = GPIO_BSRR_BS_9;        /* PF9 = high */
+  // RCC->AHB1ENR |= RCC_AHB1ENR_GPIOFEN;
+  // GPIOF->MODER &= ~(3 << (9 * 2));
+  // GPIOF->MODER |= (1 << (9 * 2));      /* Output */
+  // GPIOF->BSRR = GPIO_BSRR_BS_9;        /* PF9 = high */
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -98,7 +116,10 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
+  MX_RTC_Init();
   /* USER CODE BEGIN 2 */
+  /* 启动中断接收 */
+  HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
   printf("\r\n=== APP is running! ===\r\n");
   /* USER CODE END 2 */
 
@@ -106,10 +127,18 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    IWDG->KR = 0xAAAA;   /* Feed dog */
+    IWDG->KR = 0xAAAA;
     HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
     printf("APP heartbeat\r\n");
-    HAL_Delay(500);
+
+    /* 检查升级请求标志（无阻塞，无轮询延时） */
+    if (upgrade_request) {
+        upgrade_request = 0;        /* 清除标志 */
+        EnterBootloader();
+        /* 函数内复位，不会返回 */
+    }
+
+    HAL_Delay(500);                 /* 保持心跳间隔，可被 RTOS 替代 */
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -134,8 +163,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = 8;
@@ -163,7 +193,21 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+/**
+ * @brief  接收升级指令并复位到 BOOT
+ * @note   写入备份寄存器后等待 100ms 确保 BKP 写入完成，然后系统复位
+ */
+static void EnterBootloader(void) {
+    printf("APP: Received upgrade command. Entering BOOT...\r\n");
+    /* 确保备份域可写 */
+    HAL_PWR_EnableBkUpAccess();
+    /* 写入升级标志到 BKP_DR1 (与 BOOT 读取的地址一致) */
+    HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR1, BOOT_FLAG_UPGRADE);
+    /* 延时确保非易失写入完成 (后备寄存器由电池供电，软件复位不丢失) */
+    HAL_Delay(100);
+    /* 软件复位 */
+    NVIC_SystemReset();
+}
 /* USER CODE END 4 */
 
 /**

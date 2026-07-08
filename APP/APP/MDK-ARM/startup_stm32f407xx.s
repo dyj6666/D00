@@ -170,29 +170,9 @@ Reset_Handler    PROC
                  EXPORT  Reset_Handler             [WEAK]
         IMPORT  SystemInit
         IMPORT  __main
-
-        ; ===== IMMEDIATE FEED DOG & TURN ON PF10 =====
-        ; 使能 GPIOF 时钟 (RCC->AHB1ENR bit5)
-        LDR     R0, =0x40023830
-        LDR     R1, [R0]
-        ORR     R1, R1, #0x20
-        STR     R1, [R0]
-
-        ; 配置 PF10 为输出 (MODER 清除 [21:20], 然后设置 bit20)
-        LDR     R0, =0x40021400
-        LDR     R1, [R0]
-        LDR     R2, =0x00300000          ; 掩码 0x00300000 (bits 21:20)
-        BIC     R1, R1, R2
-        LDR     R2, =0x00100000          ; bit20 = 1
-        ORR     R1, R1, R2
-        STR     R1, [R0]
-
-        ; PF10 置高 (BSRR bit10)
-        LDR     R0, =0x40021418
-        LDR     R1, =0x00000400
-        STR     R1, [R0]
-
-        ; 喂狗 (IWDG->KR = 0xAAAA)
+			
+		; ================================================	
+        ; 喂锟斤拷 (IWDG->KR = 0xAAAA)
         LDR     R0, =0x40003000
         LDR     R1, =0x0000AAAA
         STR     R1, [R0]

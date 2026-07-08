@@ -246,15 +246,16 @@ static void JumpToApp(uint32_t addr) {
 
     printf("Jumping to APP: SP=0x%08X, PC=0x%08X\r\n", app_stack, app_reset);
 
+    /* 1. 彻底关闭 USART2 的发送和接收，清除所有状态 */
+    HAL_UART_Abort(&huart2);             /* 中止所有传输并等待完成 */
+    HAL_UART_DeInit(&huart2);            /* 反初始化，包括调用 MspDeInit 关闭时钟和中断 */
+
+    /* 2. 强制复位 USART2 外设内核 (确保寄存器回到复位值) */
+    __HAL_RCC_USART2_FORCE_RESET();
+    __HAL_RCC_USART2_RELEASE_RESET();
+    
     /* 喂狗 */
     IWDG->KR = 0xAAAA;
-
-    /* 关闭所有外设时钟（可选，但推荐） */
-    RCC->AHB1ENR = 0;
-    RCC->AHB2ENR = 0;
-    RCC->AHB3ENR = 0;
-    RCC->APB1ENR = 0;
-    RCC->APB2ENR = 0;
 
     /* 关闭全局中断并清除所有挂起的中断 */
     __disable_irq();
