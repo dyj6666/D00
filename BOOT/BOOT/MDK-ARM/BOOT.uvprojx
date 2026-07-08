@@ -81,7 +81,7 @@
           </BeforeMake>
           <AfterMake>
             <RunUserProg1>1</RunUserProg1>
-            <RunUserProg2>0</RunUserProg2>
+            <RunUserProg2>1</RunUserProg2>
             <UserProg1Name>fromelf --bin --output=BOOT.bin !L</UserProg1Name>
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
@@ -395,6 +395,31 @@
           <GroupName>Application/User/Core</GroupName>
           <Files>
             <File>
+              <FileName>crc32.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\crc32.c</FilePath>
+            </File>
+            <File>
+              <FileName>ymodem.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\ymodem.c</FilePath>
+            </File>
+            <File>
+              <FileName>fifo.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\fifo.c</FilePath>
+            </File>
+            <File>
+              <FileName>ymodem_port.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\ymodem_port.c</FilePath>
+            </File>
+            <File>
+              <FileName>flash_if.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\flash_if.c</FilePath>
+            </File>
+            <File>
               <FileName>main.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/main.c</FilePath>
@@ -535,26 +560,6 @@
               <FileName>stm32f4xx_hal_msp.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/stm32f4xx_hal_msp.c</FilePath>
-            </File>
-            <File>
-              <FileName>crc32.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\crc32.c</FilePath>
-            </File>
-            <File>
-              <FileName>ymodem.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\ymodem.c</FilePath>
-            </File>
-            <File>
-              <FileName>fifo.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\fifo.c</FilePath>
-            </File>
-            <File>
-              <FileName>ymodem_port.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\ymodem_port.c</FilePath>
             </File>
           </Files>
         </Group>

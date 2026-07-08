@@ -1,91 +1,67 @@
 /**
  * @file    ymodem.c
- * @brief   Ymodem 协议接收端状态机实现 (工业级 · 最终版)
- * 
+ * @brief   Ymodem protocol receiver state machine (Industrial Grade Final)
+ *
  * @details
- *   本文件是 Ymodem 协议引擎的核心实现，采用**事件驱动的层次化有限状态机**设计。
- *   与配套上位机脚本 ymodem_sender.py 经过逐状态、逐字节的严格交叉验证，确保
- *   在任何正常与异常链路条件下均能可靠传输。
- *
- *   工业级特性：
- *   - 完全非阻塞，等待期间自动喂狗
- *   - 平台无关，通过 ymodem_port.h 抽象所有硬件操作
- *   - 自动处理超时、重传、重复帧、序号错乱、CRC 错误
- *   - 正确处理数据帧填充字节，文件级 CRC32 与上位机完全一致
- *   - 可靠区分文件信息帧与结束帧，杜绝状态混淆
- *   - 零动态内存，零警告，代码可直接用于安全关键项目
- *
- *   状态迁移图：
- *   ```
- *   [INIT] ──发送'C'──▶ [WAIT_FILE_INFO] ──收到SOH/STX──▶ [RX_FRAME]
- *                            │ 超时重发'C'                    │
- *                            └──────── 解析失败/重试 ─────────┘
- *                                                             │
- *   [DATA_PHASE] ◀── 等待帧头 ── [RX_FRAME] (数据帧处理完) ──┘
- *        │ 收到EOT
- *        └──────▶ [EOT_PHASE] ──EOT/结束帧──▶ [COMPLETE]
- *        │ 超时       │ 超时/错误 ──▶ [ERROR]
- *        └──────────▶ [ERROR]
- *   ```
- *
- * @note    依赖 ymodem_port.h 提供的四个函数：
- *          - ymodem_read_byte()   从 FIFO 读取一字节，带超时
- *          - ymodem_send_byte()   发送一字节（阻塞）
- *          - ymodem_feed_watchdog() 喂狗
- *          - ymodem_get_tick()    获取系统毫秒 tick
+ *   - Non-blocking, fully event-driven FSM
+ *   - Writes valid payload to Download flash area on the fly
+ *   - Proper handling of padding bytes for file CRC
+ *   - Detailed English log output
+ *   - Zero warnings
  */
 
 #include "ymodem.h"
 #include "ymodem_port.h"
 #include "crc32.h"
+#include "flash_if.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
-/*===========================================================================
- * 内部宏定义
- *===========================================================================*/
-#define FRAME_BUF_SIZE      (3 + YMODEM_PACKET_SIZE + 4)  /**< 帧缓冲区大小 */
-#define POLL_TIMEOUT_MS     50      /**< 字节间轮询超时 (ms) */
-#define FILE_INFO_TIMEOUT   3000    /**< 文件信息帧整体超时 (ms) */
-#define DATA_TIMEOUT        5000    /**< 数据帧整体超时 (ms) */
-#define EOT_TIMEOUT         3000    /**< EOT 阶段超时 (ms) */
+/*---------------------------------------------------------------------------
+ * Internal macros
+ *---------------------------------------------------------------------------*/
+#define FRAME_BUF_SIZE      (3 + YMODEM_PACKET_SIZE + 4)
+#define POLL_TIMEOUT_MS     50
+#define FILE_INFO_TIMEOUT   3000
+#define DATA_TIMEOUT        5000
+#define EOT_TIMEOUT         3000
 
-/*===========================================================================
- * 类型定义
- *===========================================================================*/
-/** @brief 状态机状态 */
+/*---------------------------------------------------------------------------
+ * Internal types
+ *---------------------------------------------------------------------------*/
 typedef enum {
-    STATE_INIT,                 /**< 初始状态，发送 'C' 启动传输 */
-    STATE_WAIT_FILE_INFO,       /**< 等待文件信息帧 (SOH/STX) */
-    STATE_DATA_PHASE,           /**< 数据阶段，等待数据帧头或 EOT */
-    STATE_RX_FRAME,             /**< 接收一帧剩余字节 */
-    STATE_EOT_PHASE,            /**< 处理传输结束序列 (EOT/结束帧) */
-    STATE_COMPLETE,             /**< 传输成功完成 */
-    STATE_ERROR                 /**< 传输错误终止 */
+    STATE_INIT,
+    STATE_WAIT_FILE_INFO,
+    STATE_DATA_PHASE,
+    STATE_RX_FRAME,
+    STATE_EOT_PHASE,
+    STATE_COMPLETE,
+    STATE_ERROR
 } fsm_state_t;
 
-/** @brief 状态机实例 */
 typedef struct {
-    fsm_state_t     state;              /**< 当前状态 */
-    ymodem_ctx_t    *ctx;               /**< 用户上下文 */
-    uint32_t        flash_addr;         /**< 下载地址 (预留) */
-    uint8_t         buf[FRAME_BUF_SIZE];/**< 接收缓冲区 */
-    uint16_t        buf_len;            /**< 当前帧期望总字节数 */
-    uint16_t        buf_idx;            /**< 缓冲区写入索引 */
-    uint8_t         frame_type;         /**< 当前帧类型 (SOH/STX) */
-    uint16_t        retry;              /**< 重试计数 */
-    uint32_t        timer_start;        /**< 超时计时起点 */
-    bool            is_end_frame;       /**< 标记当前期望的是结束帧 */
+    fsm_state_t     state;
+    ymodem_ctx_t    *ctx;
+    uint32_t        flash_addr;         /* base download address */
+    uint8_t         buf[FRAME_BUF_SIZE];
+    uint16_t        buf_len;
+    uint16_t        buf_idx;
+    uint8_t         frame_type;
+    uint16_t        retry;
+    uint32_t        timer_start;
+    bool            is_end_frame;
+    uint16_t        total_packets;
 } ymodem_fsm_t;
 
-/*===========================================================================
- * 模块静态变量
- *===========================================================================*/
+/*---------------------------------------------------------------------------
+ * Module static variable
+ *---------------------------------------------------------------------------*/
 static ymodem_fsm_t fsm;
 
-/*===========================================================================
- * 内部函数声明
- *===========================================================================*/
+/*---------------------------------------------------------------------------
+ * Internal function declarations
+ *---------------------------------------------------------------------------*/
 static void fsm_dispatch(void);
 static void set_timeout(uint32_t ms);
 static bool is_timeout(uint32_t ms);
@@ -104,10 +80,12 @@ static void state_eot_phase(void);
 static uint32_t calc_frame_crc(const uint8_t *data, uint16_t len);
 static int parse_file_info(const uint8_t *data, ymodem_ctx_t *ctx);
 
-/*===========================================================================
- * 公开接口
- *===========================================================================*/
+/*---------------------------------------------------------------------------
+ * Public interface
+ *---------------------------------------------------------------------------*/
 ymodem_status_t ymodem_receive(ymodem_ctx_t *ctx, uint32_t flash_addr) {
+    printf("[Ymodem] === Ymodem receive start ===\r\n");
+
     memset(&fsm, 0, sizeof(fsm));
     fsm.ctx         = ctx;
     fsm.flash_addr  = flash_addr;
@@ -116,6 +94,7 @@ ymodem_status_t ymodem_receive(ymodem_ctx_t *ctx, uint32_t flash_addr) {
 
     ctx->received_size = 0;
     ctx->packet_seq    = 1;
+    ctx->write_addr    = flash_addr;    /* start of Download area */
     crc32_init(&ctx->current_crc);
 
     while (fsm.state != STATE_COMPLETE && fsm.state != STATE_ERROR) {
@@ -125,17 +104,23 @@ ymodem_status_t ymodem_receive(ymodem_ctx_t *ctx, uint32_t flash_addr) {
 
     if (fsm.state == STATE_COMPLETE) {
         uint32_t final_crc = crc32_finalize(&ctx->current_crc);
+        printf("[Ymodem] Transfer complete. File CRC: 0x%08X, Expected: 0x%08X\r\n",
+               final_crc, ctx->file_crc);
         if (final_crc != ctx->file_crc) {
+            printf("[Ymodem] ERROR: File CRC mismatch!\r\n");
             return YMODEM_ERR_CRC;
         }
+        printf("[Ymodem] File CRC OK.\r\n");
         return YMODEM_OK;
     }
+
+    printf("[Ymodem] Transfer failed, state: %d\r\n", fsm.state);
     return YMODEM_ERR_TIMEOUT;
 }
 
-/*===========================================================================
- * 状态调度器
- *===========================================================================*/
+/*---------------------------------------------------------------------------
+ * State dispatcher
+ *---------------------------------------------------------------------------*/
 static void fsm_dispatch(void) {
     switch (fsm.state) {
         case STATE_INIT:           state_init();            break;
@@ -147,14 +132,15 @@ static void fsm_dispatch(void) {
         case STATE_ERROR:
             break;
         default:
+            printf("[Ymodem] ERROR: Illegal state %d\r\n", fsm.state);
             fsm.state = STATE_ERROR;
             break;
     }
 }
 
-/*===========================================================================
- * 超时管理
- *===========================================================================*/
+/*---------------------------------------------------------------------------
+ * Timeout helpers
+ *---------------------------------------------------------------------------*/
 static void set_timeout(uint32_t ms) {
     (void)ms;
     fsm.timer_start = ymodem_get_tick();
@@ -164,9 +150,9 @@ static bool is_timeout(uint32_t ms) {
     return (ymodem_get_tick() - fsm.timer_start) >= ms;
 }
 
-/*===========================================================================
- * 底层字节收发
- *===========================================================================*/
+/*---------------------------------------------------------------------------
+ * Low-level I/O
+ *---------------------------------------------------------------------------*/
 static void send_byte(uint8_t b) {
     ymodem_send_byte(b);
 }
@@ -175,22 +161,28 @@ static int32_t read_byte_timeout(uint32_t ms) {
     return ymodem_read_byte(ms);
 }
 
-static void send_ack(void) { send_byte(YMODEM_ACK); }
-static void send_nak(void) { send_byte(YMODEM_NAK); }
+static void send_ack(void) {
+    send_byte(YMODEM_ACK);
+}
+
+static void send_nak(void) {
+    printf("[Ymodem] -> NAK\r\n");
+    send_byte(YMODEM_NAK);
+}
 
 static void cancel_transfer(void) {
+    printf("[Ymodem] -> CAN (cancel transfer)\r\n");
     for (int i = 0; i < 5; i++) {
         send_byte(YMODEM_CAN);
     }
     fsm.state = STATE_ERROR;
 }
 
-/*===========================================================================
- * 状态处理函数
- *===========================================================================*/
-
-/** @brief STATE_INIT : 连续发送 'C' 字符启动握手 */
+/*---------------------------------------------------------------------------
+ * State handlers
+ *---------------------------------------------------------------------------*/
 static void state_init(void) {
+    printf("[Ymodem] Sending 'C' to initiate handshake...\r\n");
     for (int i = 0; i < 5; i++) {
         send_byte(YMODEM_C);
         for (volatile int d = 0; d < 1000; d++);
@@ -200,14 +192,15 @@ static void state_init(void) {
     fsm.state = STATE_WAIT_FILE_INFO;
 }
 
-/** @brief STATE_WAIT_FILE_INFO : 等待文件信息帧头 */
 static void state_wait_file_info(void) {
     int32_t ch = read_byte_timeout(POLL_TIMEOUT_MS);
     if (ch < 0) {
         if (is_timeout(FILE_INFO_TIMEOUT)) {
             if (++fsm.retry > YMODEM_MAX_RETRY) {
+                printf("[Ymodem] ERROR: File info timeout, cancelling\r\n");
                 cancel_transfer();
             } else {
+                printf("[Ymodem] File info timeout, resending 'C' (retry %d)\r\n", fsm.retry);
                 fsm.state = STATE_INIT;
             }
         }
@@ -215,9 +208,11 @@ static void state_wait_file_info(void) {
     }
 
     if (ch == YMODEM_EOT) {
+        printf("[Ymodem] Received EOT (empty file)\r\n");
         send_ack();
         fsm.state = STATE_COMPLETE;
     } else if (ch == YMODEM_SOH || ch == YMODEM_STX) {
+        printf("[Ymodem] File info frame header: 0x%02X\r\n", ch);
         fsm.frame_type = (uint8_t)ch;
         fsm.buf[0]     = fsm.frame_type;
         fsm.buf_idx    = 1;
@@ -226,18 +221,20 @@ static void state_wait_file_info(void) {
         fsm.state      = STATE_RX_FRAME;
         fsm.retry      = 0;
     } else {
+        printf("[Ymodem] Unexpected char 0x%02X, sending NAK\r\n", ch);
         send_nak();
     }
 }
 
-/** @brief STATE_DATA_PHASE : 等待数据帧头或 EOT */
 static void state_data_phase(void) {
     int32_t ch = read_byte_timeout(POLL_TIMEOUT_MS);
     if (ch < 0) {
         if (is_timeout(DATA_TIMEOUT)) {
             if (++fsm.retry > YMODEM_MAX_RETRY) {
+                printf("[Ymodem] ERROR: Data phase timeout, cancelling\r\n");
                 cancel_transfer();
             } else {
+                printf("[Ymodem] Data phase timeout, sending NAK (retry %d)\r\n", fsm.retry);
                 send_nak();
                 set_timeout(DATA_TIMEOUT);
             }
@@ -246,12 +243,14 @@ static void state_data_phase(void) {
     }
 
     if (ch == YMODEM_EOT) {
+        printf("[Ymodem] Received EOT, entering end phase\r\n");
         send_nak();
         set_timeout(EOT_TIMEOUT);
         fsm.state = STATE_EOT_PHASE;
         fsm.retry = 0;
     } else if (ch == YMODEM_STX || ch == YMODEM_SOH) {
         uint16_t data_len = (ch == YMODEM_STX) ? YMODEM_PACKET_SIZE : 128;
+        printf("[Ymodem] Data frame header: 0x%02X, data length: %d\r\n", ch, data_len);
         fsm.frame_type = (uint8_t)ch;
         fsm.buf[0]     = fsm.frame_type;
         fsm.buf_idx    = 1;
@@ -260,16 +259,17 @@ static void state_data_phase(void) {
         fsm.state = STATE_RX_FRAME;
         fsm.retry = 0;
     } else {
+        printf("[Ymodem] Unexpected char 0x%02X, sending NAK\r\n", ch);
         send_nak();
     }
 }
 
-/** @brief STATE_RX_FRAME : 接收完整帧并进行校验处理 */
 static void state_rx_frame(void) {
     while (fsm.buf_idx < fsm.buf_len) {
         int32_t b = read_byte_timeout(POLL_TIMEOUT_MS);
         if (b < 0) {
             if (is_timeout(DATA_TIMEOUT)) {
+                printf("[Ymodem] Frame recv timeout (got %d/%d bytes)\r\n", fsm.buf_idx, fsm.buf_len);
                 send_nak();
                 fsm.retry++;
                 fsm.state = (fsm.frame_type == YMODEM_SOH && 
@@ -283,14 +283,18 @@ static void state_rx_frame(void) {
         set_timeout(DATA_TIMEOUT);
     }
 
-    uint8_t seq      = fsm.buf[1];
-    uint8_t seq_comp = fsm.buf[2];
+    uint8_t  seq      = fsm.buf[1];
+    uint8_t  seq_comp = fsm.buf[2];
     uint16_t data_len = (fsm.frame_type == YMODEM_STX) ? YMODEM_PACKET_SIZE : YMODEM_FILE_INFO_SIZE;
     uint8_t *data     = fsm.buf + 3;
     uint32_t rcv_crc  = *((uint32_t *)(data + data_len));
     uint32_t calc_crc = calc_frame_crc(data, data_len);
 
+    printf("[Ymodem] Frame received: type=%c, seq=%d, data_len=%d, calcCRC=0x%08X, recvCRC=0x%08X\r\n",
+           fsm.frame_type == YMODEM_STX ? 'T' : 'S', seq, data_len, calc_crc, rcv_crc);
+
     if ((uint8_t)(seq + seq_comp) != 0xFF) {
+        printf("[Ymodem] Sequence error: seq=%d, ~seq=%d (expected 0xFF)\r\n", seq, seq_comp);
         send_nak();
         fsm.state = (fsm.buf_len == (3 + YMODEM_FILE_INFO_SIZE + 4)) ?
                     STATE_WAIT_FILE_INFO : STATE_DATA_PHASE;
@@ -298,6 +302,7 @@ static void state_rx_frame(void) {
     }
 
     if (calc_crc != rcv_crc) {
+        printf("[Ymodem] Frame CRC error!\r\n");
         send_nak();
         fsm.state = (fsm.buf_len == (3 + YMODEM_FILE_INFO_SIZE + 4)) ?
                     STATE_WAIT_FILE_INFO : STATE_DATA_PHASE;
@@ -306,38 +311,57 @@ static void state_rx_frame(void) {
 
     if (fsm.frame_type == YMODEM_SOH && seq == 0 && data_len == YMODEM_FILE_INFO_SIZE) {
         if (fsm.is_end_frame) {
-            /* 结束帧 (全零文件名块) */
+            printf("[Ymodem] End frame received\r\n");
             send_ack();
             fsm.state = STATE_COMPLETE;
             fsm.is_end_frame = false;
         } else {
-            /* 文件信息帧 */
+            printf("[Ymodem] Parsing file info...\r\n");
             if (parse_file_info(data, fsm.ctx) != 0) {
+                printf("[Ymodem] File info parse failed, cancelling\r\n");
                 cancel_transfer();
                 return;
             }
+            printf("[Ymodem] File: %s, Size: %lu, Expected CRC: 0x%08X\r\n",
+                   fsm.ctx->file_name, fsm.ctx->file_size, fsm.ctx->file_crc);
+            fsm.total_packets = (fsm.ctx->file_size + YMODEM_PACKET_SIZE - 1) / YMODEM_PACKET_SIZE;
             fsm.ctx->packet_seq = 1;
             crc32_init(&fsm.ctx->current_crc);
             fsm.ctx->received_size = 0;
+            printf("[Ymodem] -> ACK + 'C'\r\n");
             send_ack();
             send_byte(YMODEM_C);
             set_timeout(DATA_TIMEOUT);
             fsm.state = STATE_DATA_PHASE;
         }
     } else {
-        /* 数据帧 */
+        /* Data frame */
         if (seq == fsm.ctx->packet_seq) {
-            /* 裁剪有效数据长度，防止填充字节影响文件 CRC */
             uint16_t valid_len = data_len;
             if (fsm.ctx->received_size + valid_len > fsm.ctx->file_size) {
                 valid_len = fsm.ctx->file_size - fsm.ctx->received_size;
             }
+
+            /* ---- Write valid data to flash ---- */
+            if (!flash_write(fsm.ctx->write_addr, data, valid_len)) {
+                printf("[Ymodem] Flash write error!\r\n");
+                cancel_transfer();
+                return;
+            }
+            fsm.ctx->write_addr += valid_len;
+
             crc32_update(&fsm.ctx->current_crc, data, valid_len);
             fsm.ctx->received_size += valid_len;
+            printf("[Ymodem] Data frame #%d OK, accumulated %lu/%lu bytes (%d%%)\r\n",
+                   seq, fsm.ctx->received_size, fsm.ctx->file_size,
+                   (int)(fsm.ctx->received_size * 100 / fsm.ctx->file_size));
+            fsm.ctx->packet_seq++;
             send_ack();
         } else if (seq == (uint8_t)(fsm.ctx->packet_seq - 1)) {
-            send_ack();  /* 重复帧，仅应答 */
+            printf("[Ymodem] Duplicate frame #%d, ACK but ignore data\r\n", seq);
+            send_ack();
         } else {
+            printf("[Ymodem] Seq mismatch: expected %d, received %d\r\n", fsm.ctx->packet_seq, seq);
             send_nak();
         }
         fsm.state = STATE_DATA_PHASE;
@@ -345,20 +369,22 @@ static void state_rx_frame(void) {
     }
 }
 
-/** @brief STATE_EOT_PHASE : 处理传输结束序列 */
 static void state_eot_phase(void) {
     int32_t ch = read_byte_timeout(POLL_TIMEOUT_MS);
     if (ch < 0) {
         if (is_timeout(EOT_TIMEOUT)) {
+            printf("[Ymodem] EOT phase timeout, cancelling\r\n");
             cancel_transfer();
         }
         return;
     }
 
     if (ch == YMODEM_EOT) {
+        printf("[Ymodem] Received second EOT\r\n");
         send_ack();
         send_byte(YMODEM_C);
-        fsm.is_end_frame = true;        /* 下一个 SOH 帧将是结束帧 */
+        printf("[Ymodem] -> ACK + 'C', waiting for end frame\r\n");
+        fsm.is_end_frame = true;
         fsm.frame_type = YMODEM_SOH;
         fsm.buf_len = 3 + YMODEM_FILE_INFO_SIZE + 4;
         fsm.buf_idx = 0;
@@ -366,7 +392,7 @@ static void state_eot_phase(void) {
         fsm.state = STATE_RX_FRAME;
         fsm.retry = 0;
     } else if (ch == YMODEM_SOH) {
-        /* 直接收到结束帧 (兼容某些实现) */
+        printf("[Ymodem] Directly received end frame\r\n");
         fsm.is_end_frame = true;
         fsm.buf[0] = YMODEM_SOH;
         fsm.buf_idx = 1;
@@ -374,13 +400,14 @@ static void state_eot_phase(void) {
         set_timeout(EOT_TIMEOUT);
         fsm.state = STATE_RX_FRAME;
     } else {
+        printf("[Ymodem] EOT phase unexpected char 0x%02X\r\n", ch);
         send_nak();
     }
 }
 
-/*===========================================================================
- * CRC 与文件信息解析
- *===========================================================================*/
+/*---------------------------------------------------------------------------
+ * CRC and parsing helpers
+ *---------------------------------------------------------------------------*/
 static uint32_t calc_frame_crc(const uint8_t *data, uint16_t len) {
     uint32_t crc;
     crc32_init(&crc);
@@ -394,7 +421,10 @@ static int parse_file_info(const uint8_t *data, ymodem_ctx_t *ctx) {
         ctx->file_name[i] = (char)data[i];
         i++;
     }
-    if (i >= YMODEM_FILE_INFO_SIZE || i == 0) return -1;
+    if (i >= YMODEM_FILE_INFO_SIZE || i == 0) {
+        printf("[Ymodem] Parse fail: invalid filename\r\n");
+        return -1;
+    }
     ctx->file_name[i] = '\0';
     i++;
 

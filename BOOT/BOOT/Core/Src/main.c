@@ -30,6 +30,7 @@
 #include <string.h>
 #include <stdio.h>                    // 后续 log 用
 #include "ymodem.h"
+#include "flash_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,7 +40,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define APP_VALID_MAGIC       0x4F54412E  // ".OTA" 魔数，随意定义
 
 /* 备份域访问宏，简化书写 */
 #define BKP_READ(reg)   HAL_RTCEx_BKUPRead(&hrtc, (reg))
@@ -77,7 +77,7 @@ static void EnterUpgradeMode(void);
   * @brief  The application entry point.
   * @retval int
   */
- int main(void)
+int main(void)
 {
 
   /* USER CODE BEGIN 1 */
@@ -104,7 +104,7 @@ static void EnterUpgradeMode(void);
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_USART1_UART_Init();
-  // MX_IWDG_Init();
+  MX_IWDG_Init();
   MX_RTC_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
@@ -229,12 +229,9 @@ static void Log_Init(void)
   * @param  addr: APP 基地址
   * @retval 1 有效，0 无效
   */
-static uint8_t CheckAppValid(uint32_t addr)
-{
-    uint32_t magic = *((volatile uint32_t *)(addr + 4));   // 假设头 4 字节是栈顶，后 4 字节是魔数
-    if (magic == APP_VALID_MAGIC)
-    {
-        // 可进一步添加 CRC32 校验头部（暂略）
+static uint8_t CheckAppValid(uint32_t addr) {
+    uint32_t magic = *((volatile uint32_t *)(addr + APP_VALID_OFFSET));
+    if (magic == APP_VALID_MAGIC) {
         return 1;
     }
     return 0;
@@ -243,46 +240,110 @@ static uint8_t CheckAppValid(uint32_t addr)
   * @brief  跳转到 APP 固件
   * @param  addr: APP 基地址（必须为 0x08010000 对齐）
   */
-static void JumpToApp(uint32_t addr)
-{
-    uint32_t app_stack = *((volatile uint32_t *)addr);      // 首 4 字节是 MSP 初始值
-    uint32_t app_reset = *((volatile uint32_t *)(addr + 4));// 次 4 字节是复位向量（即入口地址）
+static void JumpToApp(uint32_t addr) {
+    uint32_t app_stack = *(volatile uint32_t *)addr;
+    uint32_t app_reset = *(volatile uint32_t *)(addr + 4);
 
-    /* 关闭所有外设中断（避免跳转后触发未初始化中断） */
+    printf("Jumping to APP: SP=0x%08X, PC=0x%08X\r\n", app_stack, app_reset);
+
+    /* 喂狗 */
+    IWDG->KR = 0xAAAA;
+
+    /* 关闭所有外设时钟（可选，但推荐） */
+    RCC->AHB1ENR = 0;
+    RCC->AHB2ENR = 0;
+    RCC->AHB3ENR = 0;
+    RCC->APB1ENR = 0;
+    RCC->APB2ENR = 0;
+
+    /* 关闭全局中断并清除所有挂起的中断 */
     __disable_irq();
 
-    /* 关闭所有可能在 BOOT 中开启的外设（可选，视情况） */
-    // HAL_DeInit(); 等
+    /* 复位 SysTick */
+    SysTick->CTRL = 0;
+    SysTick->LOAD = 0;
+    SysTick->VAL  = 0;
 
-    /* 设置向量表偏移 */
+    /* 清除中断挂起寄存器 */
+    for (int i = 0; i < 8; i++) {
+        NVIC->ICER[i] = 0xFFFFFFFF;   /* 关闭所有中断使能 */
+        NVIC->ICPR[i] = 0xFFFFFFFF;   /* 清除所有挂起中断 */
+    }
+
+    /* 设置向量表 */
     SCB->VTOR = addr;
+    __DSB();
+    __ISB();
 
-    /* 设置主栈指针 */
     __set_MSP(app_stack);
+    __DSB();
+    __ISB();
 
-    /* 跳转到 APP 复位处理函数 */
     ((void (*)(void))app_reset)();
 }
 /**
   * @brief  进入升级模式（等待接收固件）
   */
-void EnterUpgradeMode(void) {
+static void EnterUpgradeMode(void) {
     printf("Entering upgrade mode (top-tier FSM)...\r\n");
 
-    ymodem_port_init();   // 初始化 UART FIFO 及 RXNE 中断
-
+    ymodem_port_init();
+    /* ------------------------------------------------
+     * Erase Download area to ensure clean programming
+     * ------------------------------------------------ */
+    printf("Erasing Download area...\r\n");
+    if (!flash_erase(DOWNLOAD_BASE_ADDR, DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE - 1)) {
+        printf("Download erase failed!\r\n");
+        while (1) { IWDG->KR = 0xAAAA; }
+    }
     ymodem_ctx_t ctx;
     ymodem_status_t status = ymodem_receive(&ctx, DOWNLOAD_BASE_ADDR);
 
     if (status == YMODEM_OK) {
         printf("OTA success. File: %s, Size: %lu\r\n", ctx.file_name, ctx.received_size);
-        // TODO: 解密、验签、烧写 APP
+
+        /* 1. Erase entire APP area */
+        printf("Erasing APP area...\r\n");
+        if (!flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1)) {
+            printf("APP erase failed!\r\n");
+            while (1) { IWDG->KR = 0xAAAA; }
+        }
+
+        /* 2. Copy Download -> APP using robust raw copy */
+        printf("Copying new firmware to APP area...\r\n");
+        if (!flash_copy_raw(APP_BASE_ADDR, DOWNLOAD_BASE_ADDR, ctx.file_size)) {
+            printf("APP copy failed!\r\n");
+            while (1) { IWDG->KR = 0xAAAA; }
+        }
+
+        /* 3. Verify first 8 bytes */
+        uint32_t sp = *(volatile uint32_t *)APP_BASE_ADDR;
+        uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
+        if (sp == 0xFFFFFFFF || pc == 0xFFFFFFFF) {
+            printf("ERROR: APP vector invalid after copy! SP=0x%08X, PC=0x%08X\r\n", sp, pc);
+            while (1) { IWDG->KR = 0xAAAA; }
+        }
+
+        /* 4. Write validity marker at end of APP area */
+        uint32_t magic = APP_VALID_MAGIC;
+        if (!flash_write(APP_VALID_ADDR, (uint8_t *)&magic, sizeof(magic))) {
+            printf("Write magic failed!\r\n");
+        } else {
+            uint32_t verify = *(volatile uint32_t *)APP_VALID_ADDR;
+            printf("Magic written: 0x%08X, verify: 0x%08X\r\n", magic, verify);
+        }
+
+        /* 5. Clear upgrade flag and reboot */
+        BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
+        printf("Update successful! Rebooting to new APP...\r\n");
+        HAL_Delay(100);
+        NVIC_SystemReset();
     } else {
         printf("OTA failed, status: %d\r\n", status);
     }
 
     while (1) {
-        ymodem_feed_watchdog();
+        IWDG->KR = 0xAAAA;
     }
 }
 

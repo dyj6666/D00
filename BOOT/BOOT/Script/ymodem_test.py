@@ -26,9 +26,9 @@ import os
 import serial
 
 # ========================== 用户配置区域 ======================================
-DEFAULT_SERIAL_PORT    = "COM3"           # 串口号 (Windows: COM3, Linux: /dev/ttyUSB0)
+DEFAULT_SERIAL_PORT    = "COM13"           # 串口号 (Windows: COM3, Linux: /dev/ttyUSB0)
 DEFAULT_BAUD_RATE      = 115200          # 波特率 (必须与 MCU 一致)
-DEFAULT_FIRMWARE_FILE  = "firmware.bin"  # 默认固件文件名 (可含路径)
+DEFAULT_FIRMWARE_FILE  = "APP.bin"  # 默认固件文件名 (可含路径)
 # =============================================================================
 
 # ========================== 协议常量 (与 ymodem.h 完全一致) ====================
