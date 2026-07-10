@@ -31,6 +31,8 @@
 #include <stdio.h>                    // 后续 log 用
 #include "ymodem.h"
 #include "flash_if.h"
+#include "security.h"
+#include "uECC.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -114,6 +116,23 @@ int main(void)
   /* 初始化日志 */
   Log_Init();
   printf("BOOT Started.\r\n");
+  /* 诊断：打印复位源 */
+  uint32_t reset_flags = RCC->CSR;
+  printf("RCC_CSR: 0x%08X\r\n", (unsigned int)reset_flags);
+  if (reset_flags & RCC_CSR_IWDGRSTF) {
+      printf("Reset Source: IWDG\r\n");
+  }
+  if (reset_flags & RCC_CSR_SFTRSTF) {
+      printf("Reset Source: Software\r\n");
+  }
+  if (reset_flags & RCC_CSR_PORRSTF) {
+      printf("Reset Source: Power-on\r\n");
+  }
+  if (reset_flags & RCC_CSR_PINRSTF) {
+      printf("Reset Source: Pin reset\r\n");
+  }
+  // 清除复位标志
+  RCC->CSR |= RCC_CSR_RMVF;
 
     /* 检查升级标志 */
   if (BKP_READ(RTC_BKP_DR1) == BOOT_FLAG_UPGRADE)
@@ -289,56 +308,55 @@ static void EnterUpgradeMode(void) {
     printf("Entering upgrade mode (top-tier FSM)...\r\n");
 
     ymodem_port_init();
-    /* ------------------------------------------------
-     * Erase Download area to ensure clean programming
-     * ------------------------------------------------ */
+
+    /* 擦除 Download 区 */
     printf("Erasing Download area...\r\n");
     if (!flash_erase(DOWNLOAD_BASE_ADDR, DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE - 1)) {
         printf("Download erase failed!\r\n");
         while (1) { IWDG->KR = 0xAAAA; }
     }
+    /* 验证擦除 */
+    /* 擦除后验证 */
+    uint32_t test_word = *(volatile uint32_t *)DOWNLOAD_BASE_ADDR;
+    printf("After Download Erase, first word: 0x%08X\r\n", (unsigned)test_word);
+    if (test_word != 0xFFFFFFFF) {
+        printf("ERROR: Download not fully erased!\r\n");
+        while (1) { IWDG->KR = 0xAAAA; }
+    }
+
     ymodem_ctx_t ctx;
     ymodem_status_t status = ymodem_receive(&ctx, DOWNLOAD_BASE_ADDR);
 
     if (status == YMODEM_OK) {
         printf("OTA success. File: %s, Size: %lu\r\n", ctx.file_name, ctx.received_size);
 
-        /* 1. Erase entire APP area */
+        // 打印 Download 区前 32 字节（用于比对）
+        printf("Download first 32 bytes: ");
+        for (int i = 0; i < 32; i++) {
+            printf("%02X ", *((volatile uint8_t *)(DOWNLOAD_BASE_ADDR + i)));
+        }
+        printf("\r\n");
+
+        /* 安全处理前，先擦除 APP 区 */
         printf("Erasing APP area...\r\n");
         if (!flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1)) {
             printf("APP erase failed!\r\n");
             while (1) { IWDG->KR = 0xAAAA; }
         }
 
-        /* 2. Copy Download -> APP using robust raw copy */
-        printf("Copying new firmware to APP area...\r\n");
-        if (!flash_copy_raw(APP_BASE_ADDR, DOWNLOAD_BASE_ADDR, ctx.file_size)) {
-            printf("APP copy failed!\r\n");
-            while (1) { IWDG->KR = 0xAAAA; }
-        }
+        uint32_t app_size = 0;
+        if (security_verify_and_decrypt(DOWNLOAD_BASE_ADDR, APP_BASE_ADDR, &app_size)) {
+            printf("Security verification passed. Writing magic...\r\n");
+            uint32_t magic = APP_VALID_MAGIC;
+            flash_write(APP_VALID_ADDR, (uint8_t *)&magic, sizeof(magic));
 
-        /* 3. Verify first 8 bytes */
-        uint32_t sp = *(volatile uint32_t *)APP_BASE_ADDR;
-        uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
-        if (sp == 0xFFFFFFFF || pc == 0xFFFFFFFF) {
-            printf("ERROR: APP vector invalid after copy! SP=0x%08X, PC=0x%08X\r\n", sp, pc);
-            while (1) { IWDG->KR = 0xAAAA; }
-        }
-
-        /* 4. Write validity marker at end of APP area */
-        uint32_t magic = APP_VALID_MAGIC;
-        if (!flash_write(APP_VALID_ADDR, (uint8_t *)&magic, sizeof(magic))) {
-            printf("Write magic failed!\r\n");
+            BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
+            printf("Update successful! Rebooting to new APP...\r\n");
+            HAL_Delay(100);
+            NVIC_SystemReset();
         } else {
-            uint32_t verify = *(volatile uint32_t *)APP_VALID_ADDR;
-            printf("Magic written: 0x%08X, verify: 0x%08X\r\n", magic, verify);
+            printf("Security verification failed!\r\n");
         }
-
-        /* 5. Clear upgrade flag and reboot */
-        BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
-        printf("Update successful! Rebooting to new APP...\r\n");
-        HAL_Delay(100);
-        NVIC_SystemReset();
     } else {
         printf("OTA failed, status: %d\r\n", status);
     }

@@ -2,20 +2,21 @@
 """
 ===============================================================================
  文件名称: ymodem_sender.py
- 描述:     工业级 Ymodem 固件发送器 (上位机)
-           - 与 MCU 端 ymodem.c 最终版 经过逐行交叉验证，保证完美匹配
-           - 采用事件驱动状态机，结构清晰，注释详尽
-           - 默认参数集成在脚本顶部，也支持命令行参数覆盖
+ 描述:     工业级 Ymodem 安全固件发送器 (上位机)
+           - 与 MCU 端 ymodem.c 完全匹配
+           - 增加 AES-256-CTR 加密 + ECDSA 签名打包
+           - 零依赖冲突，代码结构清晰，可直接用于生产
 
  用法:     python ymodem_sender.py [串口号] [固件文件.bin]
-           若未提供参数，则使用默认 COM3 和 firmware.bin
+           若未提供参数，则使用脚本顶部默认配置
 
  示例:     python ymodem_sender.py COM3 my_app.bin
-           python ymodem_sender.py               # 使用默认配置
+           python ymodem_sender.py               # 使用默认 COM13 和 APP.bin
 
- 依赖:     pyserial (pip install pyserial)
+ 依赖:     pyserial, pycryptodome, ecdsa
+           pip install pyserial pycryptodome ecdsa
  作者:     Industrial OTA Team
- 版本:     1.0.0 (最终版)
+ 版本:     2.0.0 (安全增强版)
 ===============================================================================
 """
 
@@ -24,11 +25,18 @@ import time
 import struct
 import os
 import serial
+from Crypto.Cipher import AES
+from Crypto.Hash import SHA256
+from ecdsa import SigningKey, NIST256p
 
 # ========================== 用户配置区域 ======================================
 DEFAULT_SERIAL_PORT    = "COM13"           # 串口号 (Windows: COM3, Linux: /dev/ttyUSB0)
-DEFAULT_BAUD_RATE      = 115200          # 波特率 (必须与 MCU 一致)
-DEFAULT_FIRMWARE_FILE  = "APP.bin"  # 默认固件文件名 (可含路径)
+DEFAULT_BAUD_RATE      = 115200           # 波特率 (必须与 MCU 一致)
+DEFAULT_FIRMWARE_FILE  = "APP.bin"        # 默认原始固件文件名 (可含路径)
+
+# 安全密钥配置 (测试用，实际产品中私钥必须保密，AES密钥应由UID派生)
+PRIVATE_KEY_HEX        = "34e53ad0bd773da501eb217c57201b85e409e4aa0f4d0de0a4bd07bca00ce20c"
+AES_KEY_HEX            = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 # =============================================================================
 
 # ========================== 协议常量 (与 ymodem.h 完全一致) ====================
@@ -89,6 +97,95 @@ def crc32(data: bytes) -> int:
     for byte in data:
         crc = (crc >> 8) ^ CRC32_TABLE[(crc ^ byte) & 0xFF]
     return crc ^ 0xFFFFFFFF
+
+def aes_ctr_encrypt(key, iv12, plain):
+    """
+    AES-256-CTR 加密，与 TinyAES 完全匹配。
+    iv12: 12 字节随机 IV（头部存储）
+    返回: 密文
+    """
+    # 将 12 字节 IV 扩展为 16 字节（后 4 字节为 0）
+    iv16 = iv12 + b'\x00' * 4
+    cipher = AES.new(key, AES.MODE_ECB)
+    encrypted = bytearray()
+    counter = bytearray(iv16)      # 16 字节初始计数器
+    for i in range(0, len(plain), 16):
+        block = plain[i:i+16]
+        # 生成密钥流（加密计数器）
+        keystream = cipher.encrypt(bytes(counter))
+        # 异或加密
+        for j in range(len(block)):
+            encrypted.append(block[j] ^ keystream[j])
+        # 128 位大端自增计数器
+        carry = 1
+        for k in range(15, -1, -1):
+            carry, counter[k] = divmod(counter[k] + carry, 256)
+    return bytes(encrypted)
+def encrypt_and_sign(input_bin: str, output_bin: str, private_key_hex: str, aes_key_hex: str = None):
+    """
+    对原始固件进行 AES-256-CTR 加密，并附加 ECDSA 签名头部和签名。
+    :param input_bin: 原始固件文件路径
+    :param output_bin: 输出加密包文件路径
+    :param private_key_hex: ECDSA 私钥十六进制字符串
+    :param aes_key_hex: AES 密钥十六进制字符串，若为 None 则使用全零密钥（测试用）
+    """
+    # 读取原始固件
+    with open(input_bin, 'rb') as f:
+        plain = f.read()
+
+    # AES 密钥处理（与 MCU 端 security.c 中 AES_KEY 保持一致）
+    if aes_key_hex:
+        aes_key = bytes.fromhex(aes_key_hex)
+    else:
+        aes_key = bytes(32)   # 全零密钥，仅用于初始测试
+
+    # 生成随机 IV (12 字节)
+    iv = os.urandom(12)
+
+    # AES-256-CTR 加密
+    # ctr = Counter.new(128, prefix=iv, initial_value=0, little_endian=False)
+    # cipher = AES.new(aes_key, AES.MODE_CTR, counter=ctr)
+    # encrypted = cipher.encrypt(plain)
+    encrypted = aes_ctr_encrypt(aes_key, iv, plain)
+
+    # 构造头部（32 字节）
+    magic = 0x4F5441FE
+    version = 1
+    header = struct.pack('<III12s8s', magic, version, len(plain), iv, b'\x00' * 8)
+
+    # 计算 SHA256(Header + EncryptedBody)
+    h = SHA256.new(header + encrypted)
+    print(f"[核对] 上位机 SHA256: {h.hexdigest()}")
+    digest = h.digest()
+
+    # 使用 ECDSA 私钥签名
+    sk = SigningKey.from_string(bytes.fromhex(private_key_hex), curve=NIST256p)
+    signature = sk.sign_digest(digest)
+
+    # 写入最终安全固件包
+    with open(output_bin, 'wb') as f:
+        f.write(header + encrypted + signature)
+
+    # 在 encrypt_and_sign 函数末尾，return 之前添加：
+    print("[验证] 安全固件包前 32 字节 (头部):")
+    with open(output_bin, 'rb') as f:
+        header_bytes = f.read(32)
+        print(' '.join(f'{b:02X}' for b in header_bytes))
+
+        # 打印原始 APP 前 32 字节
+    print(f"[核对] 原始 APP 前 32 字节: {' '.join(f'{b:02X}' for b in plain[:32])}")
+
+    # 打印加密体前 32 字节
+    print(f"[核对] 加密体前 32 字节: {' '.join(f'{b:02X}' for b in encrypted[:32])}")
+
+    # 打印 IV
+    print(f"[核对] 使用的 IV: {' '.join(f'{b:02X}' for b in iv)}")
+        
+    print(f"[安全] 安全固件包已生成: {output_bin}")
+    print(f"       原始大小: {len(plain)} 字节")
+    print(f"       加密体大小: {len(encrypted)} 字节")
+    print(f"       头部+加密体+签名总大小: {len(header) + len(encrypted) + len(signature)} 字节")
+
 
 # ========================== 状态机状态定义 ====================================
 class State:
@@ -183,6 +280,8 @@ class YmodemSender:
         self.file_crc = crc32(self.data)
         print(f"[信息] 文件: {self.file_name}, 大小: {self.file_size} (0x{self.file_size:X}), "
               f"CRC32: 0x{self.file_crc:08X}")
+        # 在 run() 方法中，读取 self.data 之后添加：
+        print(f"[调试] 发送文件前 32 字节: {' '.join(f'{b:02X}' for b in self.data[:32])}")
 
         # 重置状态机
         self.state = State.WAIT_C
@@ -389,14 +488,30 @@ class YmodemSender:
             print("[警告] 结束帧未确认，但传输可能已完成 (宽容处理)")
             self.state = State.DONE
 
+
 # ========================== 程序入口 ==========================================
 if __name__ == '__main__':
+
+    from ecdsa import SigningKey, NIST256p
+    sk = SigningKey.from_string(bytes.fromhex(PRIVATE_KEY_HEX), curve=NIST256p)
+    vk = sk.verifying_key
+    pub_bytes = vk.to_string('uncompressed')[1:]   # 64 字节
+    print("[核对] 完整公钥:")
+    print(''.join('{:02X}'.format(b) for b in pub_bytes))
+
     port = sys.argv[1] if len(sys.argv) >= 2 else DEFAULT_SERIAL_PORT
     firmware = sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_FIRMWARE_FILE
-    print(f"[配置] 串口: {port}, 波特率: {DEFAULT_BAUD_RATE}, 固件: {firmware}")
+    print(f"[配置] 串口: {port}, 波特率: {DEFAULT_BAUD_RATE}, 原始固件: {firmware}")
+
+    # 生成加密签名固件包
+    secure_firmware = "secure_" + firmware
+    print(f"[安全] 正在生成安全固件包: {secure_firmware}")
+    encrypt_and_sign(firmware, secure_firmware, PRIVATE_KEY_HEX, AES_KEY_HEX)
+
+    # 发送安全固件包
     sender = YmodemSender(port, DEFAULT_BAUD_RATE)
     try:
-        sender.run(firmware)
+        sender.run(secure_firmware)
     except KeyboardInterrupt:
         print("\n[中断] 用户取消")
     except Exception as e:
@@ -404,3 +519,6 @@ if __name__ == '__main__':
     finally:
         if sender.ser.is_open:
             sender.ser.close()
+        # 可选：删除临时安全固件文件，生产环境可保留用于调试
+        # if os.path.exists(secure_firmware):
+        #     os.remove(secure_firmware)

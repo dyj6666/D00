@@ -338,7 +338,7 @@
             <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>USE_HAL_DRIVER,STM32F407xx</Define>
+              <Define>USE_HAL_DRIVER,STM32F407xx,AES256=1</Define>
               <Undefine></Undefine>
               <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
@@ -418,6 +418,26 @@
               <FileName>flash_if.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\flash_if.c</FilePath>
+            </File>
+            <File>
+              <FileName>uECC.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\uECC.c</FilePath>
+            </File>
+            <File>
+              <FileName>aes.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\aes.c</FilePath>
+            </File>
+            <File>
+              <FileName>security.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\security.c</FilePath>
+            </File>
+            <File>
+              <FileName>sha256.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\sha256.c</FilePath>
             </File>
             <File>
               <FileName>main.c</FileName>

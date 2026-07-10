@@ -344,7 +344,10 @@ static void state_rx_frame(void) {
 
             /* ---- Write valid data to flash ---- */
             if (!flash_write(fsm.ctx->write_addr, data, valid_len)) {
-                printf("[Ymodem] Flash write error!\r\n");
+                /* 读取写入地址的第一个字，打印出来 */
+                uint32_t dbg_word = *(volatile uint32_t *)fsm.ctx->write_addr;
+                printf("[Ymodem] Flash write error at 0x%08X, current value: 0x%08X\r\n",
+                    (unsigned)fsm.ctx->write_addr, (unsigned)dbg_word);
                 cancel_transfer();
                 return;
             }

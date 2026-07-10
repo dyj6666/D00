@@ -1,5 +1,11 @@
 #include "flash_if.h"
+#include "stm32f4xx_hal.h"   // 已经包含
 
+/* 放在 SRAM 中执行的喂狗函数，确保 Flash 擦除期间可用 */
+__attribute__((long_call, section(".ramfunc")))
+static void ram_feed_dog(void) {
+    IWDG->KR = 0xAAAA;
+}
 /*----------------------------------------------------------------------------
  * Sector mapping (STM32F40x 1MB flash)
  *----------------------------------------------------------------------------*/
@@ -18,26 +24,52 @@ static uint32_t flash_get_sector(uint32_t addr) {
     return FLASH_SECTOR_11;
 }
 
-/*----------------------------------------------------------------------------
- * Erase sectors (uses HAL, but safe)
- *----------------------------------------------------------------------------*/
+/**
+ * @brief  Erase multiple sectors using HAL, feeding watchdog each sector
+ * @param  start_addr  Start address (must be sector-aligned)
+ * @param  end_addr    End address (inclusive)
+ * @retval true  success
+ * @retval false error
+ */
 bool flash_erase(uint32_t start_addr, uint32_t end_addr) {
-    FLASH_EraseInitTypeDef erase_init;
-    uint32_t sector_error = 0;
+    uint32_t start_sector = flash_get_sector(start_addr);
+    uint32_t end_sector   = flash_get_sector(end_addr);
 
-    HAL_FLASH_Unlock();
+    for (uint32_t sec = start_sector; sec <= end_sector; sec++) {
+        /* 擦除前喂狗 */
+        IWDG->KR = 0xAAAA;
 
-    erase_init.TypeErase    = FLASH_TYPEERASE_SECTORS;
-    erase_init.Sector       = flash_get_sector(start_addr);
-    erase_init.NbSectors    = flash_get_sector(end_addr) - flash_get_sector(start_addr) + 1;
-    erase_init.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+        /* 解锁 */
+        FLASH->KEYR = 0x45670123;
+        FLASH->KEYR = 0xCDEF89AB;
 
-    if (HAL_FLASHEx_Erase(&erase_init, &sector_error) != HAL_OK) {
-        HAL_FLASH_Lock();
-        return false;
+        /* 清除错误标志 */
+        FLASH->SR = (FLASH_SR_PGSERR | FLASH_SR_PGPERR | FLASH_SR_PGAERR | FLASH_SR_WRPERR);
+
+        /* 设置扇区并启动擦除 */
+        FLASH->CR &= ~FLASH_CR_SNB;
+        FLASH->CR |= (sec << FLASH_CR_SNB_Pos);
+        FLASH->CR |= FLASH_CR_SER;
+        FLASH->CR |= FLASH_CR_STRT;
+
+        /* 等待完成，并在 RAM 中喂狗 */
+        while (FLASH->SR & FLASH_SR_BSY) {
+            ram_feed_dog();   /* 此函数必须在 RAM 中 */
+        }
+
+        /* 关闭 SER 使能 */
+        FLASH->CR &= ~FLASH_CR_SER;
+
+        if (FLASH->SR & (FLASH_SR_PGSERR | FLASH_SR_PGPERR | FLASH_SR_PGAERR | FLASH_SR_WRPERR)) {
+            FLASH->CR |= FLASH_CR_LOCK;
+            return false;
+        }
+
+        FLASH->CR |= FLASH_CR_LOCK;
+
+        /* 擦除后再喂狗 */
+        IWDG->KR = 0xAAAA;
     }
-
-    HAL_FLASH_Lock();
     return true;
 }
 
@@ -79,12 +111,9 @@ bool flash_write(uint32_t addr, const uint8_t *data, uint32_t len) {
     if (len == 0) return true;
 
     __disable_irq();
+    HAL_FLASH_Unlock();
 
-    /* Unlock flash */
-    FLASH->KEYR = 0x45670123;
-    FLASH->KEYR = 0xCDEF89AB;
-
-    /* Handle leading unaligned bytes */
+    /* 处理前导字节，对齐到字边界 */
     while ((addr & 0x03) && (len > 0)) {
         uint32_t word_addr = addr & ~0x03;
         uint32_t offset    = addr & 0x03;
@@ -92,36 +121,8 @@ bool flash_write(uint32_t addr, const uint8_t *data, uint32_t len) {
         uint8_t *bytes     = (uint8_t *)&existing;
         bytes[offset]      = *data;
 
-        if (!flash_program_word(word_addr, existing)) {
-            FLASH->CR |= FLASH_CR_LOCK;
-            __enable_irq();
-            return false;
-        }
-        addr++; data++; len--;
-    }
-
-    /* Write whole words */
-    while (len >= 4) {
-        uint32_t word = *(uint32_t *)data;
-        if (!flash_program_word(addr, word)) {
-            FLASH->CR |= FLASH_CR_LOCK;
-            __enable_irq();
-            return false;
-        }
-        addr += 4; data += 4; len -= 4;
-        IWDG->KR = 0xAAAA;   /* feed watchdog directly */
-    }
-
-    /* Trailing bytes */
-    while (len > 0) {
-        uint32_t word_addr = addr & ~0x03;
-        uint32_t offset    = addr & 0x03;
-        uint32_t existing  = *(volatile uint32_t *)word_addr;
-        uint8_t *bytes     = (uint8_t *)&existing;
-        bytes[offset]      = *data;
-
-        if (!flash_program_word(word_addr, existing)) {
-            FLASH->CR |= FLASH_CR_LOCK;
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, word_addr, existing) != HAL_OK) {
+            HAL_FLASH_Lock();
             __enable_irq();
             return false;
         }
@@ -129,8 +130,36 @@ bool flash_write(uint32_t addr, const uint8_t *data, uint32_t len) {
         IWDG->KR = 0xAAAA;
     }
 
-    /* Lock flash and restore interrupts */
-    FLASH->CR |= FLASH_CR_LOCK;
+    /* 写入整字 */
+    while (len >= 4) {
+        uint32_t word = *(uint32_t *)data;
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, word) != HAL_OK) {
+            HAL_FLASH_Lock();
+            __enable_irq();
+            return false;
+        }
+        addr += 4; data += 4; len -= 4;
+        IWDG->KR = 0xAAAA;
+    }
+
+    /* 处理尾部字节 */
+    while (len > 0) {
+        uint32_t word_addr = addr & ~0x03;
+        uint32_t offset    = addr & 0x03;
+        uint32_t existing  = *(volatile uint32_t *)word_addr;
+        uint8_t *bytes     = (uint8_t *)&existing;
+        bytes[offset]      = *data;
+
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, word_addr, existing) != HAL_OK) {
+            HAL_FLASH_Lock();
+            __enable_irq();
+            return false;
+        }
+        addr++; data++; len--;
+        IWDG->KR = 0xAAAA;
+    }
+
+    HAL_FLASH_Lock();
     __enable_irq();
     return true;
 }
