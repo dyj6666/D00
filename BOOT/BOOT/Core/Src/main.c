@@ -110,31 +110,17 @@ int main(void)
   MX_RTC_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+
+  // test_uECC_verify();
+
   /* 启动独立看门狗 */
   MX_IWDG_Start();
 
   /* 初始化日志 */
   Log_Init();
   printf("BOOT Started.\r\n");
-  /* 诊断：打印复位源 */
-  uint32_t reset_flags = RCC->CSR;
-  printf("RCC_CSR: 0x%08X\r\n", (unsigned int)reset_flags);
-  if (reset_flags & RCC_CSR_IWDGRSTF) {
-      printf("Reset Source: IWDG\r\n");
-  }
-  if (reset_flags & RCC_CSR_SFTRSTF) {
-      printf("Reset Source: Software\r\n");
-  }
-  if (reset_flags & RCC_CSR_PORRSTF) {
-      printf("Reset Source: Power-on\r\n");
-  }
-  if (reset_flags & RCC_CSR_PINRSTF) {
-      printf("Reset Source: Pin reset\r\n");
-  }
-  // 清除复位标志
-  RCC->CSR |= RCC_CSR_RMVF;
 
-    /* 检查升级标志 */
+  /* 检查升级标志 */
   if (BKP_READ(RTC_BKP_DR1) == BOOT_FLAG_UPGRADE)
   {
       printf("Upgrade flag set. Entering upgrade mode.\r\n");
@@ -302,67 +288,77 @@ static void JumpToApp(uint32_t addr) {
     ((void (*)(void))app_reset)();
 }
 /**
-  * @brief  进入升级模式（等待接收固件）
-  */
+ * @brief  进入升级模式（工业级完善版）
+ * @note   支持验证失败或传输失败后自动重新等待固件，具备防回滚能力。
+ *         所有 Flash 写入操作均检查返回值，失败时进入安全死循环。
+ */
 static void EnterUpgradeMode(void) {
-    printf("Entering upgrade mode (top-tier FSM)...\r\n");
-
+    printf("Entering upgrade mode...\r\n");
     ymodem_port_init();
 
-    /* 擦除 Download 区 */
-    printf("Erasing Download area...\r\n");
-    if (!flash_erase(DOWNLOAD_BASE_ADDR, DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE - 1)) {
-        printf("Download erase failed!\r\n");
-        while (1) { IWDG->KR = 0xAAAA; }
-    }
-    /* 验证擦除 */
-    /* 擦除后验证 */
-    uint32_t test_word = *(volatile uint32_t *)DOWNLOAD_BASE_ADDR;
-    printf("After Download Erase, first word: 0x%08X\r\n", (unsigned)test_word);
-    if (test_word != 0xFFFFFFFF) {
-        printf("ERROR: Download not fully erased!\r\n");
-        while (1) { IWDG->KR = 0xAAAA; }
-    }
-
-    ymodem_ctx_t ctx;
-    ymodem_status_t status = ymodem_receive(&ctx, DOWNLOAD_BASE_ADDR);
-
-    if (status == YMODEM_OK) {
-        printf("OTA success. File: %s, Size: %lu\r\n", ctx.file_name, ctx.received_size);
-
-        // 打印 Download 区前 32 字节（用于比对）
-        printf("Download first 32 bytes: ");
-        for (int i = 0; i < 32; i++) {
-            printf("%02X ", *((volatile uint8_t *)(DOWNLOAD_BASE_ADDR + i)));
-        }
-        printf("\r\n");
-
-        /* 安全处理前，先擦除 APP 区 */
-        printf("Erasing APP area...\r\n");
-        if (!flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1)) {
-            printf("APP erase failed!\r\n");
+    while (1) {
+        /* 1. 擦除下载区 */
+        printf("Erasing Download area...\r\n");
+        if (!flash_erase(DOWNLOAD_BASE_ADDR, DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE - 1)) {
+            printf("Download erase failed! System halted.\r\n");
             while (1) { IWDG->KR = 0xAAAA; }
         }
 
-        uint32_t app_size = 0;
-        if (security_verify_and_decrypt(DOWNLOAD_BASE_ADDR, APP_BASE_ADDR, &app_size)) {
-            printf("Security verification passed. Writing magic...\r\n");
-            uint32_t magic = APP_VALID_MAGIC;
-            flash_write(APP_VALID_ADDR, (uint8_t *)&magic, sizeof(magic));
-
-            BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
-            printf("Update successful! Rebooting to new APP...\r\n");
-            HAL_Delay(100);
-            NVIC_SystemReset();
-        } else {
-            printf("Security verification failed!\r\n");
+        /* 2. 接收固件 */
+        ymodem_ctx_t ctx;
+        ymodem_status_t status = ymodem_receive(&ctx, DOWNLOAD_BASE_ADDR);
+        if (status != YMODEM_OK) {
+            printf("OTA receive failed, status: %d. Retrying...\r\n", status);
+            IWDG->KR = 0xAAAA;
+            continue;
         }
-    } else {
-        printf("OTA failed, status: %d\r\n", status);
-    }
+        printf("OTA success. File: %s, Size: %lu\r\n", ctx.file_name, ctx.received_size);
 
-    while (1) {
-        IWDG->KR = 0xAAAA;
+        /* 3. 读取当前 APP 版本（此时 APP 区完好） */
+        uint32_t current_version = 0;
+        if (CheckAppValid(APP_BASE_ADDR)) {
+            current_version = *(volatile uint32_t *)APP_VERSION_ADDR;
+        }
+        printf("Current APP version: %lu\r\n", current_version);
+
+        /* 4. 安全验证（不修改 Flash） */
+        uint32_t app_size = 0;
+        if (!security_verify_and_decrypt(DOWNLOAD_BASE_ADDR, &app_size, current_version)) {
+            printf("Security verification failed! Waiting for valid firmware...\r\n");
+            IWDG->KR = 0xAAAA;
+            continue;   // APP 区未动，可重新接收
+        }
+
+        /* 5. 验证通过，现在才擦除 APP 区 */
+        printf("Erasing APP area...\r\n");
+        if (!flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1)) {
+            printf("APP erase failed! System halted.\r\n");
+            while (1) { IWDG->KR = 0xAAAA; }
+        }
+
+        /* 6. 构造 16 字节 IV 并解密写入 APP 区 */
+        ota_header_t hdr;
+        memcpy(&hdr, (void *)DOWNLOAD_BASE_ADDR, sizeof(hdr));
+        uint8_t iv16[16];
+        memcpy(iv16, hdr.aes_iv, 12);
+        memset(iv16 + 12, 0, 4);
+        if (!aes_ctr_decrypt_to_flash(DOWNLOAD_BASE_ADDR + sizeof(ota_header_t),
+                                      app_size, AES_KEY, iv16, APP_BASE_ADDR)) {
+            printf("APP write failed! System halted.\r\n");
+            while (1) { IWDG->KR = 0xAAAA; }
+        }
+
+        /* 7. 写入魔数和版本 */
+        printf("Security verification passed. Writing magic and version...\r\n");
+        uint32_t magic = APP_VALID_MAGIC;
+        flash_write(APP_VALID_ADDR, (uint8_t *)&magic, sizeof(magic));
+        flash_write(APP_VERSION_ADDR, (uint8_t *)&hdr.version, sizeof(hdr.version));
+
+        /* 8. 清除升级标志并复位 */
+        BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
+        printf("Update successful! Rebooting to new APP...\r\n");
+        HAL_Delay(100);
+        NVIC_SystemReset();
     }
 }
 

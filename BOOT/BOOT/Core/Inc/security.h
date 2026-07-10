@@ -18,8 +18,14 @@ typedef struct {
 
 #define OTA_HEADER_SIZE   sizeof(ota_header_t)
 #define OTA_SIGN_SIZE     64
+/* 解密函数，由 main.c 调用 */
+bool aes_ctr_decrypt_to_flash(uint32_t src_addr, uint32_t len,
+                              const uint8_t *key, const uint8_t *iv16,
+                              uint32_t dest_addr);
 
+/* 固定 AES 密钥（测试用，后续改为 UID 派生） */
+extern const uint8_t AES_KEY[32];
 /* 安全处理入口 */
-bool security_verify_and_decrypt(uint32_t download_addr, uint32_t app_addr, uint32_t *out_size);
+bool security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size, uint32_t current_version);
 
 #endif

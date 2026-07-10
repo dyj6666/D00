@@ -20,6 +20,8 @@
 #define BOOT_FLAG_NONE          0x0000
 #define BOOT_FLAG_UPGRADE       0x5A5A
 
+#define APP_VERSION_ADDR      (APP_VALID_ADDR + 4)   // 版本存在魔数后 4 字节
+
 /* =================== IWDG 相关 =================== */
 #define IWDG_PRESCALER          IWDG_PRESCALER_32    // 32 分频, LSI=32.768kHz -> 1.024kHz
 #define IWDG_RELOAD             4095                 // 超时 = (4095+1)/1024 ≈ 4s

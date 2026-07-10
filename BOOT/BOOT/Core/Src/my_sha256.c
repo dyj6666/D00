@@ -1,4 +1,4 @@
-#include "sha256.h"
+#include "my_sha256.h"
 #include <string.h>
 
 #define ROTR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
@@ -61,7 +61,7 @@ void sha256(const uint8_t *data, uint32_t len, uint8_t digest[32]) {
     };
     uint64_t bitlen = (uint64_t)len * 8;
     uint8_t block[64];
-    uint32_t idx = 0;
+//    uint32_t idx = 0;
 
     while (len >= 64) {
         sha256_transform(state, data);
@@ -91,3 +91,4 @@ void sha256(const uint8_t *data, uint32_t len, uint8_t digest[32]) {
         digest[i * 4 + 3] = (uint8_t)(state[i]);
     }
 }
+

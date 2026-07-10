@@ -1,36 +1,122 @@
 /* Copyright 2014, Kenneth MacKay. Licensed under the BSD 2-clause license. */
-#pragma diag_suppress 186   /* 无符号数与 0 比较 */
-#pragma diag_suppress 47    /* 宏重定义 */
-#pragma diag_suppress 1     /* 最后一行没有换行 */
+/* Copyright 2014, Kenneth MacKay. Licensed under the BSD 2-clause license. */
+
+/* Copyright 2014, Kenneth MacKay. Licensed under the BSD 2-clause license. */
+
+/* Copyright 2014, Kenneth MacKay. Licensed under the BSD 2-clause license. */
+
 #include "uECC.h"
 #include <string.h>
 #include <stdint.h>
 
-/* ========== 强制使用 secp256r1 曲线 ========== */
+/* 强制使用 secp256r1 曲线 */
 #define uECC_CURVE uECC_secp256r1
 
-/* 包含平台定义（我们刚修改的文件） */
-#include "platform-specific.inc"
-
-/* ========== 平台定义 (Cortex-M4, 32-bit) ========== */
+/* 平台定义 (Cortex-M4, 32-bit) */
 #define uECC_WORD_SIZE          4
+#define uECC_NO_ASM             1
+#define uECC_VLI_API            static
+
+/* 补充缺失的位操作宏 */
 #define uECC_WORD_BITS          32
 #define uECC_WORD_BITS_SHIFT    5
 #define uECC_WORD_BITS_MASK     0x1F
 #define HIGH_BIT_SET            0x80000000
-#define uECC_NO_ASM             /* 禁止汇编，使用纯C实现 */
 
-/* 类型定义 */
+/* 内部类型定义 */
 typedef uint32_t    uECC_word_t;
 typedef uint64_t    uECC_dword_t;
-typedef unsigned    wordcount_t;
-typedef unsigned    bitcount_t;
-typedef int         cmpresult_t;
+typedef int32_t     wordcount_t;
+typedef int32_t     bitcount_t;
+typedef int32_t     cmpresult_t;
 
 #define UECC_WORD_1  0xFFFFFFFF
 #define UECC_WORD_0  0x00000000
 
-/* 从此处开始是 uECC.c 的原有函数实现代码，保持不变 */
+
+#ifndef uECC_RNG_MAX_TRIES
+    #define uECC_RNG_MAX_TRIES 64
+#endif
+
+#if uECC_ENABLE_VLI_API
+    #define uECC_VLI_API
+#else
+    #define uECC_VLI_API static
+#endif
+
+#if (uECC_PLATFORM == uECC_avr) || \
+    (uECC_PLATFORM == uECC_arm) || \
+    (uECC_PLATFORM == uECC_arm_thumb) || \
+    (uECC_PLATFORM == uECC_arm_thumb2)
+    #define CONCATX(a, ...) a ## __VA_ARGS__
+    #define CONCAT(a, ...) CONCATX(a, __VA_ARGS__)
+
+    #define STRX(a) #a
+    #define STR(a) STRX(a)
+
+    #define EVAL(...)  EVAL1(EVAL1(EVAL1(EVAL1(__VA_ARGS__))))
+    #define EVAL1(...) EVAL2(EVAL2(EVAL2(EVAL2(__VA_ARGS__))))
+    #define EVAL2(...) EVAL3(EVAL3(EVAL3(EVAL3(__VA_ARGS__))))
+    #define EVAL3(...) EVAL4(EVAL4(EVAL4(EVAL4(__VA_ARGS__))))
+    #define EVAL4(...) __VA_ARGS__
+
+    #define DEC_1  0
+    #define DEC_2  1
+    #define DEC_3  2
+    #define DEC_4  3
+    #define DEC_5  4
+    #define DEC_6  5
+    #define DEC_7  6
+    #define DEC_8  7
+    #define DEC_9  8
+    #define DEC_10 9
+    #define DEC_11 10
+    #define DEC_12 11
+    #define DEC_13 12
+    #define DEC_14 13
+    #define DEC_15 14
+    #define DEC_16 15
+    #define DEC_17 16
+    #define DEC_18 17
+    #define DEC_19 18
+    #define DEC_20 19
+    #define DEC_21 20
+    #define DEC_22 21
+    #define DEC_23 22
+    #define DEC_24 23
+    #define DEC_25 24
+    #define DEC_26 25
+    #define DEC_27 26
+    #define DEC_28 27
+    #define DEC_29 28
+    #define DEC_30 29
+    #define DEC_31 30
+    #define DEC_32 31
+
+    #define DEC(N) CONCAT(DEC_, N)
+
+    #define SECOND_ARG(_, val, ...) val
+    #define SOME_CHECK_0 ~, 0
+    #define GET_SECOND_ARG(...) SECOND_ARG(__VA_ARGS__, SOME,)
+    #define SOME_OR_0(N) GET_SECOND_ARG(CONCAT(SOME_CHECK_, N))
+
+    #define EMPTY(...)
+    #define DEFER(...) __VA_ARGS__ EMPTY()
+
+    #define REPEAT_NAME_0() REPEAT_0
+    #define REPEAT_NAME_SOME() REPEAT_SOME
+    #define REPEAT_0(...)
+    #define REPEAT_SOME(N, stuff) DEFER(CONCAT(REPEAT_NAME_, SOME_OR_0(DEC(N))))()(DEC(N), stuff) stuff
+    #define REPEAT(N, stuff) EVAL(REPEAT_SOME(N, stuff))
+
+    #define REPEATM_NAME_0() REPEATM_0
+    #define REPEATM_NAME_SOME() REPEATM_SOME
+    #define REPEATM_0(...)
+    #define REPEATM_SOME(N, macro) macro(N) \
+        DEFER(CONCAT(REPEATM_NAME_, SOME_OR_0(DEC(N))))()(DEC(N), macro)
+    #define REPEATM(N, macro) EVAL(REPEATM_SOME(N, macro))
+#endif
+
 
 #if (uECC_WORD_SIZE == 1)
     #if uECC_SUPPORTS_secp160r1

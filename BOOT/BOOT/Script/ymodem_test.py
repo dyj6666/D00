@@ -33,9 +33,10 @@ from ecdsa import SigningKey, NIST256p
 DEFAULT_SERIAL_PORT    = "COM13"           # 串口号 (Windows: COM3, Linux: /dev/ttyUSB0)
 DEFAULT_BAUD_RATE      = 115200           # 波特率 (必须与 MCU 一致)
 DEFAULT_FIRMWARE_FILE  = "APP.bin"        # 默认原始固件文件名 (可含路径)
+CURR_VERSION           = 5
 
 # 安全密钥配置 (测试用，实际产品中私钥必须保密，AES密钥应由UID派生)
-PRIVATE_KEY_HEX        = "34e53ad0bd773da501eb217c57201b85e409e4aa0f4d0de0a4bd07bca00ce20c"
+PRIVATE_KEY_HEX        = "53360076d1539e52f9cd5cb9f1ca5076ea5270df32b50003a6eaa16559245106"
 AES_KEY_HEX            = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 # =============================================================================
 
@@ -150,7 +151,7 @@ def encrypt_and_sign(input_bin: str, output_bin: str, private_key_hex: str, aes_
 
     # 构造头部（32 字节）
     magic = 0x4F5441FE
-    version = 1
+    version = CURR_VERSION
     header = struct.pack('<III12s8s', magic, version, len(plain), iv, b'\x00' * 8)
 
     # 计算 SHA256(Header + EncryptedBody)
