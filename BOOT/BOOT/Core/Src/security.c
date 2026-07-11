@@ -43,6 +43,10 @@ void derive_aes_key(uint8_t key[32]) {
     memcpy(buffer, uid, sizeof(uid));      // 12 字节
     memcpy(buffer + 12, salt, 15);         // 15 字节（盐）
     sha256(buffer, 27, key);               // 计算 SHA256(27 字节)
+    
+    printf("AES_KEY_PREFIX: ");
+    for (int i = 0; i < 8; i++) printf("%02X", key[i]);
+    printf("\r\n");
 }
 
 /* 声明 uECC_secp256r1 曲线函数 */

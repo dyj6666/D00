@@ -310,6 +310,9 @@ static void EnterUpgradeMode(void) {
     uid[1] = *(volatile uint32_t *)0x1FFF7A14;
     uid[2] = *(volatile uint32_t *)0x1FFF7A18;
     printf("DEV_UID:%08X%08X%08X\r\n", uid[0], uid[1], uid[2]);
+    char uid_str[32];
+    sprintf(uid_str, "DEV_UID:%08X%08X%08X\r\n", uid[0], uid[1], uid[2]);
+    HAL_UART_Transmit(&huart1, (uint8_t *)uid_str, strlen(uid_str), 1000);
 
     while (1) {
         /* 1. 擦除下载区 */
