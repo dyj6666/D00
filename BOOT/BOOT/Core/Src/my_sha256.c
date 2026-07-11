@@ -1,94 +1,109 @@
 #include "my_sha256.h"
 #include <string.h>
 
-#define ROTR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
-#define SHR(x, n)  ((x) >> (n))
+#define ROTRIGHT(a,b) (((a) >> (b)) | ((a) << (32-(b))))
+#define CH(x,y,z) (((x) & (y)) ^ (~(x) & (z)))
+#define MAJ(x,y,z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
+#define EP0(x) (ROTRIGHT(x,2) ^ ROTRIGHT(x,13) ^ ROTRIGHT(x,22))
+#define EP1(x) (ROTRIGHT(x,6) ^ ROTRIGHT(x,11) ^ ROTRIGHT(x,25))
+#define SIG0(x) (ROTRIGHT(x,7) ^ ROTRIGHT(x,18) ^ ((x) >> 3))
+#define SIG1(x) (ROTRIGHT(x,17) ^ ROTRIGHT(x,19) ^ ((x) >> 10))
 
-#define SIG0(x) (ROTR(x,  2) ^ ROTR(x, 13) ^ ROTR(x, 22))
-#define SIG1(x) (ROTR(x,  6) ^ ROTR(x, 11) ^ ROTR(x, 25))
-#define sig0(x) (ROTR(x,  7) ^ ROTR(x, 18) ^ SHR(x,  3))
-#define sig1(x) (ROTR(x, 17) ^ ROTR(x, 19) ^ SHR(x, 10))
-
-static const uint32_t K[64] = {
-    0x428A2F98,0x71374491,0xB5C0FBCF,0xE9B5DBA5,
-    0x3956C25B,0x59F111F1,0x923F82A4,0xAB1C5ED5,
-    0xD807AA98,0x12835B01,0x243185BE,0x550C7DC3,
-    0x72BE5D74,0x80DEB1FE,0x9BDC06A7,0xC19BF174,
-    0xE49B69C1,0xEFBE4786,0x0FC19DC6,0x240CA1CC,
-    0x2DE92C6F,0x4A7484AA,0x5CB0A9DC,0x76F988DA,
-    0x983E5152,0xA831C66D,0xB00327C8,0xBF597FC7,
-    0xC6E00BF3,0xD5A79147,0x06CA6351,0x14292967,
-    0x27B70A85,0x2E1B2138,0x4D2C6DFC,0x53380D13,
-    0x650A7354,0x766A0ABB,0x81C2C92E,0x92722C85,
-    0xA2BFE8A1,0xA81A664B,0xC24B8B70,0xC76C51A3,
-    0xD192E819,0xD6990624,0xF40E3585,0x106AA070,
-    0x19A4C116,0x1E376C08,0x2748774C,0x34B0BCB5,
-    0x391C0CB3,0x4ED8AA4A,0x5B9CCA4F,0x682E6FF3,
-    0x748F82EE,0x78A5636F,0x84C87814,0x8CC70208,
-    0x90BEFFFA,0xA4506CEB,0xBEF9A3F7,0xC67178F2
+static const uint32_t sha256_k[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,
+    0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,
+    0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,
+    0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,
+    0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,
+    0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,
+    0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,
+    0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,
+    0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
 };
 
-static void sha256_transform(uint32_t state[8], const uint8_t data[64]) {
-    uint32_t a, b, c, d, e, f, g, h, t1, t2, m[64];
-    int i;
+typedef struct {
+    uint32_t state[8];
+    uint64_t count;
+    uint8_t buf[64];
+} SHA256_CTX;
 
-    for (i = 0; i < 16; i++)
-        m[i] = ((uint32_t)data[i * 4 + 0] << 24) |
-               ((uint32_t)data[i * 4 + 1] << 16) |
-               ((uint32_t)data[i * 4 + 2] << 8)  |
-               ((uint32_t)data[i * 4 + 3]);
-    for (; i < 64; i++)
-        m[i] = sig1(m[i - 2]) + m[i - 7] + sig0(m[i - 15]) + m[i - 16];
-
-    a = state[0]; b = state[1]; c = state[2]; d = state[3];
-    e = state[4]; f = state[5]; g = state[6]; h = state[7];
-
-    for (i = 0; i < 64; i++) {
-        t1 = h + SIG1(e) + ((e & f) ^ (~e & g)) + K[i] + m[i];
-        t2 = SIG0(a) + ((a & b) ^ (a & c) ^ (b & c));
+static void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
+    uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
+    for (i = 0, j = 0; i < 16; ++i, j += 4)
+        m[i] = (data[j] << 24) | (data[j+1] << 16) | (data[j+2] << 8) | (data[j+3]);
+    for (; i < 64; ++i)
+        m[i] = SIG1(m[i-2]) + m[i-7] + SIG0(m[i-15]) + m[i-16];
+    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];
+    e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];
+    for (i = 0; i < 64; ++i) {
+        t1 = h + EP1(e) + CH(e,f,g) + sha256_k[i] + m[i];
+        t2 = EP0(a) + MAJ(a,b,c);
         h = g; g = f; f = e; e = d + t1;
         d = c; c = b; b = a; a = t1 + t2;
     }
-
-    state[0] += a; state[1] += b; state[2] += c; state[3] += d;
-    state[4] += e; state[5] += f; state[6] += g; state[7] += h;
+    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
+    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
 }
 
+static void sha256_init_ctx(SHA256_CTX *ctx) {
+    ctx->count = 0;
+    ctx->state[0] = 0x6a09e667; ctx->state[1] = 0xbb67ae85;
+    ctx->state[2] = 0x3c6ef372; ctx->state[3] = 0xa54ff53a;
+    ctx->state[4] = 0x510e527f; ctx->state[5] = 0x9b05688c;
+    ctx->state[6] = 0x1f83d9ab; ctx->state[7] = 0x5be0cd19;
+}
+
+static void sha256_update_ctx(SHA256_CTX *ctx, const uint8_t data[], size_t len) {
+    size_t i = (size_t)(ctx->count & 63);
+    const uint8_t *p = data;
+    ctx->count += (uint64_t)len;
+    while (len--) {
+        ctx->buf[i++] = *p++;
+        if (i == 64) {
+            sha256_transform(ctx, ctx->buf);
+            i = 0;
+        }
+    }
+}
+
+static void sha256_final_ctx(SHA256_CTX *ctx, uint8_t digest[]) {
+    size_t i = (size_t)(ctx->count & 63);
+    ctx->buf[i++] = 0x80;
+    if (i > 56) {
+        while (i < 64) ctx->buf[i++] = 0;
+        sha256_transform(ctx, ctx->buf);
+        i = 0;
+    }
+    while (i < 56) ctx->buf[i++] = 0;
+    uint64_t bits = ctx->count * 8;
+    ctx->buf[56] = bits >> 56; ctx->buf[57] = bits >> 48;
+    ctx->buf[58] = bits >> 40; ctx->buf[59] = bits >> 32;
+    ctx->buf[60] = bits >> 24; ctx->buf[61] = bits >> 16;
+    ctx->buf[62] = bits >> 8;  ctx->buf[63] = bits;
+    sha256_transform(ctx, ctx->buf);
+    for (i = 0; i < 4; ++i) {
+        digest[i] = (ctx->state[0] >> (24 - i * 8)) & 0xff;
+        digest[i+4] = (ctx->state[1] >> (24 - i * 8)) & 0xff;
+        digest[i+8] = (ctx->state[2] >> (24 - i * 8)) & 0xff;
+        digest[i+12] = (ctx->state[3] >> (24 - i * 8)) & 0xff;
+        digest[i+16] = (ctx->state[4] >> (24 - i * 8)) & 0xff;
+        digest[i+20] = (ctx->state[5] >> (24 - i * 8)) & 0xff;
+        digest[i+24] = (ctx->state[6] >> (24 - i * 8)) & 0xff;
+        digest[i+28] = (ctx->state[7] >> (24 - i * 8)) & 0xff;
+    }
+}
+
+/* 对外接口，保持与原来一致的函数名 */
 void sha256(const uint8_t *data, uint32_t len, uint8_t digest[32]) {
-    uint32_t state[8] = {
-        0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-        0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19
-    };
-    uint64_t bitlen = (uint64_t)len * 8;
-    uint8_t block[64];
-//    uint32_t idx = 0;
-
-    while (len >= 64) {
-        sha256_transform(state, data);
-        data += 64;
-        len  -= 64;
-    }
-
-    memcpy(block, data, len);
-    block[len] = 0x80;
-    if (len >= 56) {
-        memset(block + len + 1, 0, 64 - len - 1);
-        sha256_transform(state, block);
-        memset(block, 0, 56);
-    } else {
-        memset(block + len + 1, 0, 56 - len - 1);
-    }
-
-    for (int i = 0; i < 8; i++) {
-        block[56 + i] = (uint8_t)(bitlen >> (56 - i * 8));
-    }
-    sha256_transform(state, block);
-
-    for (int i = 0; i < 8; i++) {
-        digest[i * 4 + 0] = (uint8_t)(state[i] >> 24);
-        digest[i * 4 + 1] = (uint8_t)(state[i] >> 16);
-        digest[i * 4 + 2] = (uint8_t)(state[i] >> 8);
-        digest[i * 4 + 3] = (uint8_t)(state[i]);
-    }
+    SHA256_CTX ctx;
+    sha256_init_ctx(&ctx);
+    sha256_update_ctx(&ctx, data, len);
+    sha256_final_ctx(&ctx, digest);
 }
-

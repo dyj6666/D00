@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx,AES256=1</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;..\component\wolfSSL\inc</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../component/wolfSSL/inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -428,6 +428,16 @@
               <FileName>security.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Core\Src\security.c</FilePath>
+            </File>
+            <File>
+              <FileName>my_sha256.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\my_sha256.c</FilePath>
+            </File>
+            <File>
+              <FileName>uECC.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Core\Src\uECC.c</FilePath>
             </File>
             <File>
               <FileName>main.c</FileName>
@@ -570,16 +580,6 @@
               <FileName>stm32f4xx_hal_msp.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/stm32f4xx_hal_msp.c</FilePath>
-            </File>
-            <File>
-              <FileName>my_sha256.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\my_sha256.c</FilePath>
-            </File>
-            <File>
-              <FileName>uECC.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Core\Src\uECC.c</FilePath>
             </File>
           </Files>
         </Group>

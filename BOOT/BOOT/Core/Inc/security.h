@@ -27,5 +27,10 @@ bool aes_ctr_decrypt_to_flash(uint32_t src_addr, uint32_t len,
 extern const uint8_t AES_KEY[32];
 /* 安全处理入口 */
 bool security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size, uint32_t current_version);
+/**
+ * @brief  使用芯片 UID 派生 256 位 AES 密钥
+ * @note   与上位机使用相同的盐值
+ */
+void derive_aes_key(uint8_t key[32]);
 
 #endif

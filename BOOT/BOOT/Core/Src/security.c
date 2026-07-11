@@ -28,13 +28,22 @@ static const uint8_t ECDSA_PUB_KEY[64] = {
     0x11, 0x0A, 0x6C, 0x68, 0xAC, 0xA0, 0x47, 0xAF
 };
 
-/* 固定 AES 密钥 (测试用，需与上位机一致，后续改为 UID 派生) */
-const uint8_t AES_KEY[32] = {
-    0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
-    0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
-    0x10,0x11,0x12,0x13,0x14,0x15,0x16,0x17,
-    0x18,0x19,0x1a,0x1b,0x1c,0x1d,0x1e,0x1f
-};
+/**
+ * @brief  使用芯片 UID 派生 256 位 AES 密钥
+ * @note   与上位机使用相同的盐值
+ */
+void derive_aes_key(uint8_t key[32]) {
+    uint32_t uid[3];
+    uid[0] = *(volatile uint32_t *)0x1FFF7A10;
+    uid[1] = *(volatile uint32_t *)0x1FFF7A14;
+    uid[2] = *(volatile uint32_t *)0x1FFF7A18;
+    // 固定盐值，与 Python 完全一致（15 字节，不含结尾额外空字符）
+    const char *salt = "OTA-AES-KEY-V1";   // 14 字符 + 自动 '\0' = 15 字节
+    uint8_t buffer[12 + 15];               // 总共 27 字节
+    memcpy(buffer, uid, sizeof(uid));      // 12 字节
+    memcpy(buffer + 12, salt, 15);         // 15 字节（盐）
+    sha256(buffer, 27, key);               // 计算 SHA256(27 字节)
+}
 
 /* 声明 uECC_secp256r1 曲线函数 */
 const struct uECC_Curve_t *uECC_secp256r1(void);

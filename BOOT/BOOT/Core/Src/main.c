@@ -33,6 +33,7 @@
 #include "flash_if.h"
 #include "security.h"
 #include "uECC.h"
+#include "my_sha256.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -106,12 +107,10 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_USART1_UART_Init();
-  MX_IWDG_Init();
+  // MX_IWDG_Init();
   MX_RTC_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-
-  // test_uECC_verify();
 
   /* 启动独立看门狗 */
   MX_IWDG_Start();
@@ -235,11 +234,21 @@ static void Log_Init(void)
   * @retval 1 有效，0 无效
   */
 static uint8_t CheckAppValid(uint32_t addr) {
-    uint32_t magic = *((volatile uint32_t *)(addr + APP_VALID_OFFSET));
-    if (magic == APP_VALID_MAGIC) {
-        return 1;
+    // 检查魔数
+    if (*(volatile uint32_t *)(addr + APP_VALID_OFFSET) != APP_VALID_MAGIC) {
+        return 0;
     }
-    return 0;
+    // 检查栈指针合法范围 (主SRAM 128KB)
+    uint32_t sp = *(volatile uint32_t *)addr;
+    if (sp < 0x20000000 || sp > 0x20020000) {
+        return 0;
+    }
+    // 检查复位向量在APP区
+    uint32_t pc = *(volatile uint32_t *)(addr + 4);
+    if (pc < APP_BASE_ADDR || pc > APP_BASE_ADDR + APP_SIZE) {
+        return 0;
+    }
+    return 1;
 }
 /**
   * @brief  跳转到 APP 固件
@@ -296,6 +305,12 @@ static void EnterUpgradeMode(void) {
     printf("Entering upgrade mode...\r\n");
     ymodem_port_init();
 
+    uint32_t uid[3];
+    uid[0] = *(volatile uint32_t *)0x1FFF7A10;
+    uid[1] = *(volatile uint32_t *)0x1FFF7A14;
+    uid[2] = *(volatile uint32_t *)0x1FFF7A18;
+    printf("DEV_UID:%08X%08X%08X\r\n", uid[0], uid[1], uid[2]);
+
     while (1) {
         /* 1. 擦除下载区 */
         printf("Erasing Download area...\r\n");
@@ -342,10 +357,27 @@ static void EnterUpgradeMode(void) {
         uint8_t iv16[16];
         memcpy(iv16, hdr.aes_iv, 12);
         memset(iv16 + 12, 0, 4);
+
+        uint8_t aes_key[32];
+        derive_aes_key(aes_key);//获取设备唯一UID做AES校验
+
         if (!aes_ctr_decrypt_to_flash(DOWNLOAD_BASE_ADDR + sizeof(ota_header_t),
-                                      app_size, AES_KEY, iv16, APP_BASE_ADDR)) {
+                                      app_size, aes_key, iv16, APP_BASE_ADDR)) {
             printf("APP write failed! System halted.\r\n");
             while (1) { IWDG->KR = 0xAAAA; }
+        }
+
+        /* 验证解密后的 APP 向量是否合法 */
+        uint32_t sp = *(volatile uint32_t *)APP_BASE_ADDR;
+        uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
+
+        if (sp < 0x20000000 || sp > 0x20020000 ||           // 栈地址不在主 SRAM 内
+            pc < APP_BASE_ADDR || pc > APP_BASE_ADDR + APP_SIZE) {  // 复位向量不在 APP 区
+            printf("APP vector invalid! SP=0x%08X PC=0x%08X\r\n", sp, pc);
+            printf("Waiting for valid firmware...\r\n");
+            // 不清除魔数，直接回到循环开头重新等待升级
+            IWDG->KR = 0xAAAA;
+            continue;
         }
 
         /* 7. 写入魔数和版本 */
