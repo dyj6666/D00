@@ -32,7 +32,7 @@
 #include "app_config.h"
 #include "logger.h"
 #include "stream_buffer.h"
-
+#include "event_bus.h"
 
 /* USER CODE END Includes */
 
@@ -43,7 +43,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define BOOT_FLAG_UPGRADE  0x5A5A
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -108,6 +108,8 @@ int main(void)
   MX_USART2_UART_Init();
   MX_RTC_Init();
   /* USER CODE BEGIN 2 */
+  EventBus_Init();    // 必须在调度器启动前初始化事件总线
+
   global_tx_stream = xStreamBufferCreate(LOG_TX_STREAM_SIZE, 1);
   global_rx_stream = xStreamBufferCreate(LOG_RX_STREAM_SIZE, 1);
   if (global_tx_stream == NULL || global_rx_stream == NULL) {
@@ -199,21 +201,6 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     if (huart->Instance == DEBUG_UART.Instance) {
         LOG_TxCpltCallback();
     }
-}
-/**
- * @brief  接收升级指令并复位到 BOOT
- * @note   写入备份寄存器后等待 100ms 确保 BKP 写入完成，然后系统复位
- */
-static void __attribute__((unused)) EnterBootloader(void) {
-    printf("APP: Received upgrade command. Entering BOOT...\r\n");
-    /* 确保备份域可写 */
-    HAL_PWR_EnableBkUpAccess();
-    /* 写入升级标志到 BKP_DR1 (与 BOOT 读取的地址一致) */
-    HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR1, BOOT_FLAG_UPGRADE);
-    /* 延时确保非易失写入完成 (后备寄存器由电池供电，软件复位不丢失) */
-    HAL_Delay(100);
-    /* 软件复位 */
-    NVIC_SystemReset();
 }
 /* USER CODE END 4 */
 

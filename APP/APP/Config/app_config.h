@@ -2,7 +2,10 @@
 #define APP_CONFIG_H
 
 
-#define DEBUG_APP 1
+#define DEBUG_APP 0
+
+#define BOOT_FLAG_UPGRADE  0x5A5A
+
 // 日志系统
 #define LOG_TX_STREAM_SIZE      2048
 #define LOG_RX_STREAM_SIZE      1024
@@ -13,8 +16,16 @@
 #define SHELL_LINE_MAX          128
 #define SHELL_CMD_MAX           20
 
-// 事件总线（预留）
+/*--------------------------- 事件总线 --------------------------------------*/
 #define EVENT_BUS_MAX_EVENTS    64
 #define EVENT_BUS_SUBS_MAX      4
+#define EVENT_BUS_QUEUE_LENGTH  32      // 新增：事件队列深度
+
+/*--------------------------- 系统定时器 ------------------------------------*/
+#define SYS_TICK_1S_PERIOD_MS   1000
+#define SYS_TICK_200MS_PERIOD_MS 200
+#define KEY_SCAN_PERIOD_MS      10
+
+#define DEVICE_I2C_TIMEOUT_MS   100
 
 #endif

@@ -13,7 +13,7 @@
 #define DOWNLOAD_SIZE           (256 * 1024)         /* 256 KB, sectors 7,8,9,10? actually sector7 is 128KB, so we use 128KB or 256KB? Check: sector7=128KB, sector8=128KB, so 256KB fits perfectly. */
 
 /* Validity marker at end of APP area */
-#define APP_VALID_OFFSET        (APP_SIZE - 4)
+#define APP_VALID_OFFSET        (APP_SIZE - 8)
 #define APP_VALID_ADDR          (APP_BASE_ADDR + APP_VALID_OFFSET)
 #define APP_VALID_MAGIC         0x4F54412E
 

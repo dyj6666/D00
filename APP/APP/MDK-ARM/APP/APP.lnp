@@ -40,6 +40,11 @@
 "app\port.o"
 "app\logger.o"
 "app\shell.o"
+"app\event_bus.o"
+"app\module.o"
+"app\key_app.o"
+"app\led_app.o"
+"app\ota_agent.o"
 --library_type=microlib --strict --scatter "APP\APP.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

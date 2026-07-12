@@ -8,6 +8,7 @@
 #include "stream_buffer.h"
 #include <stdarg.h>
 #include <main.h>
+#include "event_bus.h"
 
 typedef void (*cmd_func_t)(const char *args);
 typedef struct {
@@ -19,12 +20,16 @@ static void cmd_help(const char *args);
 static void cmd_info(const char *args);
 static void cmd_reset(const char *args);
 static void cmd_led(const char *args);
+static void cmd_taskstats(const char *args);
+static void cmd_ota(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",  cmd_help},
     {"info",  cmd_info},
     {"reset", cmd_reset},
     {"led",   cmd_led},
+    {"taskstats", cmd_taskstats},
+    {"ota", cmd_ota},
 };
 #define CMD_COUNT (sizeof(cmd_table)/sizeof(cmd_table[0]))
 
@@ -67,9 +72,10 @@ static void shell_execute(void)
 void Shell_ProcessChar(uint8_t ch)
 {
     if (ch == '\r' || ch == '\n') {
-        /* 回车：执行命令，然后清空缓冲区，不输出任何提示符 */
-        LOG_Printf("\r\n");          /* 回显换行，使执行结果另起一行 */
-        shell_execute();
+        /* 执行命令：先换行，执行，然后空一行分隔下一次输入 */
+        LOG_Printf("\r\n");            // 将光标移到新行（回显换行）
+        shell_execute();              // 执行并输出结果
+        LOG_Printf("\r\n");            // 命令后追加空行，为下一次输入留白
         cmd_len = 0;
         cmd_line[0] = '\0';
         return;
@@ -127,6 +133,26 @@ static void cmd_reset(const char *args) {
 }
 
 static void cmd_led(const char *args) {
-    LOG_Printf("LED: %s\r\n", args ? args : "no args");
+
+    if (args == NULL) {
+        LOG_Printf("Usage: led on/off/toggle\r\n");
+        return;
+    }
+    EventBus_Publish(EVENT_CMD_LED, args, strlen(args) + 1); // 包含'\0'
+
 }
 
+static void cmd_taskstats(const char *args) {
+    (void)args;
+    char stats_buf[512];
+    vTaskList(stats_buf);
+    LOG_Printf("Task\tState\tPrio\tStack\t#\r\n");
+    LOG_Printf("%s\r\n", stats_buf);
+    LOG_Printf("Free heap: %lu bytes\r\n", xPortGetFreeHeapSize());
+}
+
+static void cmd_ota(const char *args) {
+    (void)args;
+    LOG_Printf("OTA command received, publishing event...\r\n");
+    EventBus_Publish(EVENT_CMD_OTA_START, NULL, 0);
+}
