@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
+#include "dma.h"
 #include "rtc.h"
 #include "usart.h"
 #include "gpio.h"
@@ -26,6 +28,12 @@
 /* USER CODE BEGIN Includes */
 #include <string.h>
 #include <stdio.h>
+#include "pinout.h"
+#include "app_config.h"
+#include "logger.h"
+#include "stream_buffer.h"
+
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,34 +54,19 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-volatile uint8_t upgrade_request = 0;   /* 升级请求标志 */
-uint8_t rx_byte;                        /* 接收缓冲 */
+StreamBufferHandle_t global_tx_stream;
+StreamBufferHandle_t global_rx_stream;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
 static void EnterBootloader(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-/**
- * @brief  中断回调：USART2 每收到一字节触发
- *         检测到 'U' 则置位升级请求，并重新启动接收
- */
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-    if (huart->Instance == USART2) {
-        if (rx_byte == 'U') {
-            upgrade_request = 1;
-        }
-        /* 清除可能残留的错误标志（ORE/FE/NE） */
-        __HAL_UART_CLEAR_OREFLAG(huart);   /* 清除溢出错误 */
-        /* 重新启动中断接收 */
-        HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
-    }
-}
 
 /* USER CODE END 0 */
 
@@ -85,16 +78,12 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  #if (DEBUG_APP)
+  SCB->VTOR = 0x08000000;
+  #else
   SCB->VTOR = 0x08010000;
-  SystemCoreClock = 168000000;
   __enable_irq();             /* 关键！BOOT 关闭了全局中断，这里重新开启 */
-  IWDG->KR = 0xAAAA;
-
-  /* Enable GPIOF clock and set PF9 high (LED on) */
-  // RCC->AHB1ENR |= RCC_AHB1ENR_GPIOFEN;
-  // GPIOF->MODER &= ~(3 << (9 * 2));
-  // GPIOF->MODER |= (1 << (9 * 2));      /* Output */
-  // GPIOF->BSRR = GPIO_BSRR_BS_9;        /* PF9 = high */
+  #endif
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -107,7 +96,7 @@ int main(void)
   /* USER CODE END Init */
 
   /* Configure the system clock */
-  // SystemClock_Config();
+  SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
 
@@ -115,30 +104,42 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_RTC_Init();
   /* USER CODE BEGIN 2 */
-  /* 启动中断接收 */
-  HAL_UART_Receive_IT(&huart2, &rx_byte, 1);
-  printf("\r\n=== APP is running! ===\r\n");
+  global_tx_stream = xStreamBufferCreate(LOG_TX_STREAM_SIZE, 1);
+  global_rx_stream = xStreamBufferCreate(LOG_RX_STREAM_SIZE, 1);
+  if (global_tx_stream == NULL || global_rx_stream == NULL) {
+      Error_Handler();  // 分配失败进入错误处理
+  }
   /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();  /* Call init function for freertos objects (in cmsis_os2.c) */
+  MX_FREERTOS_Init();
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    IWDG->KR = 0xAAAA;
-    HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
-    printf("APP heartbeat\r\n");
+    // IWDG->KR = 0xAAAA;
+    // HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
+    // printf("APP heartbeat\r\n");
 
-    /* 检查升级请求标志（无阻塞，无轮询延时） */
-    if (upgrade_request) {
-        upgrade_request = 0;        /* 清除标志 */
-        EnterBootloader();
-        /* 函数内复位，不会返回 */
-    }
+    // /* 检查升级请求标志（无阻塞，无轮询延时） */
+    // if (upgrade_request) {
+    //     upgrade_request = 0;        /* 清除标志 */
+    //     EnterBootloader();
+    //     /* 函数内复位，不会返回 */
+    // }
 
-    HAL_Delay(500);                 /* 保持心跳间隔，可被 RTOS 替代 */
+    // HAL_Delay(500);                 /* 保持心跳间隔，可被 RTOS 替代 */
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -193,11 +194,17 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == DEBUG_UART.Instance) {
+        LOG_TxCpltCallback();
+    }
+}
 /**
  * @brief  接收升级指令并复位到 BOOT
  * @note   写入备份寄存器后等待 100ms 确保 BKP 写入完成，然后系统复位
  */
-static void EnterBootloader(void) {
+static void __attribute__((unused)) EnterBootloader(void) {
     printf("APP: Received upgrade command. Entering BOOT...\r\n");
     /* 确保备份域可写 */
     HAL_PWR_EnableBkUpAccess();
@@ -209,6 +216,28 @@ static void EnterBootloader(void) {
     NVIC_SystemReset();
 }
 /* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM7 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM7)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.

@@ -170,13 +170,6 @@ Reset_Handler    PROC
                  EXPORT  Reset_Handler             [WEAK]
         IMPORT  SystemInit
         IMPORT  __main
-			
-		; ================================================	
-        ; ι�� (IWDG->KR = 0xAAAA)
-        LDR     R0, =0x40003000
-        LDR     R1, =0x0000AAAA
-        STR     R1, [R0]
-        ; ================================================
 
         LDR     R0, =SystemInit
         BLX     R0
