@@ -34,7 +34,7 @@
 #include "logger.h"
 #include "stream_buffer.h"
 #include "event_bus.h"
-
+#include "data_link.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -111,6 +111,7 @@ int main(void)
   MX_USART2_UART_Init();
   MX_RTC_Init();
   MX_IWDG_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
   EventBus_Init();    // 必须在调度器启动前初始化事件总线
 
@@ -205,7 +206,14 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     if (huart->Instance == DEBUG_UART.Instance) {
         LOG_TxCpltCallback();
     }
+    else if (huart->Instance == HOSTLINK_UART.Instance) {
+        DataLink_TxCpltCallback();
+    }
+    else{
+      ;
+    }
 }
+
 /* USER CODE END 4 */
 
 /**

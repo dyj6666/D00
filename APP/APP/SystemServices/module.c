@@ -4,12 +4,18 @@
 #include "key_app.h"
 #include "ota_agent.h"
 #include "sysmon.h"
+#include "var_manager.h"
+#include "data_link.h"
+#include "data_agent.h"
 // 去掉 section 属性，改回普通定义
 const module_desc_t module_table[] = {
     REGISTER_MODULE(LedApp_Init),
     REGISTER_MODULE(KeyApp_Init),
     REGISTER_MODULE(OtaAgent_Init),
     REGISTER_MODULE(SysMon_Init),
+    REGISTER_MODULE(VAR_Init),
+    REGISTER_MODULE(DataLink_Init),
+    REGISTER_MODULE(DataAgent_Init),
 };
 #define MODULE_COUNT (sizeof(module_table) / sizeof(module_table[0]))
 

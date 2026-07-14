@@ -33,6 +33,7 @@
 #include "timers.h"
 #include "module.h"
 #include "cmsis_os2.h"
+#include "data_agent.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -82,6 +83,13 @@ const osThreadAttr_t eventBusTask_attributes = {
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityRealtime,
 };
+/* Definitions for dataAgentTask */
+osThreadId_t dataAgentTaskHandle;
+const osThreadAttr_t dataAgentTask_attributes = {
+  .name = "dataAgentTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -97,6 +105,7 @@ void StartStartupTask(void *argument);
 void StartShellTask(void *argument);
 void StartLoggerTXTask(void *argument);
 void StartEventBusTask(void *argument);
+void StartdataAgentTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -165,6 +174,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of eventBusTask */
   eventBusTaskHandle = osThreadNew(StartEventBusTask, NULL, &eventBusTask_attributes);
+
+  /* creation of dataAgentTask */
+  dataAgentTaskHandle = osThreadNew(StartdataAgentTask, NULL, &dataAgentTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -252,6 +264,22 @@ void StartEventBusTask(void *argument)
   /* Infinite loop */
 
   /* USER CODE END StartEventBusTask */
+}
+
+/* USER CODE BEGIN Header_StartdataAgentTask */
+/**
+* @brief Function implementing the dataAgentTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartdataAgentTask */
+void StartdataAgentTask(void *argument)
+{
+  /* USER CODE BEGIN StartdataAgentTask */
+  /* Infinite loop */
+  DataAgent_Init();
+  vTaskDelete(NULL);
+  /* USER CODE END StartdataAgentTask */
 }
 
 /* Private application code --------------------------------------------------*/

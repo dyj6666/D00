@@ -81,7 +81,7 @@
           </BeforeMake>
           <AfterMake>
             <RunUserProg1>1</RunUserProg1>
-            <RunUserProg2>0</RunUserProg2>
+            <RunUserProg2>1</RunUserProg2>
             <UserProg1Name>fromelf --bin --output=.\Output\APP.bin .\APP\APP.axf</UserProg1Name>
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
@@ -1748,6 +1748,16 @@
               <FileType>1</FileType>
               <FilePath>..\SystemServices\var_manager.c</FilePath>
             </File>
+            <File>
+              <FileName>data_link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\data_link.c</FilePath>
+            </File>
+            <File>
+              <FileName>crc16.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\crc16.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1767,6 +1777,11 @@
               <FileName>ota_agent.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Application\ota_agent.c</FilePath>
+            </File>
+            <File>
+              <FileName>data_agent.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Application\data_agent.c</FilePath>
             </File>
           </Files>
         </Group>

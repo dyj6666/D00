@@ -24,4 +24,5 @@ int  VAR_Write(uint16_t id, const void *buf, uint16_t len);
 void VAR_GetSubscribedList(uint16_t *ids, uint8_t *count);
 void VAR_Subscribe(uint16_t id);
 void VAR_ClearSubscriptions(void);
+void VAR_SendList(void);   /* 发送所有注册变量的信息到上位机 */
 #endif

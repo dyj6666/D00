@@ -46,9 +46,12 @@
 "app\module.o"
 "app\sysmon.o"
 "app\var_manager.o"
+"app\data_link.o"
+"app\crc16.o"
 "app\key_app.o"
 "app\led_app.o"
 "app\ota_agent.o"
+"app\data_agent.o"
 --library_type=microlib --strict --scatter "APP\APP.sct"
 --summary_stderr --info summarysizes --map --load_addr_map_info --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

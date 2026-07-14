@@ -37,4 +37,8 @@
 #define HOSTLINK_MAX_SUBSCRIBE      32      /* 最大订阅变量数 */
 #define HOSTLINK_SAMPLE_PERIOD_MS   10      /* 默认采集周期 10ms */
 
+#define HOSTLINK_TX_STREAM_SIZE      2048   // 发送流缓冲区
+#define HOSTLINK_TX_DMA_CHUNK         128
+#define HOSTLINK_CRC_POLY             0x8005 // CRC-16/MODBUS 多项式
+
 #endif
