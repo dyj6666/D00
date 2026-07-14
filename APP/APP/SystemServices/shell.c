@@ -22,6 +22,7 @@ static void cmd_reset(const char *args);
 static void cmd_led(const char *args);
 static void cmd_taskstats(const char *args);
 static void cmd_ota(const char *args);
+static void cmd_sysmon(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",  cmd_help},
@@ -30,6 +31,7 @@ static const cmd_entry_t cmd_table[] = {
     {"led",   cmd_led},
     {"taskstats", cmd_taskstats},
     {"ota", cmd_ota},
+    {"sysmon", cmd_sysmon},
 };
 #define CMD_COUNT (sizeof(cmd_table)/sizeof(cmd_table[0]))
 
@@ -155,4 +157,10 @@ static void cmd_ota(const char *args) {
     (void)args;
     LOG_Printf("OTA command received, publishing event...\r\n");
     EventBus_Publish(EVENT_CMD_OTA_START, NULL, 0);
+}
+
+static void cmd_sysmon(const char *args)
+{
+    (void)args;
+    EventBus_Publish(EVENT_CMD_SYSMON, NULL, 0);
 }

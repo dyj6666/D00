@@ -13,6 +13,7 @@ typedef enum {
     EVENT_KEY_LONG,
     EVENT_CMD_LED,          // Shell 命令映射事件
     EVENT_CMD_OTA_START,
+    EVENT_CMD_SYSMON,       // Shell 请求系统监控报告
     EVENT_COUNT
 } event_id_t;
 

@@ -20,6 +20,7 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "dma.h"
+#include "iwdg.h"
 #include "rtc.h"
 #include "usart.h"
 #include "gpio.h"
@@ -56,13 +57,14 @@
 /* USER CODE BEGIN PV */
 StreamBufferHandle_t global_tx_stream;
 StreamBufferHandle_t global_rx_stream;
+extern IWDG_HandleTypeDef hiwdg;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 void MX_FREERTOS_Init(void);
 /* USER CODE BEGIN PFP */
-static void EnterBootloader(void);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -83,6 +85,7 @@ int main(void)
   #else
   SCB->VTOR = 0x08010000;
   __enable_irq();             /* 关键！BOOT 关闭了全局中断，这里重新开启 */
+  HAL_IWDG_Refresh(&hiwdg);  // 启动时喂狗一次
   #endif
   /* USER CODE END 1 */
 
@@ -107,6 +110,7 @@ int main(void)
   MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_RTC_Init();
+  MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
   EventBus_Init();    // 必须在调度器启动前初始化事件总线
 

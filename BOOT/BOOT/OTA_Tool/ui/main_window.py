@@ -44,6 +44,9 @@ class MainWindow(QMainWindow):
         self._init_ui()
         self._load_config()
 
+        # 安装全局事件过滤器，强制捕获拖放
+        self.installEventFilter(self)
+
     def _init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -88,7 +91,7 @@ class MainWindow(QMainWindow):
         row1.addWidget(QLabel("固件文件:"))
         self.edit_file = QLineEdit()
         self.edit_file.setPlaceholderText("选择或拖拽 .bin 文件...")
-        self.edit_file.setAcceptDrops(True)
+        # self.edit_file.setAcceptDrops(True)
         btn_browse = QPushButton("浏览...")
         btn_browse.clicked.connect(lambda: self.edit_file.setText(QFileDialog.getOpenFileName()[0]))
         row1.addWidget(self.edit_file)
@@ -152,13 +155,14 @@ class MainWindow(QMainWindow):
         log_group.setLayout(log_layout)
         main_layout.addWidget(log_group)
 
-        # 拖拽支持
-        self.setAcceptDrops(True)
+        self.setAcceptDrops(True)                # 主窗口自身可接受拖放
 
     # ---------- 拖拽文件支持 ----------
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
+    def dragMoveEvent(self, event):
+        event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent):
         for url in event.mimeData().urls():
@@ -172,6 +176,7 @@ class MainWindow(QMainWindow):
         self.edit_file.setText(self.config.get("last_file", ""))
         self.edit_version.setValue(int(self.config.get("last_version", 1)))
         self.edit_uid.setText(self.config.get("last_uid", ""))
+        self.edit_key.setText(self.config.get("last_key", ""))
         # 私钥不自动填充
 
     def _save_config(self):
@@ -180,6 +185,7 @@ class MainWindow(QMainWindow):
         self.config.set("last_file", self.edit_file.text())
         self.config.set("last_version", str(self.edit_version.value()))
         self.config.set("last_uid", self.edit_uid.text())
+        self.config.set("last_key", self.edit_key.text())
 
     # ---------- 串口控制 ----------
     def _toggle_serial(self):
@@ -292,3 +298,19 @@ class MainWindow(QMainWindow):
         if self.serial_instance and self.serial_instance.is_open:
             self.serial_instance.close()
         event.accept()
+
+    def eventFilter(self, obj, event):
+        from PyQt5.QtCore import QEvent
+        if obj == self.edit_file:
+            if event.type() == QEvent.DragEnter:
+                event.acceptProposedAction()
+                return True
+            elif event.type() == QEvent.Drop:
+                mime = event.mimeData()
+                if mime.hasUrls():
+                    path = mime.urls()[0].toLocalFile()
+                    if path.lower().endswith('.bin'):
+                        self.edit_file.setText(path)
+                        return True
+                return True
+        return super().eventFilter(obj, event)

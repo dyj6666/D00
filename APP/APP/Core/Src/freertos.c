@@ -21,7 +21,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
-#include "cmsis_os2.h"
+#include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -32,6 +32,7 @@
 #include "event_bus.h"
 #include "timers.h"
 #include "module.h"
+#include "cmsis_os2.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -187,7 +188,7 @@ void StartStartupTask(void *argument)
 {
   /* USER CODE BEGIN StartStartupTask */
   LOG_Init();
-  // modules_init();   // 自动加载所有注册的模块
+  modules_init();   // 自动加载所有注册的模块
 
   // 系统定时器仍发布事件，但现在是非阻塞异步发布
   TimerHandle_t tmr_1s = xTimerCreate("t1s", pdMS_TO_TICKS(1000), pdTRUE, NULL, tmr_1s_callback);

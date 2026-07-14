@@ -3,12 +3,13 @@
 #include "led_app.h"
 #include "key_app.h"
 #include "ota_agent.h"
-
-/* 绝对定位到 0x08050000，占用 16 字节（两个函数指针） */
-const module_desc_t __attribute__((at(0x08050000))) module_table[] = {
+#include "sysmon.h"
+// 去掉 section 属性，改回普通定义
+const module_desc_t module_table[] = {
     REGISTER_MODULE(LedApp_Init),
     REGISTER_MODULE(KeyApp_Init),
     REGISTER_MODULE(OtaAgent_Init),
+    REGISTER_MODULE(SysMon_Init),
 };
 #define MODULE_COUNT (sizeof(module_table) / sizeof(module_table[0]))
 

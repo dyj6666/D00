@@ -16,4 +16,9 @@
 #define KEY0_GPIO_Port      GPIOE
 #define KEY0_Pin            GPIO_PIN_4
 #define KEY0_PRESSED_STATE  GPIO_PIN_RESET
+
+#define HOSTLINK_UART       huart3      /* 上位机通信专用 */
+#define HOSTLINK_UART_IRQn  USART3_IRQn
+#define HOSTLINK_BAUDRATE   921600
+
 #endif

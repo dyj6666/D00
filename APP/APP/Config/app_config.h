@@ -28,4 +28,13 @@
 
 #define DEVICE_I2C_TIMEOUT_MS   100
 
+#define WDOG_FEED_PERIOD_MS     1000   // 喂狗周期，需小于 IWDG 超时的一半
+
+/* 上位机通信 */
+#define HOSTLINK_RX_DMA_BUF_SIZE    1024
+#define HOSTLINK_TX_DMA_BUF_SIZE    512
+#define HOSTLINK_MAX_VARS           64      /* 最大注册变量数 */
+#define HOSTLINK_MAX_SUBSCRIBE      32      /* 最大订阅变量数 */
+#define HOSTLINK_SAMPLE_PERIOD_MS   10      /* 默认采集周期 10ms */
+
 #endif
