@@ -1,0 +1,207 @@
+# STM32F407 APP 工程搭建全流程完整问题总结
+
+## 一、工程骨架与基础配置
+
+### 1. CubeMX 工程配置及引脚分配
+- 问题：如何将USART2分配给Debug，USART1留给OTA，LED与按键引脚定义。
+- 解决：在CubeMX中配置USART2异步模式，开启DMA RX/TX，并使能全局中断；USART1仅预留不使能；LED、KEY引脚设为GPIO_Output/Input，自定义Label。所有引脚宏集中定义在 pinout.h，软件参数定义在 app_config.h。
+
+### 2. 文件末尾换行警告
+- 现象：编译警告 #1-D: last line of file ends without a newline。
+- 解决：在每个头文件、源文件末尾增加一个空行。
+
+### 3. 用户代码保护区域
+- 问题：CubeMX重新生成代码会覆盖用户自定义代码。
+- 解决：所有自定义代码必须写在 /* USER CODE BEGIN */ 和 /* USER CODE END */ 之间。
+
+## 二、Logger系统（USART2 DMA收发）
+
+### 4. Logger只打印第一行，后续无输出
+- 现象：启动后仅输出第一条LOG，系统卡死或日志丢失。
+- 原因：中断驱动的DMA链式发送中，中断内调用 xStreamBufferReceiveFromISR 可能与 FreeRTOS 配置冲突，或中断优先级不当，导致发送链断裂。
+- 分析：单步调试发现DMA发送完成中断正常触发，但 tx_busy 标志未复位。最终确认中断中调用了非ISR安全的API。
+- 解决：
+  1. 确保USART2中断优先级设为5（与FreeRTOS兼容）。
+  2. 初期改用任务轮询阻塞发送 HAL_UART_Transmit，避免中断复杂交互。
+  3. 后期实现DMA+任务通知的异步发送：LoggerTXTask 等待 tx_stream 数据，启动DMA后通过 ulTaskNotifyTake 等待完成通知，中断中安全发送通知。
+
+### 5. USART2中断优先级导致HardFault
+- 现象：启用DMA接收后，一发送数据即进入HardFault。
+- 原因：CubeMX默认将USART2中断优先级设为0，高于 configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY (5)，导致中断中调用了非ISR安全的 FreeRTOS API。
+- 解决：
+  1. 在CubeMX中设置USART2中断优先级为5。
+  2. 在 main() 中强制 HAL_NVIC_SetPriority(USART2_IRQn, 5, 0)。
+  3. 检查所有使用FromISR API的中断优先级 ≥5。
+
+### 6. DMA缓冲区使用栈变量导致内存损坏
+- 现象：随机 HardFault，堆断言 configASSERT。
+- 原因：rx_dma_buf 或 tx_dma_chunk 定义为函数局部变量，函数返回后内存被释放，DMA 继续写入导致堆破坏。
+- 解决：所有DMA缓冲区均定义为静态全局数组，并添加 __attribute__((aligned(4)))。
+
+### 7. StreamBuffer触发阈值导致Shell交互卡顿
+- 现象：输入5~6次命令才一次性回显。
+- 原因：xStreamBufferCreate(..., 32) 的触发阈值设为32，只有当缓冲区内数据≥32字节时才会唤醒接收任务。
+- 解决：将接收和发送 StreamBuffer 的触发阈值均改为 1，每个字节立即触发任务。
+
+### 8. LOG_Printf 在中断中调用导致复位
+- 现象：在中断回调中加入 LOG_Printf 立即复位。
+- 原因：LOG_Printf 内部使用 xStreamBufferSend，该函数非ISR安全。
+- 解决：任何调试打印必须在任务上下文中进行；中断内只做数据入队、DMA重启等快速操作。
+
+## 三、Shell与命令行交互
+
+### 9. Shell 任务创建后系统卡在 configASSERT
+- 现象：程序卡在 pxStreamBuffer 断言。
+- 原因：Shell任务在 LOG_Init 前运行，rx_stream 仍为 NULL。
+- 解决：
+  1. 将 StreamBuffer 的创建提前到 main() 中 osKernelStart() 之前。
+  2. Shell 任务在 StartupTask 中创建，确保 Logger 初始化完毕。
+
+### 10. Shell回显乱码
+- 现象：输入字符时出现 [K$ i 等乱码。
+- 原因：使用了 ANSI 转义序列 \033[K，终端不支持。
+- 解决：采用纯回车 + 空格覆盖的行刷新方式，兼容所有串口助手。
+
+### 11. 无提示符交互优化
+- 需求：要求类似 Linux 命令行效果，无多余 $ 提示。
+- 解决：设计极简回车确认模式：无提示符，输入直接回显，退格支持，回车执行并换行。
+
+### 12. 命令参数解析
+- 问题：如何获取命令后的参数。
+- 解决：shell_execute 解析出命令名后，剩余部分作为 args 指针传递给命令函数，跳过前导空格。命令函数自行解析。
+
+## 四、事件总线与模块解耦
+
+### 13. 事件总线同步调用风险
+- 问题：定时器回调中发布事件，若订阅者处理耗时，会阻塞定时器任务。
+- 解决：升级为异步事件总线。创建 eventBusTask (最高优先级) 和事件队列 evt_queue，发布者非阻塞入队，分发任务按序调用订阅者。中断中使用 EventBus_PublishFromISR。
+
+### 14. 事件队列初始化时机
+- 现象：eventBusTask 启动时事件队列未创建，触发断言。
+- 解决：在 main() 中 osKernelStart() 之前调用 EventBus_Init()，确保调度前队列就绪。
+
+### 15. 模块自注册 (MODULE_REGISTER) 方案演变
+- 目标：通过链接脚本自动收集模块初始化函数。
+- 尝试1：分散加载文件 INIT_MODULES 段 + __attribute__((section))。失败：Keil 下载算法未正确编程该区域（Flash内容全为0xFF）。
+- 尝试2：__attribute__((at(0x0804FFE0))) 绝对定位数组。可行，但需管理地址与OTA魔数不冲突。
+- 最终方案：显式注册表 module_registry.c，手动列出所有模块的 REGISTER_MODULE(InitFunc)。使用 at 固定地址，并通过sct文件预留空间。
+
+### 16. 注册表地址与OTA冲突
+- 问题：模块表位于0x08050000时，bin文件空洞巨大，且生成文件夹。
+- 解决：将模块表绝对定位至 0x0804FFE0，sct中 ER_IROM1 结束于 0x0804FFE0，魔数 APP_VALID_ADDR 位于 0x0804FFF8，版本位于 0x0804FFFC，保证互不重叠。
+
+### 17. modules_init() 遍历时 HardFault
+- 原因：直接遍历 Image$$INIT_MODULES$$Base 时，无效数据或0xFF导致非法函数调用。
+- 解决：增加严格指针检查：地址必须在 Flash 范围内且 LSB=1（Thumb代码），但最终因烧录问题放弃自动遍历，改用显式调用。
+
+## 五、上位机通信 (DataLink 基于 USART1)
+
+### 18. USART1与BOOT冲突
+- 现象：APP启用USART1后，一触发中断就复位。
+- 原因：BOOT使用了USART1，跳转前未彻底清除 NVIC 挂起中断和 DMA 残留状态。
+- 解决：
+  1. 修改BOOT：跳转前加入 HAL_NVIC_DisableIRQ(USART1_IRQn)、ClearPendingIRQ，以及 DMA 复位。
+  2. APP 端：在 MX_USART1_UART_Init() 前，复位 USART1 及 DMA2 外设，清除 NVIC 挂起。
+
+### 19. 中断中调用非安全API
+- 现象：DataLink_RxIdleCallback 内调用 LOG_Printf 立即复位。
+- 解决：所有业务逻辑移到 CmdTask（任务上下文），中断只做 xQueueSendFromISR 和 DMA 重启。
+
+### 20. CRC校验错误（反复修正）
+- 现象：发送 AA55010000，计算的CRC为 1DB0，实际应为 147C。
+- 原因：CRC算法实现错误（左移算法配0xA001多项式，应为右移算法）。
+- 解决：使用标准 MODBUS CRC-16 右移算法，多项式 0xA001，并利用 Python crcmod 库验证所有测试帧。
+
+### 21. 串口助手发送ASCII而非Hex
+- 现象：接收数据为 41 41 20 35 35 ...（字符'A'、空格等）。
+- 解决：将串口助手设置为十六进制发送模式。
+
+### 22. 订阅后只收到一帧，然后停止
+- 原因：VAR_Subscribe 中检查重复订阅时，提前 return 但忘记释放互斥锁，导致后续 VAR_Read 永久阻塞。
+- 解决：补充遗漏的 xSemaphoreGive(var_mutex)；并检查所有持锁函数，确保所有返回路径释放锁。
+
+### 23. DataAgent 软件定时器栈溢出
+- 现象：订阅后系统复位。
+- 原因：sample_callback 在 FreeRTOS 定时器服务任务中执行，该任务栈较小，VAR_Read 等操作溢出。
+- 解决：弃用软件定时器，创建独立任务 DataAgentTask，栈大小 1024→2048 字。
+
+### 24. 写入变量长度字段错误
+- 现象：发送写入命令 AA55050600...，长度字段 06 00 与实际不符。
+- 原因：未正确计算 payload 长度（ID + 值长度 + 值字节数）。
+- 解决：仔细核对协议：payload 长度 = 2(ID) + 1(长度字段) + 值的字节数。写 int32 应为 7 字节（07 00）。
+
+### 25. DMA 接收未重启
+- 现象：首次接收正常，再次发送命令无反应。
+- 原因：空闲中断后需手动重启DMA接收。
+- 解决：在 DataLink_RxIdleCallback 中调用 HAL_UART_DMAStop 后立即 HAL_UART_Receive_DMA。
+
+### 26. 发送任务通知丢失
+- 预防：TXTask 通过 ulTaskNotifyTake 等待 DMA 完成。需确保 HAL_UART_TxCpltCallback 中正确调用 DataLink_TxCpltCallback，并在其中使用 vTaskNotifyGiveFromISR。
+
+## 六、变量管理器与线程安全
+
+### 27. 互斥锁使用规范
+- 问题：何时需要加锁？如何避免死锁？
+- 原则：所有访问 registry[]、subscribed[] 的操作均需持锁。采用 xSemaphoreTake(mutex, pdMS_TO_TICKS(100))，超时则记录错误并返回，防止永久阻塞。
+
+### 28. 变量注册必须在模块初始化时
+- 注意：VAR_Register 传入的指针必须指向全局或静态变量，不能是局部变量。
+
+### 29. 模块初始化顺序
+- 现象：加入 VAR_Register 后系统复位。
+- 原因：VAR_Init 未先执行，导致互斥锁未创建。
+- 解决：在 module_registry.c 中确保 REGISTER_MODULE(VAR_Init) 排在其他调用 VAR_Register 的模块之前。
+
+## 七、系统监控与看门狗
+
+### 30. 看门狗复位
+- 现象：运行中突然复位，尤其在初始化或高频通信时。
+- 解决：
+  1. SysMon 模块提供软件定时器定期喂狗。
+  2. 启动阶段在 main() 中密集喂狗（HAL_IWDG_Refresh），防止初始化超时。
+  3. 确保 hiwdg.Instance = IWDG 已设置。
+
+### 31. sysmon 命令实现
+- 需求：通过Shell查看任务栈、CPU使用率、堆、复位原因等。
+- 解决：cmd_sysmon 发布事件 EVENT_CMD_SYSMON，SysMon 模块订阅该事件，调用监控项注册表中的函数采集信息并打印。
+
+## 八、编译、链接与工具链
+
+### 32. Keil 生成 bin 文件错误
+- 现象：fromelf 创建 APP.bin 文件夹而非文件。
+- 原因：输出路径存在同名文件夹，或地址空洞导致 bin 体积极大。
+- 解决：
+  1. 删除同名文件夹。
+  2. 修正 sct 文件，确保模块表地址在代码区内或预留区，消除 bin 文件空洞。
+  3. After Build 命令使用简单相对路径，或指定子目录。
+
+### 33. FreeRTOSConfig.h 宏未使能
+- 错误：vTaskList 或 uxTaskGetSystemState 未定义。
+- 解决：启用 configUSE_TRACE_FACILITY、configUSE_STATS_FORMATTING、configGENERATE_RUN_TIME_STATS，并配置 DWT 计数器。
+
+### 34. 缺少头文件引起的编译错误
+- 多次出现：隐式声明的函数、未定义的类型。
+- 经验：确保每个 .c 文件直接或间接包含所需头文件（如 string.h、FreeRTOS.h、semphr.h、logger.h 等）。
+
+## 九、调试与测试方法
+
+### 35. LED 翻转快速定位阻塞点
+- 技巧：在关键路径（ISR、任务循环）中嵌入 HAL_GPIO_TogglePin，通过示波器或逻辑分析仪观察是否正常工作。
+
+### 36. Shell 打印辅助诊断
+- 注意：仅在任务中调用 LOG_Printf；中断中可借助全局标志，由任务轮询打印。
+
+### 37. 栈水位监控
+- 方法：使用 uxTaskGetStackHighWaterMark(NULL) 定期检查任务栈余量，防止溢出。
+
+### 38. HardFault 分析
+- 步骤：在 HardFault_Handler 设断点，查看 CFSR、HFSR、BFAR 寄存器，结合栈回溯找到出错指令。
+
+## 十、架构与设计原则总结
+
+- 资源提前分配：关键句柄（StreamBuffer、Queue）在 main() 调度前创建。
+- 中断安全：ISR 中仅使用 FromISR API，快速操作，复杂逻辑交由任务。
+- 分层解耦：应用层、系统服务层、驱动层明确界限，通信统一走事件总线或专用接口。
+- 模块自注册：统一在 module_registry.c 中集中管理，避免分散的 Init 调用。
+- 配置集中：pinout.h 和 app_config.h 管理所有硬件映射和软件参数。
+- 防御性编程：互斥锁超时、数组越界检查、CRC 校验，保证系统稳健。

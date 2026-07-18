@@ -3,7 +3,7 @@
 <title>Static Call Graph - [BOOT\BOOT.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image BOOT\BOOT.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060750: Last Updated: Mon Jul 13 00:44:05 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 5060750: Last Updated: Sun Jul 19 02:03:36 2026
 <BR><P>
 <H3>Maximum Stack Usage =       1176 bytes + Unknown(Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
@@ -720,6 +720,7 @@ Global Symbols
 
 <P><STRONG><a name="[c6]"></a>HAL_NVIC_DisableIRQ</STRONG> (Thumb, 34 bytes, Stack size 0 bytes, stm32f4xx_hal_cortex.o(i.HAL_NVIC_DisableIRQ))
 <BR><BR>[Called By]<UL><LI><a href="#[ba]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_UART_MspDeInit
+<LI><a href="#[cd]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;JumpToApp
 </UL>
 
 <P><STRONG><a name="[c9]"></a>HAL_NVIC_EnableIRQ</STRONG> (Thumb, 26 bytes, Stack size 0 bytes, stm32f4xx_hal_cortex.o(i.HAL_NVIC_EnableIRQ))
@@ -901,9 +902,9 @@ Global Symbols
 <P><STRONG><a name="[ba]"></a>HAL_UART_MspDeInit</STRONG> (Thumb, 82 bytes, Stack size 8 bytes, usart.o(i.HAL_UART_MspDeInit))
 <BR><BR>[Stack]<UL><LI>Max Depth = 44<LI>Call Chain = HAL_UART_MspDeInit &rArr; HAL_GPIO_DeInit
 </UL>
-<BR>[Calls]<UL><LI><a href="#[c6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_NVIC_DisableIRQ
-<LI><a href="#[c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_DeInit
+<BR>[Calls]<UL><LI><a href="#[c5]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_GPIO_DeInit
 <LI><a href="#[99]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_DMA_DeInit
+<LI><a href="#[c6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_NVIC_DisableIRQ
 </UL>
 <BR>[Called By]<UL><LI><a href="#[b9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_UART_DeInit
 </UL>
@@ -2051,11 +2052,12 @@ Local Symbols
 <BR>[Called By]<UL><LI><a href="#[5b]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
 </UL>
 
-<P><STRONG><a name="[cd]"></a>JumpToApp</STRONG> (Thumb, 126 bytes, Stack size 16 bytes, main.o(i.JumpToApp))
+<P><STRONG><a name="[cd]"></a>JumpToApp</STRONG> (Thumb, 178 bytes, Stack size 16 bytes, main.o(i.JumpToApp))
 <BR><BR>[Stack]<UL><LI>Max Depth = 68<LI>Call Chain = JumpToApp &rArr; HAL_UART_DeInit &rArr; HAL_UART_MspDeInit &rArr; HAL_GPIO_DeInit
 </UL>
 <BR>[Calls]<UL><LI><a href="#[b9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_UART_DeInit
 <LI><a href="#[b6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_UART_Abort
+<LI><a href="#[c6]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_NVIC_DisableIRQ
 <LI><a href="#[86]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;__2printf
 </UL>
 <BR>[Called By]<UL><LI><a href="#[5b]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main

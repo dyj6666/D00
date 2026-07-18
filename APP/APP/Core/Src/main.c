@@ -111,7 +111,7 @@ int main(void)
   MX_USART2_UART_Init();
   MX_RTC_Init();
   MX_IWDG_Init();
-  MX_USART3_UART_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   EventBus_Init();    // 必须在调度器启动前初始化事件总线
 
@@ -136,7 +136,7 @@ int main(void)
   while (1)
   {
     // IWDG->KR = 0xAAAA;
-    // HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
+
     // printf("APP heartbeat\r\n");
 
     // /* 检查升级请求标志（无阻塞，无轮询延时） */

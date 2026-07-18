@@ -267,6 +267,18 @@ static void JumpToApp(uint32_t addr) {
     /* 2. 强制复位 USART2 外设内核 (确保寄存器回到复位值) */
     __HAL_RCC_USART2_FORCE_RESET();
     __HAL_RCC_USART2_RELEASE_RESET();
+
+
+  /* 跳转到 APP 前，复位所有用过的外设 */
+
+    
+
+    HAL_UART_DeInit(&huart1);
+    __HAL_RCC_USART1_FORCE_RESET();
+    __HAL_RCC_USART1_RELEASE_RESET();
+    HAL_NVIC_DisableIRQ(USART1_IRQn);
+    __HAL_RCC_DMA2_FORCE_RESET();
+    __HAL_RCC_DMA2_RELEASE_RESET();
     
     /* 喂狗 */
     IWDG->KR = 0xAAAA;

@@ -30,15 +30,13 @@
 
 #define WDOG_FEED_PERIOD_MS     1000   // 喂狗周期，需小于 IWDG 超时的一半
 
-/* 上位机通信 */
-#define HOSTLINK_RX_DMA_BUF_SIZE    1024
-#define HOSTLINK_TX_DMA_BUF_SIZE    512
-#define HOSTLINK_MAX_VARS           64      /* 最大注册变量数 */
-#define HOSTLINK_MAX_SUBSCRIBE      32      /* 最大订阅变量数 */
-#define HOSTLINK_SAMPLE_PERIOD_MS   10      /* 默认采集周期 10ms */
-
-#define HOSTLINK_TX_STREAM_SIZE      2048   // 发送流缓冲区
-#define HOSTLINK_TX_DMA_CHUNK         128
-#define HOSTLINK_CRC_POLY             0x8005 // CRC-16/MODBUS 多项式
+/* ------------------ 上位机通信 (DataLink) ------------------ */
+#define HOSTLINK_RX_DMA_BUF_SIZE    256     // DMA 接收缓冲
+#define HOSTLINK_TX_STREAM_SIZE     512     // 发送流缓冲
+#define HOSTLINK_TX_DMA_CHUNK       128     // 每次 DMA 发送块大小
+#define HOSTLINK_MAX_VARS           64      // 最大注册变量数
+#define HOSTLINK_MAX_SUBSCRIBE      16      // 最大订阅变量数
+#define HOSTLINK_SAMPLE_PERIOD_MS   10      // 默认采集周期
+#define HOSTLINK_CRC_POLY           0xA001  // CRC-16/MODBUS 多项式
 
 #endif

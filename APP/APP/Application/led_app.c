@@ -4,6 +4,14 @@
 #include "logger.h"
 #include "module.h"
 #include <string.h>
+#include "var_manager.h"
+
+static uint8_t led_state_value = 0;
+static int32_t test_counter = 0;
+static float test_temp = 25.5f;
+static int32_t writable_var = 0;
+
+
 
 typedef enum {
     LED_STATE_OFF,
@@ -132,6 +140,12 @@ void LedApp_Init(void) {
     EventBus_Subscribe(EVENT_KEY_LONG, led_event_handler);
     EventBus_Subscribe(EVENT_CMD_LED, led_cmd_handler);
     led_switch_state(LED_STATE_OFF);
+
+
+    VAR_Register(0x1001, "led_state", VAR_TYPE_UINT8, 0, &led_state_value);
+    VAR_Register(0x1002, "counter", VAR_TYPE_INT32, 0, &test_counter);
+    VAR_Register(0x1003, "temperature", VAR_TYPE_FLOAT, 0, &test_temp);
+    VAR_Register(0x2001, "writable", VAR_TYPE_INT32, 1, &writable_var);
 }
 
 // MODULE_REGISTER(LedApp_Init);
