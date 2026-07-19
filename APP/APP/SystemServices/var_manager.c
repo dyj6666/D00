@@ -196,7 +196,7 @@ void VAR_SendList(void)
         buf[5] = (uint8_t)total;
         buf[6] = packet_index++;
 
-        uint16_t payload_len = idx - 7;
+        uint16_t payload_len = (idx - 7) + 2;   // 加上分片头 2 字节
         buf[3] = payload_len & 0xFF;
         buf[4] = (payload_len >> 8) & 0xFF;
 

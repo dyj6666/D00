@@ -1,0 +1,5 @@
+PyQt5==5.15.9
+pyqtgraph==0.13.3
+pyserial==3.5
+crcmod==1.7
+numpy>=1.26.0
