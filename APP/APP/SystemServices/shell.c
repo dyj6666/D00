@@ -140,8 +140,7 @@ static void cmd_led(const char *args) {
         LOG_Printf("Usage: led on/off/toggle\r\n");
         return;
     }
-    EventBus_Publish(EVENT_CMD_LED, args, strlen(args) + 1); // 包含'\0'
-
+    MSG_SEND_DATA(MODULE_SHELL, MSG_CMD_LED, args, strlen(args) + 1);
 }
 
 static void cmd_taskstats(const char *args) {
@@ -156,11 +155,11 @@ static void cmd_taskstats(const char *args) {
 static void cmd_ota(const char *args) {
     (void)args;
     LOG_Printf("OTA command received, publishing event...\r\n");
-    EventBus_Publish(EVENT_CMD_OTA_START, NULL, 0);
+    MSG_SEND_SIMPLE(MODULE_SHELL, MSG_CMD_OTA_START);
 }
 
 static void cmd_sysmon(const char *args)
 {
     (void)args;
-    EventBus_Publish(EVENT_CMD_SYSMON, NULL, 0);
+    MSG_SEND_SIMPLE(MODULE_SHELL, MSG_CMD_SYSMON);
 }

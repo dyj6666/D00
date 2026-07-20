@@ -2,15 +2,15 @@
 #include "event_bus.h"
 #include "logger.h"
 #include "pinout.h"
-#include "main.h"        // 提供 HAL 句柄，如 hrtc
-#include "app_config.h"  // 可能需要 BOOT_FLAG_UPGRADE 等宏
+#include "main.h"
+#include "app_config.h"
 
 extern RTC_HandleTypeDef hrtc;
-static void handle_ota_cmd(event_id_t evt, const void *payload, uint32_t len)
+
+static void handle_ota_msg(const message_t *msg)
 {
-    (void)payload;
-    (void)len;
-    if (evt != EVENT_CMD_OTA_START) return;
+    if (msg == NULL) return;
+    if (msg->hdr.type != MSG_CMD_OTA_START) return;
 
     LOG_Printf("APP: Received upgrade command. Entering BOOT...\r\n");
 
@@ -26,6 +26,6 @@ static void handle_ota_cmd(event_id_t evt, const void *payload, uint32_t len)
 
 void OtaAgent_Init(void)
 {
-    EventBus_Subscribe(EVENT_CMD_OTA_START, handle_ota_cmd);
+    EventBus_Subscribe(MSG_CMD_OTA_START, handle_ota_msg);
     LOG_Printf("OTA Agent initialized.\r\n");
 }

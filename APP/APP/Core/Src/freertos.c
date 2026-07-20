@@ -87,10 +87,10 @@ const osThreadAttr_t eventBusTask_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 static void tmr_1s_callback(TimerHandle_t xTimer) {
-    EventBus_Publish(EVENT_TICK_1S, NULL, 0);
+    MSG_SEND_SIMPLE(MODULE_TIMER, MSG_TICK_1S);
 }
 static void tmr_200ms_callback(TimerHandle_t xTimer) {
-    EventBus_Publish(EVENT_TICK_200MS, NULL, 0);
+    MSG_SEND_SIMPLE(MODULE_TIMER, MSG_TICK_200MS);
 }
 /* USER CODE END FunctionPrototypes */
 

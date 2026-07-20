@@ -1,36 +1,55 @@
 #ifndef EVENT_BUS_H
 #define EVENT_BUS_H
 #include <stdint.h>
+#include <string.h>
 #include "FreeRTOS.h"
 #include "queue.h"
-#include "app_config.h"
+#include "msg_types.h"
 
-typedef enum {
-    EVENT_NONE = 0,
-    EVENT_TICK_1S,
-    EVENT_TICK_200MS,
-    EVENT_KEY_SHORT,
-    EVENT_KEY_LONG,
-    EVENT_CMD_LED,          // Shell 命令映射事件
-    EVENT_CMD_OTA_START,
-    EVENT_CMD_SYSMON,       // Shell 请求系统监控报告
-    EVENT_COUNT
-} event_id_t;
-
-typedef void (*event_handler_t)(event_id_t evt, const void *payload, uint32_t len);
+/*---------------- 强类型消息体 -----------------*/
+typedef struct {
+    uint16_t src;      // 发送者模块ID
+    uint16_t type;     // 消息类型
+} msg_hdr_t;
 
 typedef struct {
-    event_id_t  id;
-    void       *payload;
-    uint32_t    len;
-} event_packet_t;
+    msg_hdr_t hdr;
+    uint16_t len;           // payload 长度
+    uint8_t  payload[];     // 柔性数组
+} message_t;
 
+/*---------------- 回调签名 -----------------*/
+typedef void (*msg_handler_t)(const message_t *msg);
+
+/*---------------- 总线接口 -----------------*/
 void EventBus_Init(void);
-void EventBus_Publish(event_id_t evt, const void *payload, uint32_t len);
-void EventBus_PublishFromISR(event_id_t evt, const void *payload, uint32_t len);
-int  EventBus_Subscribe(event_id_t evt, event_handler_t handler);
-
+void EventBus_Publish(message_t *msg);       // 任务上下文
+void EventBus_PublishFromISR(message_t *msg);// 中断上下文
+int  EventBus_Subscribe(uint16_t type, msg_handler_t handler);
 void EventBusTaskFunction(void);
 
-#endif
+/*---------------- 便捷发布宏 -----------------*/
+// 发布无 payload 消息
+#define MSG_SEND_SIMPLE(src_id, msg_type) do { \
+    message_t *msg = pvPortMalloc(sizeof(message_t)); \
+    if (msg) { \
+        msg->hdr.src = (src_id); \
+        msg->hdr.type = (msg_type); \
+        msg->len = 0; \
+        EventBus_Publish(msg); \
+    } \
+} while(0)
 
+// 发布带 payload 消息
+#define MSG_SEND_DATA(src_id, msg_type, pdata, dlen) do { \
+    message_t *msg = pvPortMalloc(sizeof(message_t) + (dlen)); \
+    if (msg) { \
+        msg->hdr.src = (src_id); \
+        msg->hdr.type = (msg_type); \
+        msg->len = (dlen); \
+        memcpy(msg->payload, (pdata), (dlen)); \
+        EventBus_Publish(msg); \
+    } \
+} while(0)
+
+#endif

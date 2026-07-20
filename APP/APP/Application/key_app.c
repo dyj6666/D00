@@ -17,14 +17,14 @@ static void key_scan_timer_cb(TimerHandle_t xTimer) {
             debounce = 5;
             press_ms += KEY_SCAN_PERIOD_MS;
             if (press_ms >= 1000) {
-                EventBus_Publish(EVENT_KEY_LONG, NULL, 0);
+                MSG_SEND_SIMPLE(MODULE_KEY, MSG_KEY_LONG);
                 press_ms = 0;
             }
         }
     } else {
         if (debounce >= 5) {
             if (press_ms >= 10 && press_ms < 1000) {
-                EventBus_Publish(EVENT_KEY_SHORT, NULL, 0);
+                MSG_SEND_SIMPLE(MODULE_KEY, MSG_KEY_SHORT);
             }
         }
         debounce = 0;
@@ -39,5 +39,3 @@ void KeyApp_Init(void) {
         xTimerStart(tmr, 0);
     }
 }
-
-// MODULE_REGISTER(KeyApp_Init);

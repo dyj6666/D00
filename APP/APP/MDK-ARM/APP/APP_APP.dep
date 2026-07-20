@@ -58,8 +58,9 @@ I (../Config/pinout.h)(0x6A5B89AC)
 I (../Config/app_config.h)(0x6A5BD4A4)
 I (../SystemServices/logger.h)(0x6A53219B)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h)(0x6904C9A2)
-I (../SystemServices/event_bus.h)(0x6A550719)
+I (../SystemServices/event_bus.h)(0x6A5E2CF2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h)(0x6904C9A2)
+I (../SystemServices/msg_types.h)(0x6A5E2CBC)
 I (../SystemServices/data_link.h)(0x6A5667F0)
 F (../Core/Src/gpio.c)(0x6A5791B2)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\gpio.o --omf_browse app\gpio.crf --depend app\gpio.d)
 I (../Core/Inc/gpio.h)(0x6A4D1CEA)
@@ -97,7 +98,7 @@ I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_rtc_ex.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h)(0x6904CA2B)
-F (../Core/Src/freertos.c)(0x6A5BCE95)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\freertos.o --omf_browse app\freertos.crf --depend app\freertos.d)
+F (../Core/Src/freertos.c)(0x6A5E3084)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\freertos.o --omf_browse app\freertos.crf --depend app\freertos.d)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h)(0x6904C9A2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stddef.h)(0x5D9B3487)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdint.h)(0x6932EBBF)
@@ -147,8 +148,10 @@ I (../SystemServices/logger.h)(0x6A53219B)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h)(0x6904C9A2)
 I (../SystemServices/shell.h)(0x6A53223C)
 I (../Config/app_config.h)(0x6A5BD4A4)
-I (../SystemServices/event_bus.h)(0x6A550719)
+I (../SystemServices/event_bus.h)(0x6A5E2CF2)
+I (D:\MDK\CORE\ARM\ARMCC\include\string.h)(0x5D9B3487)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h)(0x6904C9A2)
+I (../SystemServices/msg_types.h)(0x6A5E2CBC)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/timers.h)(0x6904C9A2)
 I (../SystemServices/module.h)(0x6A5519C6)
 I (../Application/data_agent.h)(0x6A56611F)
@@ -1326,7 +1329,7 @@ I (../Middlewares/Third_Party/FreeRTOS/Source/include/list.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h)(0x6904C9A2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdarg.h)(0x5D9B3488)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdio.h)(0x5D9B3488)
-F (..\SystemServices\shell.c)(0x6A5BC41D)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\shell.o --omf_browse app\shell.crf --depend app\shell.d)
+F (..\SystemServices\shell.c)(0x6A5E2FF7)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\shell.o --omf_browse app\shell.crf --depend app\shell.d)
 I (..\SystemServices\shell.h)(0x6A53223C)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdint.h)(0x6932EBBF)
 I (..\SystemServices\logger.h)(0x6A53219B)
@@ -1380,11 +1383,13 @@ I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_rtc_ex.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h)(0x6904CA2B)
-I (..\SystemServices\event_bus.h)(0x6A550719)
+I (..\SystemServices\event_bus.h)(0x6A5E2CF2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h)(0x6904C9A2)
-F (..\SystemServices\event_bus.c)(0x6A5374B6)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\event_bus.o --omf_browse app\event_bus.crf --depend app\event_bus.d)
-I (..\SystemServices\event_bus.h)(0x6A550719)
+I (..\SystemServices\msg_types.h)(0x6A5E2CBC)
+F (..\SystemServices\event_bus.c)(0x6A5E35CA)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\event_bus.o --omf_browse app\event_bus.crf --depend app\event_bus.d)
+I (..\SystemServices\event_bus.h)(0x6A5E2CF2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdint.h)(0x6932EBBF)
+I (D:\MDK\CORE\ARM\ARMCC\include\string.h)(0x5D9B3487)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h)(0x6904C9A2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stddef.h)(0x5D9B3487)
 I (../Core/Inc/FreeRTOSConfig.h)(0x6A537092)
@@ -1396,8 +1401,8 @@ I (../Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h)(0x6904C9A2
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/task.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/list.h)(0x6904C9A2)
+I (..\SystemServices\msg_types.h)(0x6A5E2CBC)
 I (../Config/app_config.h)(0x6A5BD4A4)
-I (D:\MDK\CORE\ARM\ARMCC\include\string.h)(0x5D9B3487)
 I (..\SystemServices\logger.h)(0x6A53219B)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h)(0x6904C9A2)
 F (..\SystemServices\module.c)(0x6A5BBF97)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\module.o --omf_browse app\module.crf --depend app\module.d)
@@ -1420,7 +1425,7 @@ I (..\SystemServices\sysmon.h)(0x6A550736)
 I (..\SystemServices\var_manager.h)(0x6A565EFE)
 I (..\SystemServices\data_link.h)(0x6A5667F0)
 I (../Application/data_agent.h)(0x6A56611F)
-F (..\SystemServices\sysmon.c)(0x6A563458)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\sysmon.o --omf_browse app\sysmon.crf --depend app\sysmon.d)
+F (..\SystemServices\sysmon.c)(0x6A5E31AB)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\sysmon.o --omf_browse app\sysmon.crf --depend app\sysmon.d)
 I (..\SystemServices\sysmon.h)(0x6A550736)
 I (../Config/app_config.h)(0x6A5BD4A4)
 I (../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os.h)(0x6904C9A2)
@@ -1471,10 +1476,11 @@ I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_rtc_ex.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h)(0x6904CA2B)
-I (..\SystemServices\event_bus.h)(0x6A550719)
-I (../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h)(0x6904C9A2)
-I (D:\MDK\CORE\ARM\ARMCC\include\stdio.h)(0x5D9B3488)
+I (..\SystemServices\event_bus.h)(0x6A5E2CF2)
 I (D:\MDK\CORE\ARM\ARMCC\include\string.h)(0x5D9B3487)
+I (../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h)(0x6904C9A2)
+I (..\SystemServices\msg_types.h)(0x6A5E2CBC)
+I (D:\MDK\CORE\ARM\ARMCC\include\stdio.h)(0x5D9B3488)
 F (..\SystemServices\var_manager.c)(0x6A5C4561)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\var_manager.o --omf_browse app\var_manager.crf --depend app\var_manager.d)
 I (..\SystemServices\var_manager.h)(0x6A565EFE)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdint.h)(0x6932EBBF)
@@ -1556,10 +1562,11 @@ F (..\SystemServices\crc16.c)(0x6A5BBD85)(--c99 -c --cpu Cortex-M4.fp.sp -D__MIC
 I (..\SystemServices\crc16.h)(0x6A5664B3)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdint.h)(0x6932EBBF)
 I (../Config/app_config.h)(0x6A5BD4A4)
-F (..\Application\key_app.c)(0x6A537B85)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\key_app.o --omf_browse app\key_app.crf --depend app\key_app.d)
+F (..\Application\key_app.c)(0x6A5E3162)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\key_app.o --omf_browse app\key_app.crf --depend app\key_app.d)
 I (..\Application\key_app.h)(0x6A536F2F)
-I (../SystemServices/event_bus.h)(0x6A550719)
+I (../SystemServices/event_bus.h)(0x6A5E2CF2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdint.h)(0x6932EBBF)
+I (D:\MDK\CORE\ARM\ARMCC\include\string.h)(0x5D9B3487)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h)(0x6904C9A2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stddef.h)(0x5D9B3487)
 I (../Core/Inc/FreeRTOSConfig.h)(0x6A537092)
@@ -1571,7 +1578,7 @@ I (../Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h)(0x6904C9A2
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/task.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/list.h)(0x6904C9A2)
-I (../Config/app_config.h)(0x6A5BD4A4)
+I (../SystemServices/msg_types.h)(0x6A5E2CBC)
 I (../Config/pinout.h)(0x6A5B89AC)
 I (../Core/Inc/main.h)(0x6A524EAC)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h)(0x6904CA2B)
@@ -1606,13 +1613,15 @@ I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h)(0x6904CA2B)
 I (../Core/Inc/usart.h)(0x6A5791B7)
+I (../Config/app_config.h)(0x6A5BD4A4)
 I (../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/timers.h)(0x6904C9A2)
 I (../SystemServices/module.h)(0x6A5519C6)
-F (..\Application\led_app.c)(0x6A5BC52A)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\led_app.o --omf_browse app\led_app.crf --depend app\led_app.d)
+F (..\Application\led_app.c)(0x6A5E2F31)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\led_app.o --omf_browse app\led_app.crf --depend app\led_app.d)
 I (..\Application\led_app.h)(0x6A536F4A)
-I (../SystemServices/event_bus.h)(0x6A550719)
+I (../SystemServices/event_bus.h)(0x6A5E2CF2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdint.h)(0x6932EBBF)
+I (D:\MDK\CORE\ARM\ARMCC\include\string.h)(0x5D9B3487)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h)(0x6904C9A2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stddef.h)(0x5D9B3487)
 I (../Core/Inc/FreeRTOSConfig.h)(0x6A537092)
@@ -1624,7 +1633,7 @@ I (../Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h)(0x6904C9A2
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/task.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/list.h)(0x6904C9A2)
-I (../Config/app_config.h)(0x6A5BD4A4)
+I (../SystemServices/msg_types.h)(0x6A5E2CBC)
 I (../Config/pinout.h)(0x6A5B89AC)
 I (../Core/Inc/main.h)(0x6A524EAC)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal.h)(0x6904CA2B)
@@ -1662,12 +1671,12 @@ I (../Core/Inc/usart.h)(0x6A5791B7)
 I (../SystemServices/logger.h)(0x6A53219B)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h)(0x6904C9A2)
 I (../SystemServices/module.h)(0x6A5519C6)
-I (D:\MDK\CORE\ARM\ARMCC\include\string.h)(0x5D9B3487)
 I (../SystemServices/var_manager.h)(0x6A565EFE)
-F (..\Application\ota_agent.c)(0x6A5388CD)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\ota_agent.o --omf_browse app\ota_agent.crf --depend app\ota_agent.d)
+F (..\Application\ota_agent.c)(0x6A5E3138)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\ota_agent.o --omf_browse app\ota_agent.crf --depend app\ota_agent.d)
 I (..\Application\ota_agent.h)(0x6A53886E)
-I (../SystemServices/event_bus.h)(0x6A550719)
+I (../SystemServices/event_bus.h)(0x6A5E2CF2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdint.h)(0x6932EBBF)
+I (D:\MDK\CORE\ARM\ARMCC\include\string.h)(0x5D9B3487)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h)(0x6904C9A2)
 I (D:\MDK\CORE\ARM\ARMCC\include\stddef.h)(0x5D9B3487)
 I (../Core/Inc/FreeRTOSConfig.h)(0x6A537092)
@@ -1679,7 +1688,7 @@ I (../Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h)(0x6904C9A2
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/queue.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/task.h)(0x6904C9A2)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/list.h)(0x6904C9A2)
-I (../Config/app_config.h)(0x6A5BD4A4)
+I (../SystemServices/msg_types.h)(0x6A5E2CBC)
 I (../SystemServices/logger.h)(0x6A53219B)
 I (../Middlewares/Third_Party/FreeRTOS/Source/include/stream_buffer.h)(0x6904C9A2)
 I (../Config/pinout.h)(0x6A5B89AC)
@@ -1716,7 +1725,8 @@ I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_tim_ex.h)(0x6904CA2B)
 I (../Drivers/STM32F4xx_HAL_Driver/Inc/stm32f4xx_hal_uart.h)(0x6904CA2B)
 I (../Core/Inc/usart.h)(0x6A5791B7)
-F (..\Application\data_agent.c)(0x6A5BD4BC)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\data_agent.o --omf_browse app\data_agent.crf --depend app\data_agent.d)
+I (../Config/app_config.h)(0x6A5BD4A4)
+F (..\Application\data_agent.c)(0x6A5CF90D)(--c99 -c --cpu Cortex-M4.fp.sp -D__MICROLIB -g -O0 --apcs=interwork --split_sections -I ../Core/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc -I ../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I ../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I ../Drivers/CMSIS/Include -I ../Middlewares/Third_Party/FreeRTOS/Source/include -I ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 -I ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F -I ../Config -I ../SystemServices -I ../Application --diag_suppress=1-I.\RTE\_APP-ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include-ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include-D__UVISION_VERSION="538" -D_RTE_ -DSTM32F407xx -D_RTE_ -DUSE_HAL_DRIVER -DSTM32F407xx-o app\data_agent.o --omf_browse app\data_agent.crf --depend app\data_agent.d)
 I (..\Application\data_agent.h)(0x6A56611F)
 I (../SystemServices/data_link.h)(0x6A5667F0)
 I (D:\MDK\CORE\ARM\ARMCC\include\stdint.h)(0x6932EBBF)

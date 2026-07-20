@@ -8,11 +8,13 @@
 #include <string.h>
 #include "logger.h"
 
+
+volatile int32_t g_system_tick = 0;//测试用
 static void DataAgentTaskFunc(void *arg)
 {
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(HOSTLINK_SAMPLE_PERIOD_MS));
-
+        g_system_tick = xTaskGetTickCount();
         uint16_t ids[HOSTLINK_MAX_SUBSCRIBE];
         uint8_t count;
         VAR_GetSubscribedList(ids, &count);
@@ -57,4 +59,6 @@ void DataAgent_Init(void)
         .priority = osPriorityNormal
     };
     osThreadNew(DataAgentTaskFunc, NULL, &attr);
+
+    VAR_Register(0x3001, "sys_tick", VAR_TYPE_INT32, 0, (void*)&g_system_tick);
 }

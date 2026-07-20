@@ -93,10 +93,10 @@ static const monitor_item_t monitor_items[] = {
 #define MONITOR_ITEM_COUNT (sizeof(monitor_items) / sizeof(monitor_items[0]))
 
 /* ================== 事件处理：收到 sysmon 请求时打印所有监控项 ================== */
-static void handle_sysmon_request(event_id_t evt, const void *payload, uint32_t len)
+static void handle_sysmon_msg(const message_t *msg)
 {
-    (void)payload; (void)len;
-    if (evt != EVENT_CMD_SYSMON) return;
+    if (msg == NULL) return;
+    if (msg->hdr.type != MSG_CMD_SYSMON) return;
 
     LOG_Printf("\r\n===== SYSTEM MONITOR =====\r\n");
     for (size_t i = 0; i < MONITOR_ITEM_COUNT; i++) {
@@ -119,8 +119,8 @@ void SysMon_Init(void)
         LOG_Printf("SysMon: IWDG feeding started.\r\n");
     }
 
-    // 2. 订阅 sysmon 命令事件
-    EventBus_Subscribe(EVENT_CMD_SYSMON, handle_sysmon_request);
+    // 2. 订阅 sysmon 命令事件（使用新消息类型）
+    EventBus_Subscribe(MSG_CMD_SYSMON, handle_sysmon_msg);
 
     LOG_Printf("SysMon: Online.\r\n");
 }
