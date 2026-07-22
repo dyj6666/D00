@@ -23,24 +23,25 @@ typedef void (*msg_handler_t)(const message_t *msg);
 
 /*---------------- 总线接口 -----------------*/
 void EventBus_Init(void);
-void EventBus_Publish(message_t *msg);       // 任务上下文
-void EventBus_PublishFromISR(message_t *msg);// 中断上下文
+int  EventBus_Publish(message_t *msg);       // 任务上下文，返回0成功
+int  EventBus_PublishFromISR(message_t *msg);// 中断上下文，返回0成功
 int  EventBus_Subscribe(uint16_t type, msg_handler_t handler);
 void EventBusTaskFunction(void);
+uint32_t EventBus_GetLostCount(void);
 
 /*---------------- 便捷发布宏 -----------------*/
-// 发布无 payload 消息
 #define MSG_SEND_SIMPLE(src_id, msg_type) do { \
     message_t *msg = pvPortMalloc(sizeof(message_t)); \
     if (msg) { \
         msg->hdr.src = (src_id); \
         msg->hdr.type = (msg_type); \
         msg->len = 0; \
-        EventBus_Publish(msg); \
+        if (EventBus_Publish(msg) != 0) { \
+            /* 发布失败，内存已由Publish内部释放 */ \
+        } \
     } \
 } while(0)
 
-// 发布带 payload 消息
 #define MSG_SEND_DATA(src_id, msg_type, pdata, dlen) do { \
     message_t *msg = pvPortMalloc(sizeof(message_t) + (dlen)); \
     if (msg) { \
@@ -48,7 +49,9 @@ void EventBusTaskFunction(void);
         msg->hdr.type = (msg_type); \
         msg->len = (dlen); \
         memcpy(msg->payload, (pdata), (dlen)); \
-        EventBus_Publish(msg); \
+        if (EventBus_Publish(msg) != 0) { \
+            /* 发布失败，内存已由Publish内部释放 */ \
+        } \
     } \
 } while(0)
 

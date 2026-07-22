@@ -29,6 +29,10 @@ typedef struct {
 } monitor_item_t;
 
 /* ---- 各监控项的采集打印函数 ---- */
+static void print_event_bus_stats(void) {
+    LOG_Printf("=== EVENT BUS ===\r\n");
+    LOG_Printf("  Lost messages: %lu\r\n", EventBus_GetLostCount());
+}
 static void print_task_list(void)
 {
     char buf[512];
@@ -87,6 +91,7 @@ static const monitor_item_t monitor_items[] = {
     {"Heap",        print_heap_info},
     {"Watchdog",    print_watchdog_status},
     {"Reset Reason",print_reset_reason},
+    {"Event Bus",   print_event_bus_stats},
     // 示例：未来添加监控变量
     // {"Custom Sensor", print_custom_sensor},
 };

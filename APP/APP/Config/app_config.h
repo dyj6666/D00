@@ -17,9 +17,9 @@
 #define SHELL_CMD_MAX           20
 
 /*--------------------------- 事件总线 --------------------------------------*/
-#define EVENT_BUS_MAX_EVENTS    64
-#define EVENT_BUS_SUBS_MAX      4
-#define EVENT_BUS_QUEUE_LENGTH  32      // 新增：事件队列深度
+#define EVENT_BUS_SUBS_MAX      8     // 每个消息类型最大订阅者数
+#define EVENT_BUS_QUEUE_LENGTH  64    // 主事件队列深度
+#define EVENT_BUS_DEAD_LETTER_LEN 16  // 释放队列深度
 
 /*--------------------------- 系统定时器 ------------------------------------*/
 #define SYS_TICK_1S_PERIOD_MS   1000
@@ -38,5 +38,7 @@
 #define HOSTLINK_MAX_SUBSCRIBE      16      // 最大订阅变量数
 #define HOSTLINK_SAMPLE_PERIOD_MS   10      // 默认采集周期
 #define HOSTLINK_CRC_POLY           0xA001  // CRC-16/MODBUS 多项式
+
+
 
 #endif

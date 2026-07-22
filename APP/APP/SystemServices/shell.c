@@ -23,6 +23,11 @@ static void cmd_led(const char *args);
 static void cmd_taskstats(const char *args);
 static void cmd_ota(const char *args);
 static void cmd_sysmon(const char *args);
+static void cmd_la_sram_speed(const char *args);
+static void cmd_la_sram_full(const char *args);
+static void cmd_la_sram_align(const char *args);
+static void cmd_la_sram_rand(const char *args);
+
 
 static const cmd_entry_t cmd_table[] = {
     {"help",  cmd_help},
@@ -32,6 +37,10 @@ static const cmd_entry_t cmd_table[] = {
     {"taskstats", cmd_taskstats},
     {"ota", cmd_ota},
     {"sysmon", cmd_sysmon},
+    {"la_sram_full",  cmd_la_sram_full},
+    {"la_sram_rand",  cmd_la_sram_rand},
+    {"la_sram_align", cmd_la_sram_align},
+    {"la_sram_speed", cmd_la_sram_speed},
 };
 #define CMD_COUNT (sizeof(cmd_table)/sizeof(cmd_table[0]))
 
@@ -162,4 +171,102 @@ static void cmd_sysmon(const char *args)
 {
     (void)args;
     MSG_SEND_SIMPLE(MODULE_SHELL, MSG_CMD_SYSMON);
+}
+
+static void cmd_la_sram_full(const char *args)
+{
+    uint16_t *sram = (uint16_t *)0x68000000;
+    uint32_t total = 512 * 1024;   // 1MB / 2 = 512K 个 16 位单元
+    uint32_t errors = 0;
+    uint32_t start = HAL_GetTick();
+    
+    LOG_Printf("Full SRAM test started...\r\n");
+    
+    for (uint32_t i = 0; i < total; i += 1024) {  // 每 1024 个单元采样测试，加速
+        sram[i] = (uint16_t)(i & 0xFFFF);
+    }
+    
+    for (uint32_t i = 0; i < total; i += 1024) {
+        uint16_t val = sram[i];
+        uint16_t expected = (uint16_t)(i & 0xFFFF);
+        if (val != expected) {
+            errors++;
+            if (errors <= 5) {
+                LOG_Printf("FAIL at 0x%08X: wrote 0x%04X, read 0x%04X\r\n",
+                           (uint32_t)(0x68000000 + i * 2), expected, val);
+            }
+        }
+    }
+    
+    uint32_t elapsed = HAL_GetTick() - start;
+    LOG_Printf("Full SRAM test done: %lu errors in %lums\r\n", errors, elapsed);
+}
+
+#include <stdlib.h>
+
+static void cmd_la_sram_rand(const char *args)
+{
+    uint16_t *sram = (uint16_t *)0x68000000;
+    uint32_t iterations = 10000;
+    uint32_t errors = 0;
+    
+    srand(HAL_GetTick());
+    
+    for (uint32_t i = 0; i < iterations; i++) {
+        uint32_t addr = rand() % (512 * 1024);  // 随机 16 位单元索引
+        uint16_t val = (uint16_t)(rand() & 0xFFFF);
+        sram[addr] = val;
+        if (sram[addr] != val) {
+            errors++;
+        }
+    }
+    
+    LOG_Printf("Random SRAM test: %lu errors in %lu iterations\r\n", errors, iterations);
+}
+
+static void cmd_la_sram_align(const char *args)
+{
+    uint8_t *sram = (uint8_t *)0x68000000;
+    uint32_t errors = 0;
+    
+    // 测试奇数地址写入
+    sram[0x0001] = 0xA5;
+    sram[0x0003] = 0x5A;
+    if (sram[0x0001] != 0xA5 || sram[0x0003] != 0x5A) errors++;
+    
+    // 测试偶数地址写入
+    sram[0x0000] = 0x12;
+    sram[0x0002] = 0x34;
+    if (sram[0x0000] != 0x12 || sram[0x0002] != 0x34) errors++;
+    
+    // 测试相邻地址互不干扰
+    sram[0x1000] = 0xAA;
+    sram[0x1001] = 0xBB;
+    sram[0x1002] = 0xCC;
+    if (sram[0x1000] != 0xAA || sram[0x1001] != 0xBB || sram[0x1002] != 0xCC) errors++;
+    
+    LOG_Printf("Alignment SRAM test: %lu errors\r\n", errors);
+}
+
+static void cmd_la_sram_speed(const char *args)
+{
+    uint16_t *sram = (uint16_t *)0x68000000;
+    uint32_t count = 50000;
+    uint32_t start = HAL_GetTick();
+    
+    for (uint32_t i = 0; i < count; i++) {
+        sram[i] = (uint16_t)(i & 0xFFFF);
+    }
+    
+    uint32_t elapsed = HAL_GetTick() - start;
+    uint32_t speed = (count * 2) / elapsed;  // 字节/毫秒 = KB/s
+    
+    // 验证写入正确性
+    uint32_t errors = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        if (sram[i] != (uint16_t)(i & 0xFFFF)) errors++;
+    }
+    
+    LOG_Printf("Speed test: %lu writes in %lums (%lu KB/s), %lu errors\r\n",
+               count, elapsed, speed, errors);
 }
