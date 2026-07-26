@@ -7,6 +7,7 @@
 #include "var_manager.h"
 #include "data_link.h"
 #include "data_agent.h"
+#include "lcd.h"
 // 去掉 section 属性，改回普通定义
 const module_desc_t module_table[] = {
     REGISTER_MODULE(VAR_Init),
@@ -16,6 +17,7 @@ const module_desc_t module_table[] = {
     REGISTER_MODULE(SysMon_Init),
     REGISTER_MODULE(DataLink_Init),
     REGISTER_MODULE(DataAgent_Init),
+    // REGISTER_MODULE(LCD_Init),
 };
 #define MODULE_COUNT (sizeof(module_table) / sizeof(module_table[0]))
 

@@ -9,7 +9,7 @@
 #include <stdarg.h>
 #include <main.h>
 #include "event_bus.h"
-
+#include "lcd.h"
 typedef void (*cmd_func_t)(const char *args);
 typedef struct {
     const char *name;
@@ -27,7 +27,9 @@ static void cmd_la_sram_speed(const char *args);
 static void cmd_la_sram_full(const char *args);
 static void cmd_la_sram_align(const char *args);
 static void cmd_la_sram_rand(const char *args);
-
+static void cmd_lcd_test(const char *args);
+static void cmd_lcd_white(const char *args);
+static void cmd_lcd_black(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",  cmd_help},
@@ -41,6 +43,9 @@ static const cmd_entry_t cmd_table[] = {
     {"la_sram_rand",  cmd_la_sram_rand},
     {"la_sram_align", cmd_la_sram_align},
     {"la_sram_speed", cmd_la_sram_speed},
+    {"lcd_test",  cmd_lcd_test},
+    {"lcd_white", cmd_lcd_white},
+    {"lcd_black", cmd_lcd_black},
 };
 #define CMD_COUNT (sizeof(cmd_table)/sizeof(cmd_table[0]))
 
@@ -269,4 +274,22 @@ static void cmd_la_sram_speed(const char *args)
     
     LOG_Printf("Speed test: %lu writes in %lums (%lu KB/s), %lu errors\r\n",
                count, elapsed, speed, errors);
+}
+
+static void cmd_lcd_test(const char *args) {
+    /* 上半红 */
+    LCD_Fill(0, 0, 239, 159, RED);
+    /* 下半绿 */
+    LCD_Fill(0, 160, 239, 319, GREEN);
+    LOG_Printf("LCD: half red, half green.\r\n");
+}
+
+static void cmd_lcd_white(const char *args) {
+    LCD_Clear(WHITE);
+    LOG_Printf("LCD: white.\r\n");
+}
+
+static void cmd_lcd_black(const char *args) {
+    LCD_Clear(BLACK);
+    LOG_Printf("LCD: black.\r\n");
 }

@@ -37,6 +37,7 @@
 #include "stream_buffer.h"
 #include "event_bus.h"
 #include "data_link.h"
+#include "lcd.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -119,6 +120,7 @@ int main(void)
   MX_FSMC_Init();
   /* USER CODE BEGIN 2 */
   EventBus_Init();    // 必须在调度器启动前初始化事件总线
+  // LCD_Init();
 
   global_tx_stream = xStreamBufferCreate(LOG_TX_STREAM_SIZE, 1);
   global_rx_stream = xStreamBufferCreate(LOG_RX_STREAM_SIZE, 1);

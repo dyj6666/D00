@@ -72,7 +72,7 @@ static void dispatch_message(message_t *msg) {
     for (uint8_t i = 0; i < list->count; i++) {
         list->handlers[i](msg);
     }
-    vPortFree(msg);  // 处理完毕，释放内存
+    vPortFree(msg);  // 处理完毕，释放内存  
 }
 
 void EventBusTaskFunction(void) {
