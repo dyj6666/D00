@@ -1,23 +1,22 @@
 #include "sysmon.h"
+#include "bsp.h"
 #include "app_config.h"
 #include "cmsis_os.h"
 #include "timers.h"
 #include "task.h"
 #include "logger.h"
-#include "main.h"           // 提供 HAL_StatusTypeDef 等
 #include "event_bus.h"
 #include "FreeRTOS.h"
-#include "stm32f4xx_hal.h"  // 提供 HAL_IWDG_Refresh 声明
-#include <stdio.h>
-#include <string.h>
+#include "watchdog.h"
+#include "data_link.h"
 
 /* ================== 喂狗定时器 ================== */
 static TimerHandle_t feed_timer;
-extern IWDG_HandleTypeDef hiwdg;
 
 static void feed_callback(TimerHandle_t xTimer)
 {
-    HAL_IWDG_Refresh(&hiwdg);
+    (void)xTimer;
+    BSP_Watchdog_Refresh();
 }
 
 /* ================== 监控项定义 ================== */
@@ -29,10 +28,18 @@ typedef struct {
 } monitor_item_t;
 
 /* ---- 各监控项的采集打印函数 ---- */
-static void print_event_bus_stats(void) {
+static void print_event_bus_stats(void)
+{
     LOG_Printf("=== EVENT BUS ===\r\n");
     LOG_Printf("  Lost messages: %lu\r\n", EventBus_GetLostCount());
 }
+
+static void print_data_link_stats(void)
+{
+    LOG_Printf("=== DATA LINK ===\r\n");
+    LOG_Printf("  Cmd queue lost: %lu\r\n", DataLink_GetCmdLostCount());
+}
+
 static void print_task_list(void)
 {
     char buf[512];
@@ -64,24 +71,30 @@ static void print_cpu_usage(void)
 
 static void print_heap_info(void)
 {
-    LOG_Printf("=== HEAP ===\r\nFree heap: %lu bytes\r\n", xPortGetFreeHeapSize());
+    LOG_Printf("=== HEAP ===\r\nFree heap: %lu bytes\r\n", (unsigned long)xPortGetFreeHeapSize());
 }
 
 static void print_watchdog_status(void)
 {
     LOG_Printf("=== WATCHDOG ===\r\nIWDG active, feed period: %d ms\r\n", WDOG_FEED_PERIOD_MS);
+#if APP_DEBUG_MODE
+    LOG_Printf("  (debug mode: watchdog disabled)\r\n");
+#endif
+    WDOG_PrintStatus();
 }
 
 static void print_reset_reason(void)
 {
-    uint32_t flags = RCC->CSR;
+    bsp_reset_reason_t reason = BSP_GetResetReason();
     LOG_Printf("=== RESET REASON ===\r\n");
-    if (flags & RCC_CSR_IWDGRSTF)  LOG_Printf("  Independent watchdog reset\r\n");
-    if (flags & RCC_CSR_WWDGRSTF)  LOG_Printf("  Window watchdog reset\r\n");
-    if (flags & RCC_CSR_PORRSTF)   LOG_Printf("  Power-on reset\r\n");
-    if (flags & RCC_CSR_PINRSTF)   LOG_Printf("  External pin reset\r\n");
-    if (flags & RCC_CSR_SFTRSTF)   LOG_Printf("  Software reset\r\n");
-    RCC->CSR |= RCC_CSR_RMVF;
+    switch (reason) {
+        case BSP_RESET_IWDG:     LOG_Printf("  Independent watchdog reset\r\n"); break;
+        case BSP_RESET_WWDG:     LOG_Printf("  Window watchdog reset\r\n");     break;
+        case BSP_RESET_POWER_ON: LOG_Printf("  Power-on reset\r\n");            break;
+        case BSP_RESET_PIN:      LOG_Printf("  External pin reset\r\n");        break;
+        case BSP_RESET_SOFTWARE: LOG_Printf("  Software reset\r\n");            break;
+        default:                 LOG_Printf("  Unknown reset reason\r\n");      break;
+    }
 }
 
 /* ---- 监控项注册表（添加新监控只需在这里加一行） ---- */
@@ -92,6 +105,7 @@ static const monitor_item_t monitor_items[] = {
     {"Watchdog",    print_watchdog_status},
     {"Reset Reason",print_reset_reason},
     {"Event Bus",   print_event_bus_stats},
+    {"DataLink",    print_data_link_stats},
     // 示例：未来添加监控变量
     // {"Custom Sensor", print_custom_sensor},
 };
@@ -115,7 +129,13 @@ static void handle_sysmon_msg(const message_t *msg)
 /* ================== 模块初始化 ================== */
 void SysMon_Init(void)
 {
-    // 1. 启动喂狗定时器
+#if APP_DEBUG_MODE
+    LOG_Printf("SysMon: debug mode, watchdog disabled.\r\n");
+#else
+    /* 启动任务级看门狗（IWDG 之外的软件层防线） */
+    WDOG_Init();
+
+    /* 启动喂狗定时器 */
     feed_timer = xTimerCreate("wdg_feed",
                               pdMS_TO_TICKS(WDOG_FEED_PERIOD_MS),
                               pdTRUE, NULL, feed_callback);
@@ -123,6 +143,7 @@ void SysMon_Init(void)
         xTimerStart(feed_timer, 0);
         LOG_Printf("SysMon: IWDG feeding started.\r\n");
     }
+#endif
 
     // 2. 订阅 sysmon 命令事件（使用新消息类型）
     EventBus_Subscribe(MSG_CMD_SYSMON, handle_sysmon_msg);

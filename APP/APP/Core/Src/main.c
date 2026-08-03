@@ -29,15 +29,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <string.h>
-#include <stdio.h>
-#include "pinout.h"
 #include "app_config.h"
-#include "logger.h"
-#include "stream_buffer.h"
+#include "bsp.h"
 #include "event_bus.h"
-#include "data_link.h"
-#include "lcd.h"
+#include "stream_buffer.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -60,7 +55,6 @@
 /* USER CODE BEGIN PV */
 StreamBufferHandle_t global_tx_stream;
 StreamBufferHandle_t global_rx_stream;
-extern IWDG_HandleTypeDef hiwdg;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -88,7 +82,9 @@ int main(void)
   #else
   SCB->VTOR = 0x08010000;
   __enable_irq();             /* 关键！BOOT 关闭了全局中断，这里重新开启 */
-  HAL_IWDG_Refresh(&hiwdg);  // 启动时喂狗一次
+  #if !APP_DEBUG_MODE
+  BSP_Watchdog_Refresh();     /* 启动时喂狗一次 */
+  #endif
   #endif
   /* USER CODE END 1 */
 
@@ -113,14 +109,20 @@ int main(void)
   MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_RTC_Init();
+  #if !APP_DEBUG_MODE
   MX_IWDG_Init();
+  #endif
   MX_USART1_UART_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_FSMC_Init();
+  MX_TIM8_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   EventBus_Init();    // 必须在调度器启动前初始化事件总线
-  // LCD_Init();
+
+  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
+  __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, 500); // 设置占空比 50% (500/999)
 
   global_tx_stream = xStreamBufferCreate(LOG_TX_STREAM_SIZE, 1);
   global_rx_stream = xStreamBufferCreate(LOG_RX_STREAM_SIZE, 1);
@@ -208,18 +210,6 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-    if (huart->Instance == DEBUG_UART.Instance) {
-        LOG_TxCpltCallback();
-    }
-    else if (huart->Instance == HOSTLINK_UART.Instance) {
-        DataLink_TxCpltCallback();
-    }
-    else{
-      ;
-    }
-}
 
 /* USER CODE END 4 */
 

@@ -1,7 +1,7 @@
 #ifndef MSG_TYPES_H
 #define MSG_TYPES_H
 
-// ---------- 消息类型枚举 ----------
+/* ---------- 消息类型枚举 ---------- */
 typedef enum {
     MSG_NONE = 0,
     MSG_TICK_1S,
@@ -11,11 +11,11 @@ typedef enum {
     MSG_CMD_LED,
     MSG_CMD_OTA_START,
     MSG_CMD_SYSMON,
-    // 可继续扩展...
+    /* 可继续扩展... */
     MSG_COUNT
 } msg_type_t;
 
-// ---------- 消息来源模块ID ----------
+/* ---------- 消息来源模块 ID ---------- */
 typedef enum {
     MODULE_NONE = 0,
     MODULE_TIMER,

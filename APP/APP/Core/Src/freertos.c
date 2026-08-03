@@ -27,13 +27,10 @@
 /* USER CODE BEGIN Includes */
 #include "logger.h"
 #include "shell.h"
-#include "app_config.h"
-#include "stream_buffer.h"
 #include "event_bus.h"
 #include "timers.h"
 #include "module.h"
 #include "cmsis_os2.h"
-#include "data_agent.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -107,15 +104,18 @@ unsigned long getRunTimeCounterValue(void);
 void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName);
 
 /* USER CODE BEGIN 1 */
-/* Functions needed when configGENERATE_RUN_TIME_STATS is on */
-__weak void configureTimerForRunTimeStats(void)
+/* 运行时间统计：DWT 周期计数器（168 MHz）。
+ * 32 位回绕由 FreeRTOS 的差值运算自然处理，无需额外逻辑。 */
+void configureTimerForRunTimeStats(void)
 {
-
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
-__weak unsigned long getRunTimeCounterValue(void)
+unsigned long getRunTimeCounterValue(void)
 {
-return 0;
+    return DWT->CYCCNT;
 }
 /* USER CODE END 1 */
 

@@ -1,0 +1,26 @@
+# 编码与格式统一配置（EditorConfig）
+# 所有业务源码均为 UTF-8 中文；此文件用于防止编辑器误用 GBK 等本地代码页。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{c,h,md,json,yml,yaml,cmake,txt}]
+charset = utf-8
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,json}]
+indent_size = 2
+
+[Makefile]
+indent_style = tab
+
+# Keil 生成的中间产物不强制统一格式
+[MDK-ARM/**]
+insert_final_newline = false
+trim_trailing_whitespace = false

@@ -340,7 +340,7 @@
               <MiscControls>--diag_suppress=1</MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Config;../SystemServices;../Application;../Drivers</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Config;../BSP;../SystemServices;../Application;../Drivers</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -2150,6 +2150,36 @@
               <FileType>1</FileType>
               <FilePath>..\SystemServices\crc16.c</FilePath>
             </File>
+            <File>
+              <FileName>protocol.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\protocol.c</FilePath>
+            </File>
+            <File>
+              <FileName>var_list.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\var_list.c</FilePath>
+            </File>
+            <File>
+              <FileName>watchdog.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\watchdog.c</FilePath>
+            </File>
+            <File>
+              <FileName>la_sample.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\la_sample.c</FilePath>
+            </File>
+            <File>
+              <FileName>la_buffer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\la_buffer.c</FilePath>
+            </File>
+            <File>
+              <FileName>la_trigger.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\la_trigger.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -2181,9 +2211,29 @@
           <GroupName>BSP</GroupName>
           <Files>
             <File>
-              <FileName>lcd.c</FileName>
+              <FileName>bsp_system.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Drivers\lcd.c</FilePath>
+              <FilePath>..\BSP\bsp_system.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_watchdog.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_watchdog.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_rtc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_rtc.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_gpio.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_gpio.c</FilePath>
             </File>
           </Files>
         </Group>

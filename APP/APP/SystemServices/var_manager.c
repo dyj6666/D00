@@ -1,11 +1,15 @@
 #include "var_manager.h"
 #include "app_config.h"
-#include <string.h>
 #include "data_link.h"
 #include "FreeRTOS.h"
-#include "semphr.h"
-#include "protocol.h"
 #include "logger.h"
+#include "semphr.h"
+#include "var_list.h"
+
+#include <string.h>
+
+/* 变量名最大长度（保证单条目编码 ≤ 5+32=37 字节，任何包都装得下） */
+#define VAR_NAME_MAX_LEN 32
 
 /* ---------- 内部变量 ---------- */
 static SemaphoreHandle_t var_mutex;
@@ -25,6 +29,10 @@ void VAR_Init(void)
 /* ---------- 注册变量 ---------- */
 int VAR_Register(uint16_t id, const char *name, VarType type, uint8_t perm, void *ptr)
 {
+    if (name == NULL || ptr == NULL || strlen(name) == 0 || strlen(name) > VAR_NAME_MAX_LEN) {
+        return -3;
+    }
+
     if (xSemaphoreTake(var_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         LOG_Printf("VAR_Register timeout\r\n");
         return -1;
@@ -59,22 +67,22 @@ int VAR_Read(uint16_t id, void *buf, uint16_t *len)
         if (registry[i].id == id) {
             switch (registry[i].type) {
                 case VAR_TYPE_UINT8:
-                    *(uint8_t*)buf = *(uint8_t*)registry[i].ptr;
+                    *(uint8_t *)buf = *(uint8_t *)registry[i].ptr;
                     *len = 1;
                     ret = 0;
                     break;
                 case VAR_TYPE_INT16:
-                    *(int16_t*)buf = *(int16_t*)registry[i].ptr;
+                    *(int16_t *)buf = *(int16_t *)registry[i].ptr;
                     *len = 2;
                     ret = 0;
                     break;
                 case VAR_TYPE_INT32:
-                    *(int32_t*)buf = *(int32_t*)registry[i].ptr;
+                    *(int32_t *)buf = *(int32_t *)registry[i].ptr;
                     *len = 4;
                     ret = 0;
                     break;
                 case VAR_TYPE_FLOAT:
-                    *(float*)buf = *(float*)registry[i].ptr;
+                    *(float *)buf = *(float *)registry[i].ptr;
                     *len = 4;
                     ret = 0;
                     break;
@@ -156,7 +164,7 @@ void VAR_ClearSubscriptions(void)
     xSemaphoreGive(var_mutex);
 }
 
-/* ---------- 发送变量列表（支持分片，当前只发第一包） ---------- */
+/* ---------- 发送变量列表（完整分片） ---------- */
 void VAR_SendList(void)
 {
     if (xSemaphoreTake(var_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -164,45 +172,17 @@ void VAR_SendList(void)
         return;
     }
 
-    const uint16_t max_payload = HOSTLINK_TX_DMA_CHUNK - 10; // 帧头+CRC等约需10字节
-    uint8_t packet_index = 0;
-    uint16_t sent_count = 0;            // 已发送变量数量
+    /* 整帧上限 = DMA 块 - CRC 两字节 */
+    const uint16_t max_frame_len = HOSTLINK_TX_DMA_CHUNK - 2;
+    uint8_t total = VarList_TotalPackets(registry, reg_count, max_frame_len);
     uint8_t buf[HOSTLINK_TX_DMA_CHUNK];
 
-    while (sent_count < reg_count) {
-        buf[0] = SYNC1;
-        buf[1] = SYNC2;
-        buf[2] = CMD_LIST_VARS;
-        uint16_t idx = 7;               // 跳过分片字段
-
-        int count_in_packet = 0;
-        for (int i = sent_count; i < reg_count; i++) {
-            uint8_t name_len = strlen(registry[i].name);
-            if (idx + 5 + name_len > max_payload) break;  // 防止溢出
-
-            buf[idx++] = registry[i].id & 0xFF;
-            buf[idx++] = (registry[i].id >> 8) & 0xFF;
-            buf[idx++] = registry[i].type;
-            buf[idx++] = registry[i].permission;
-            buf[idx++] = name_len;
-            memcpy(&buf[idx], registry[i].name, name_len);
-            idx += name_len;
-            sent_count++;
-            count_in_packet++;
+    for (uint8_t pkt = 0; pkt < total; pkt++) {
+        uint16_t len = 0;
+        if (VarList_BuildPacket(registry, reg_count, max_frame_len,
+                                total, pkt, buf, sizeof(buf), &len) == 0) {
+            DataLink_SendPacket(buf, len);
         }
-
-        // 分片信息 (total_packets, packet_index)
-        int total = (reg_count + count_in_packet - 1) / count_in_packet; // 粗略估算
-        buf[5] = (uint8_t)total;
-        buf[6] = packet_index++;
-
-        uint16_t payload_len = (idx - 7) + 2;   // 加上分片头 2 字节
-        buf[3] = payload_len & 0xFF;
-        buf[4] = (payload_len >> 8) & 0xFF;
-
-        DataLink_SendPacket(buf, idx);
-        // 当前退化为只发第一包，若需多包则注释掉 break
-        break;
     }
 
     xSemaphoreGive(var_mutex);

@@ -1,11 +1,8 @@
 #include "ota_agent.h"
 #include "event_bus.h"
 #include "logger.h"
-#include "pinout.h"
-#include "main.h"
 #include "app_config.h"
-
-extern RTC_HandleTypeDef hrtc;
+#include "bsp.h"
 
 static void handle_ota_msg(const message_t *msg)
 {
@@ -14,14 +11,10 @@ static void handle_ota_msg(const message_t *msg)
 
     LOG_Printf("APP: Received upgrade command. Entering BOOT...\r\n");
 
-    // 启用备份域访问
-    HAL_PWR_EnableBkUpAccess();
-    // 写入升级标志到备份寄存器
-    HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR1, BOOT_FLAG_UPGRADE);
-    // 延时确保写入完成
-    HAL_Delay(100);
-    // 软件复位
-    NVIC_SystemReset();
+    /* 写入升级标志到备份寄存器，然后软复位进入 BOOT */
+    BSP_RTC_WriteBackupReg(0, BOOT_FLAG_UPGRADE);
+    BSP_DelayMs(100);           /* 确保写入完成 */
+    BSP_SystemReset();
 }
 
 void OtaAgent_Init(void)

@@ -1,27 +1,22 @@
 #ifndef MODULE_H
 #define MODULE_H
 
+#include <stdint.h>
+
 typedef void (*module_init_fn)(void);
 
 typedef struct {
+    const char    *name;      /* 模块名（启动日志用） */
+    uint8_t        priority;  /* 初始化优先级：数值小者先执行 */
     module_init_fn init;
 } module_desc_t;
 
-// #define MODULE_REGISTER(init_func) \
-//     static const module_desc_t __module_##init_func \
-//         __attribute__((used, section("init_modules"))) = { init_func }
-/* 注册宏：用于在注册表文件中声明模块 */
-#define REGISTER_MODULE(init_func)  { (init_func) }
+/* 注册宏：显式给出名称与优先级 */
+#define MODULE_INIT(name_str, prio, init_func) { (name_str), (prio), (init_func) }
 
-
+/* 兼容旧宏：以函数名作为模块名，默认优先级 100 */
+#define REGISTER_MODULE(init_func) MODULE_INIT(#init_func, 100, (init_func))
 
 void modules_init(void);
 
-
-
-#endif			
-
-
-
-
-				
+#endif

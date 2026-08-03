@@ -255,7 +255,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
   else if(uartHandle->Instance==USART2)
   {
   /* USER CODE BEGIN USART2_MspDeInit 0 */
-		HAL_NVIC_DisableIRQ(USART2_IRQn);  /* �����ж� */
+		HAL_NVIC_DisableIRQ(USART2_IRQn);  /* 关闭中断 */
   /* USER CODE END USART2_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_USART2_CLK_DISABLE();

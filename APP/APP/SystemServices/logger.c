@@ -1,10 +1,9 @@
 #include "logger.h"
-#include "pinout.h"
+#include "bsp.h"
 #include "app_config.h"
-#include "main.h"
-#include "usart.h"
 #include "cmsis_os.h"
 #include "stream_buffer.h"
+
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -18,11 +17,37 @@ static uint8_t tx_dma_buf[LOG_TX_DMA_CHUNK] __attribute__((aligned(4)));
 /* LoggerTX 任务句柄，用于中断通知 */
 static TaskHandle_t logger_tx_handle = NULL;
 
+/* ISR：TX DMA 完成，唤醒发送任务 */
+static void logger_tx_isr(bsp_uart_id_t id, void *ctx)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    (void)id;
+    (void)ctx;
+    if (logger_tx_handle != NULL) {
+        vTaskNotifyGiveFromISR(logger_tx_handle, &xHigherPriorityTaskWoken);
+    }
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+/* ISR：RX 空闲断帧，数据入流（DMA 由 BSP 自动重启） */
+static void logger_rx_isr(bsp_uart_id_t id, const uint8_t *data,
+                          uint16_t len, void *ctx)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    (void)id;
+    (void)ctx;
+    if (len > 0) {
+        xStreamBufferSendFromISR(global_rx_stream, data, len, &xHigherPriorityTaskWoken);
+    }
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
 void LOG_Init(void)
 {
-    // 仅初始化硬件，不再创建 StreamBuffer
-    HAL_UART_Receive_DMA(&DEBUG_UART, rx_dma_buf, sizeof(rx_dma_buf));
-    __HAL_UART_ENABLE_IT(&DEBUG_UART, UART_IT_IDLE);
+    BSP_UART_Init(BSP_UART_DBG);
+    BSP_UART_RegisterRxCb(BSP_UART_DBG, logger_rx_isr, NULL);
+    BSP_UART_RegisterTxCb(BSP_UART_DBG, logger_tx_isr, NULL);
+    BSP_UART_RxStart(BSP_UART_DBG, rx_dma_buf, sizeof(rx_dma_buf));
 }
 
 void LOG_Printf(const char *format, ...)
@@ -39,38 +64,17 @@ void LOG_Printf(const char *format, ...)
 
 void LoggerTXTaskFunction(void)
 {
-    logger_tx_handle = xTaskGetCurrentTaskHandle();
     size_t len;
+    logger_tx_handle = xTaskGetCurrentTaskHandle();
+
     for (;;) {
         len = xStreamBufferReceive(global_tx_stream, tx_dma_buf, sizeof(tx_dma_buf), portMAX_DELAY);
         if (len > 0) {
-            HAL_UART_Transmit_DMA(&DEBUG_UART, tx_dma_buf, len);
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            if (BSP_UART_TransmitDMA(BSP_UART_DBG, tx_dma_buf, len) == 0) {
+                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            }
         }
     }
-}
-
-/* DMA 发送完成回调（来自中断） */
-void LOG_TxCpltCallback(void)
-{
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    if (logger_tx_handle != NULL) {
-        vTaskNotifyGiveFromISR(logger_tx_handle, &xHigherPriorityTaskWoken);
-    }
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-}
-
-/* 空闲中断回调（来自中断） */
-void LOG_RxIdleCallback(uint16_t size)
-{
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    if (size > 0) {
-        xStreamBufferSendFromISR(global_rx_stream, rx_dma_buf, size, &xHigherPriorityTaskWoken);
-    }
-    /* 重启 DMA 接收 */
-    HAL_UART_DMAStop(&DEBUG_UART);
-    HAL_UART_Receive_DMA(&DEBUG_UART, rx_dma_buf, sizeof(rx_dma_buf));
-    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 StreamBufferHandle_t LOG_GetRxStream(void)
