@@ -1,7 +1,10 @@
 /* APP 固件链接脚本（GCC）
  *
- * 布局：BOOT 占用 0x08000000 ~ 0x0800FFFF，
- *       APP 从 0x08010000 开始，与主程序 SCB->VTOR 一致。
+ * 分区布局（与 BOOT/boot_config.h、APP.sct、Other/flash分区 严格一致）：
+ *   BOOT     0x08000000 ~ 0x0800FFFF  (64 KB)
+ *   APP      0x08010000 ~ 0x0804FFFF  (256 KB，末尾 8 字节为魔数+版本)
+ *   Download 0x08060000 ~ 0x0809FFFF  (256 KB)
+ * 主 SRAM 128 KB：0x20000000 ~ 0x2001FFFF。
  */
 ENTRY(Reset_Handler)
 
@@ -13,8 +16,8 @@ _estack = ORIGIN(RAM) + LENGTH(RAM);
 
 MEMORY
 {
-  FLASH (rx)      : ORIGIN = 0x08010000, LENGTH = 0xF0000   /* 960 KB */
-  RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 0x30000   /* 192 KB */
+  FLASH (rx)      : ORIGIN = 0x08010000, LENGTH = 0x40000   /* 256 KB */
+  RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 0x20000   /* 128 KB */
   MEMORY_B1 (rx)  : ORIGIN = 0x60000000, LENGTH = 0K
   CCMRAM (rw)     : ORIGIN = 0x10000000, LENGTH = 0K
 }

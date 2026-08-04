@@ -21,9 +21,6 @@ void LA_RegisterVariables(void)
 }
 
 /* --------------------- 时间戳模式（EXTI）相关 --------------------- */
-#define PRE_TRIGGER_DEPTH 1024
-#define POST_TRIGGER_SAMPLES 2048   /* 触发后继续采样的点数，之后自动停采 */
-
 static LA_SamplePoint pre_trigger_buf[PRE_TRIGGER_DEPTH];
 static volatile uint32_t ts_overflow = 0;
 static volatile LA_SampleMode current_mode = LA_MODE_IDLE;
@@ -39,10 +36,13 @@ static uint8_t last_trigger_state = 0xFF;   /* 触发通道上一状态，用于
  * TIM1 位于 APB2(168MHz)，采样率由 PSC/ARR 组合精确设定。
  * DMA1 无法访问 AHB1（GPIO），因此不能用 TIM3+DMA1 做此功能。 */
 #define LA_TIM_CLOCK_HZ  168000000UL
-static uint32_t la_stream_buf[LA_DMA_BUF_SIZE] __attribute__((aligned(4)));
+static uint32_t la_stream_iram[LA_DMA_IRAM_SIZE] __attribute__((aligned(4)));
+static uint32_t *la_stream_buf = (uint32_t *)LA_DMA_SRAM_ADDR;
+static uint32_t la_dma_buf_size = LA_DMA_SRAM_SIZE;
 static volatile uint32_t dma_transfer_count = 0;  /* 满传输（8192点）完成次数 */
 static volatile uint32_t dma_completed = 0;       /* 停止时固化样本总数 */
 static volatile uint8_t  dma_running = 0;
+static volatile uint8_t  dma_overrun = 0;         /* DMA 溢出/错误标志 */
 
 /* DMA 半/全传输回调（ISR） */
 static void la_dma_half_cb(DMA_HandleTypeDef *hdma)
@@ -56,6 +56,12 @@ static void la_dma_full_cb(DMA_HandleTypeDef *hdma)
     if (dma_running) {
         dma_transfer_count++;
     }
+}
+
+static void la_dma_error_cb(DMA_HandleTypeDef *hdma)
+{
+    (void)hdma;
+    dma_overrun = 1;
 }
 
 /* ================================================================
@@ -72,6 +78,34 @@ void LA_Sample_Init(void)
     /* 注册 DMA 回调（ISR 上下文调用） */
     HAL_DMA_RegisterCallback(&hdma_tim1_up, HAL_DMA_XFER_HALFCPLT_CB_ID, la_dma_half_cb);
     HAL_DMA_RegisterCallback(&hdma_tim1_up, HAL_DMA_XFER_CPLT_CB_ID, la_dma_full_cb);
+    HAL_DMA_RegisterCallback(&hdma_tim1_up, HAL_DMA_XFER_ERROR_CB_ID, la_dma_error_cb);
+
+    LOG_Printf("LA: DMA buffer = %s (%u points)\r\n",
+               la_stream_buf == la_stream_iram ? "IRAM" : "SRAM",
+               (unsigned)la_dma_buf_size);
+}
+
+int LA_Sample_SetDMABuffer(uint8_t use_sram)
+{
+    if (current_mode != LA_MODE_IDLE) {
+        return -2;      /* 采集中不允许切换缓冲 */
+    }
+    if (use_sram) {
+        if (!LA_Buffer_IsSramOk()) return -1;
+        la_stream_buf = (uint32_t *)LA_DMA_SRAM_ADDR;
+        la_dma_buf_size = LA_DMA_SRAM_SIZE;
+    } else {
+        la_stream_buf = la_stream_iram;
+        la_dma_buf_size = LA_DMA_IRAM_SIZE;
+    }
+    LOG_Printf("LA: DMA buffer = %s (%u points)\r\n",
+               use_sram ? "SRAM" : "IRAM", (unsigned)la_dma_buf_size);
+    return 0;
+}
+
+uint8_t LA_Sample_IsDMASram(void)
+{
+    return (la_stream_buf != la_stream_iram);
 }
 
 void LA_Sample_Start(LA_SampleMode mode)
@@ -211,10 +245,20 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
             uint8_t current_state = (states & (1 << channel)) ? 1 : 0;
             uint8_t prev_state = last_trigger_state;
             LA_TriggerType type = LA_Trigger_GetType();
+            la_trigger_cfg_t cfg;
+            LA_Trigger_GetConfig(&cfg);
 
-            if ((type == LA_TRIG_EDGE_RISING  && current_state == 1 && prev_state == 0) ||
+            uint8_t edge_match =
+                (type == LA_TRIG_EDGE_RISING  && current_state == 1 && prev_state == 0) ||
                 (type == LA_TRIG_EDGE_FALLING && current_state == 0 && prev_state == 1) ||
-                (type == LA_TRIG_EDGE_ANY     && current_state != prev_state)) {
+                (type == LA_TRIG_EDGE_ANY     && current_state != prev_state);
+
+            /* 条件触发：边沿发生时，条件通道电平必须匹配（如 I2C START） */
+            uint8_t cond_match =
+                (cfg.cond_channel == 0xFF) ||
+                (((states >> cfg.cond_channel) & 1) == cfg.cond_level);
+
+            if (edge_match && cond_match) {
                 trigger_fired = 1;
                 post_trigger_count = 0;
                 LA_Trigger_SetTriggered();
@@ -225,7 +269,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
         /* 触发后直接写入外部 SRAM */
         LA_Buffer_Write(timestamp, states);
         post_trigger_count++;
-        if (post_trigger_count >= POST_TRIGGER_SAMPLES) {
+        la_trigger_cfg_t cfg;
+        LA_Trigger_GetConfig(&cfg);
+        if (post_trigger_count >= cfg.post_samples) {
             /* 触发深度满足，自动停采，保留缓冲数据 */
             capture_done = 1;
             HAL_NVIC_DisableIRQ(EXTI0_IRQn);
@@ -255,6 +301,11 @@ void LA_Sample_Start_DMA(uint32_t sample_rate_hz)
     }
     if (sample_rate_hz == 0) sample_rate_hz = 1000;
 
+    if (LA_Sample_IsDMASram() && !LA_Buffer_IsSramOk()) {
+        LOG_Printf("LA: SRAM self-test failed, DMA capture aborted\r\n");
+        return;
+    }
+
     /* 在 16 位 PSC/ARR 范围内寻找最接近的整型分频组合 */
     uint32_t psc = 0, arr = 0;
     int found = 0;
@@ -279,12 +330,13 @@ void LA_Sample_Start_DMA(uint32_t sample_rate_hz)
 
     dma_transfer_count = 0;
     dma_completed = 0;
+    dma_overrun = 0;
     dma_running = 0;
     current_mode = LA_MODE_DMA_STREAM;
 
     /* 外围地址固定为 GPIOB->IDR（AHB1，仅 DMA2 可访问） */
     if (HAL_DMA_Start_IT(&hdma_tim1_up, (uint32_t)&GPIOB->IDR,
-                         (uint32_t)la_stream_buf, LA_DMA_BUF_SIZE) != HAL_OK) {
+                         (uint32_t)la_stream_buf, la_dma_buf_size) != HAL_OK) {
         current_mode = LA_MODE_IDLE;
         LOG_Printf("LA: DMA start failed\r\n");
         return;
@@ -300,8 +352,9 @@ void LA_Sample_Start_DMA(uint32_t sample_rate_hz)
         return;
     }
 
-    LOG_Printf("LA: DMA capture started, rate=%lu Hz (psc=%lu arr=%lu)\r\n",
-               (unsigned long)sample_rate_hz, (unsigned long)psc, (unsigned long)arr);
+    LOG_Printf("LA: DMA capture started, rate=%lu Hz (psc=%lu arr=%lu), buf=%u pts\r\n",
+               (unsigned long)sample_rate_hz, (unsigned long)psc, (unsigned long)arr,
+               (unsigned)la_dma_buf_size);
 }
 
 uint32_t LA_Sample_Stop_DMA(void)
@@ -320,15 +373,28 @@ uint32_t LA_Sample_Stop_DMA(void)
     current_mode = LA_MODE_IDLE;
     dma_completed = count;
     la_samples = count;
+    if (dma_overrun) {
+        LOG_Printf("LA: DMA overrun detected!\r\n");
+    }
     return count;
+}
+
+uint8_t LA_Sample_GetDMAOverrun(void)
+{
+    return dma_overrun;
+}
+
+uint32_t LA_Sample_GetDMABufferSize(void)
+{
+    return la_dma_buf_size;
 }
 
 uint32_t LA_Sample_GetDMACount(void)
 {
     if (dma_running) {
         uint32_t rem = __HAL_DMA_GET_COUNTER(&hdma_tim1_up);
-        if (rem > LA_DMA_BUF_SIZE) rem = LA_DMA_BUF_SIZE;
-        return dma_transfer_count * LA_DMA_BUF_SIZE + (LA_DMA_BUF_SIZE - rem);
+        if (rem > la_dma_buf_size) rem = la_dma_buf_size;
+        return dma_transfer_count * la_dma_buf_size + (la_dma_buf_size - rem);
     }
     return dma_completed;
 }
@@ -337,6 +403,6 @@ void LA_Sample_ReadDMABuffer(uint32_t *buf, uint32_t start, uint32_t count)
 {
     if (buf == NULL) return;
     for (uint32_t i = 0; i < count; i++) {
-        buf[i] = la_stream_buf[(start + i) % LA_DMA_BUF_SIZE];
+        buf[i] = la_stream_buf[(start + i) % la_dma_buf_size];
     }
 }

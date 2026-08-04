@@ -10,6 +10,8 @@
 #include "watchdog.h"
 #include "data_link.h"
 
+#include <string.h>
+
 /* ================== 喂狗定时器 ================== */
 static TimerHandle_t feed_timer;
 
@@ -42,31 +44,79 @@ static void print_data_link_stats(void)
 
 static void print_task_list(void)
 {
-    char buf[512];
-    vTaskList(buf);
-    LOG_Printf("=== TASKS ===\r\n%s\r\n", buf);
+    /* 逐行输出：避免一次性打印超长字符串触发日志缓冲截断 */
+    UBaseType_t size = uxTaskGetNumberOfTasks();
+    TaskStatus_t *arr = pvPortMalloc(size * sizeof(TaskStatus_t));
+    if (arr == NULL) {
+        LOG_Printf("=== TASKS ===\r\n  (no memory)\r\n");
+        return;
+    }
+
+    uint32_t total = 0;
+    UBaseType_t n = uxTaskGetSystemState(arr, size, &total);
+    LOG_Printf("=== TASKS ===\r\n");
+    LOG_Printf("%-16s %s %5s %6s %6s\r\n", "Name", "St", "Prio", "Stack", "#");
+    for (UBaseType_t i = 0; i < n; i++) {
+        char state = '?';
+        switch (arr[i].eCurrentState) {
+            case eRunning:   state = 'X'; break;
+            case eReady:     state = 'R'; break;
+            case eBlocked:   state = 'B'; break;
+            case eSuspended: state = 'S'; break;
+            case eDeleted:   state = 'D'; break;
+            default:         state = '?'; break;
+        }
+        LOG_Printf("%-16s %c %5u %6u %6u\r\n",
+                   arr[i].pcTaskName, state,
+                   (unsigned)arr[i].uxCurrentPriority,
+                   (unsigned)arr[i].usStackHighWaterMark,
+                   (unsigned)arr[i].xTaskNumber);
+    }
+    vPortFree(arr);
 }
 
 static void print_cpu_usage(void)
 {
-    TaskStatus_t *pxTaskStatusArray;
-    volatile UBaseType_t uxArraySize;
-    uint32_t ulTotalRunTime;
+    /* 1 秒窗口差分算法：
+     * DWT 周期计数器在 168 MHz 下 32 位约 25.6 s 回绕，直接对“启动以来累加值”
+     * 求百分比会得到垃圾数据；改为对相邻两次快照做差分，窗口远小于回绕周期，
+     * 数值稳定且不受回绕影响。 */
+    UBaseType_t size = uxTaskGetNumberOfTasks();
+    TaskStatus_t *snap1 = pvPortMalloc(size * sizeof(TaskStatus_t));
+    TaskStatus_t *snap2 = pvPortMalloc(size * sizeof(TaskStatus_t));
+    uint32_t total1 = 0, total2 = 0;
 
-    uxArraySize = uxTaskGetNumberOfTasks();
-    pxTaskStatusArray = pvPortMalloc(uxArraySize * sizeof(TaskStatus_t));
-    if (pxTaskStatusArray) {
-        uxArraySize = uxTaskGetSystemState(pxTaskStatusArray, uxArraySize, &ulTotalRunTime);
-        ulTotalRunTime /= 100UL;
-        if (ulTotalRunTime == 0) ulTotalRunTime = 1;
-
-        LOG_Printf("=== CPU USAGE ===\r\n");
-        for (UBaseType_t x = 0; x < uxArraySize; x++) {
-            uint32_t ulPercent = pxTaskStatusArray[x].ulRunTimeCounter / ulTotalRunTime;
-            LOG_Printf("  %-16s %3lu%%\r\n", pxTaskStatusArray[x].pcTaskName, ulPercent);
-        }
-        vPortFree(pxTaskStatusArray);
+    if (snap1 == NULL || snap2 == NULL) {
+        vPortFree(snap1);
+        vPortFree(snap2);
+        LOG_Printf("=== CPU USAGE ===\r\n  (no memory)\r\n");
+        return;
     }
+
+    UBaseType_t n1 = uxTaskGetSystemState(snap1, size, &total1);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    UBaseType_t n2 = uxTaskGetSystemState(snap2, size, &total2);
+
+    uint32_t dt = total2 - total1;
+    if (dt == 0) dt = 1;
+
+    LOG_Printf("=== CPU USAGE (last 1s) ===\r\n");
+    for (UBaseType_t i = 0; i < n2; i++) {
+        uint32_t base = 0;
+        for (UBaseType_t j = 0; j < n1; j++) {
+            if (strcmp(snap1[j].pcTaskName, snap2[i].pcTaskName) == 0) {
+                base = snap1[j].ulRunTimeCounter;
+                break;
+            }
+        }
+        uint32_t delta = snap2[i].ulRunTimeCounter - base;
+        uint32_t pct = (uint32_t)(((uint64_t)delta * 100) / dt);
+        if (pct > 100) pct = 100;
+        LOG_Printf("  %-16s %3lu%%\r\n", snap2[i].pcTaskName, (unsigned long)pct);
+    }
+
+    vPortFree(snap1);
+    vPortFree(snap2);
 }
 
 static void print_heap_info(void)

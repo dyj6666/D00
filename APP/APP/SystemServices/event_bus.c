@@ -128,10 +128,11 @@ void EventBusTaskFunction(void)
     TaskHandle_t self = xTaskGetCurrentTaskHandle();
     WDOG_RegisterTask("EventBus", self, 5000);
     for (;;) {
-        if (xQueueReceive(msg_queue, &msg, portMAX_DELAY) == pdTRUE) {
+        /* 带超时接收：总线空闲时也周期性上报心跳，避免静默误判 */
+        if (xQueueReceive(msg_queue, &msg, pdMS_TO_TICKS(1000)) == pdTRUE) {
             dispatch_message(msg);
-            WDOG_Kick(self);
         }
+        WDOG_Kick(self);
     }
 }
 

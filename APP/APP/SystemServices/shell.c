@@ -33,6 +33,10 @@ static void cmd_la_trig(const char *args);
 static void cmd_la_first(const char *args);
 static void cmd_la_dma_start(const char *args);
 static void cmd_la_dma_stop(const char *args);
+static void cmd_la_dump(const char *args);
+static void cmd_la_dma_stat(const char *args);
+static void cmd_la_dma_buf(const char *args);
+static void cmd_la_info(const char *args);
 static void cmd_la_read_pb4(const char *args);
 static void cmd_la_peek(const char *args);
 
@@ -50,6 +54,10 @@ static const cmd_entry_t cmd_table[] = {
     {"la_trig",      cmd_la_trig},
     {"la_dma_start", cmd_la_dma_start},
     {"la_dma_stop",  cmd_la_dma_stop},
+    {"la_dump",      cmd_la_dump},
+    {"la_dma_stat",  cmd_la_dma_stat},
+    {"la_dma_buf",   cmd_la_dma_buf},
+    {"la_info",      cmd_la_info},
     {"la_read_pb4",  cmd_la_read_pb4},
     {"la_peek",      cmd_la_peek},
 };
@@ -226,18 +234,35 @@ static void cmd_la_first(const char *args)
 
 static void cmd_la_trig(const char *args)
 {
-    /* 格式：la_trig <type> <channel>
-       type: 0=off, 1=rising, 2=falling, 3=any */
-    int type = 0, channel = 0;
+    /* 格式：la_trig <type> <ch> [post] [cond_ch] [cond_level]
+       type: 0=off 1=rising 2=falling 3=any
+       post: 触发后采样点数（默认 2048）
+       cond_ch/cond_level: 条件通道与电平（可选，如 I2C START：
+       la_trig 2 0 2048 1 1 = CH0 下降沿且 CH1 为高时触发） */
+    la_trigger_cfg_t cfg;
+    LA_Trigger_GetConfig(&cfg);
+    int type = 0, channel = 0, post = 0, cond_ch = -1, cond_level = 1;
     if (args) {
-        sscanf(args, "%d %d", &type, &channel);
+        int n = sscanf(args, "%d %d %d %d %d", &type, &channel, &post, &cond_ch, &cond_level);
+        if (n >= 3 && post > 0) cfg.post_samples = (uint16_t)post;
+        if (n >= 4 && cond_ch >= 0 && cond_ch < LA_MAX_CHANNELS) {
+            cfg.cond_channel = (uint8_t)cond_ch;
+            cfg.cond_level = (uint8_t)(cond_level != 0);
+        }
     }
+    cfg.type = (LA_TriggerType)type;
+    cfg.channel = (uint8_t)channel;
+    LA_Trigger_SetConfig(&cfg);
 
-    LA_Trigger_Set((LA_TriggerType)type, channel);
-    if (type == LA_TRIG_NONE) {
+    if (cfg.type == LA_TRIG_NONE) {
         LOG_Printf("Trigger off\r\n");
     } else {
-        LOG_Printf("Trigger: type=%d, ch=%d\r\n", type, channel);
+        LOG_Printf("Trigger: type=%d, ch=%d, post=%u",
+                   cfg.type, cfg.channel, (unsigned)cfg.post_samples);
+        if (cfg.cond_channel != 0xFF) {
+            LOG_Printf(", cond=ch%d==%d", cfg.cond_channel, cfg.cond_level);
+        }
+        LOG_Printf("\r\n");
     }
 }
 
@@ -259,6 +284,84 @@ static void cmd_la_dma_stop(const char *args)
         LA_Sample_ReadDMABuffer(buf, 0, 4);
         LOG_Printf("First 4: %08lX %08lX %08lX %08lX\r\n",
                    buf[0], buf[1], buf[2], buf[3]);
+    }
+}
+
+static void cmd_la_dump(const char *args)
+{
+    /* 格式：la_dump <count>（默认 512，上限为缓冲深度），导出 DMA 采样值 */
+    uint32_t count = 512;
+    if (args) count = (uint32_t)atoi(args);
+    if (count == 0) count = 1;
+    uint32_t cap = LA_Sample_GetDMABufferSize();
+    if (count > cap) count = cap;
+    if (count > 4096) {
+        LOG_Printf("Dumping %lu samples, this will take a while...\r\n",
+                   (unsigned long)count);
+    }
+
+    LOG_Printf("Dump %lu samples from DMA buffer:\r\n", (unsigned long)count);
+    uint32_t buf[8];
+    for (uint32_t i = 0; i < count; i += 8) {
+        for (int k = 0; k < 8; k++) buf[k] = 0;
+        uint32_t n = (count - i < 8) ? (count - i) : 8;
+        LA_Sample_ReadDMABuffer(buf, i, n);
+        LOG_Printf("%08lX %08lX %08lX %08lX %08lX %08lX %08lX %08lX\r\n",
+                   (unsigned long)buf[0], (unsigned long)buf[1],
+                   (unsigned long)buf[2], (unsigned long)buf[3],
+                   (unsigned long)buf[4], (unsigned long)buf[5],
+                   (unsigned long)buf[6], (unsigned long)buf[7]);
+        /* 限速：日志 TX 按 115200 波特率排空（约 11.5 KB/s），
+         * 不延时会把 2 KB 流缓冲灌满并静默丢帧 */
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+static void cmd_la_dma_stat(const char *args)
+{
+    (void)args;
+    LOG_Printf("DMA stat: count=%lu, buf=%lu pts, overrun=%u, src=%s\r\n",
+               (unsigned long)LA_Sample_GetDMACount(),
+               (unsigned long)LA_Sample_GetDMABufferSize(),
+               LA_Sample_GetDMAOverrun(),
+               LA_Sample_IsDMASram() ? "SRAM" : "IRAM");
+}
+
+static void cmd_la_dma_buf(const char *args)
+{
+    /* 格式：la_dma_buf <sram|iram> —— 切换 DMA 缓冲（SRAM 深 4 倍，IRAM 速率高） */
+    if (args == NULL) {
+        LOG_Printf("Usage: la_dma_buf <sram|iram>\r\n");
+        return;
+    }
+    int use_sram = -1;
+    if (strcmp(args, "sram") == 0) use_sram = 1;
+    else if (strcmp(args, "iram") == 0) use_sram = 0;
+    if (use_sram < 0) {
+        LOG_Printf("Usage: la_dma_buf <sram|iram>\r\n");
+        return;
+    }
+    if (LA_Sample_SetDMABuffer((uint8_t)use_sram) != 0) {
+        LOG_Printf("SRAM 自检失败，无法切换\r\n");
+    }
+}
+
+static void cmd_la_info(const char *args)
+{
+    la_trigger_cfg_t cfg;
+    (void)args;
+    LA_Trigger_GetConfig(&cfg);
+    LOG_Printf("=== LA INFO ===\r\n");
+    LOG_Printf("  DMA buffer: %lu pts (%s)\r\n",
+               (unsigned long)LA_Sample_GetDMABufferSize(),
+               LA_Sample_IsDMASram() ? "external SRAM" : "internal RAM");
+    LOG_Printf("  SRAM self-test: %s\r\n", LA_Buffer_IsSramOk() ? "PASS" : "FAIL");
+    LOG_Printf("  Trigger: type=%d ch=%d post=%u cond=",
+               cfg.type, cfg.channel, (unsigned)cfg.post_samples);
+    if (cfg.cond_channel == 0xFF) {
+        LOG_Printf("none\r\n");
+    } else {
+        LOG_Printf("ch%d==%d\r\n", cfg.cond_channel, cfg.cond_level);
     }
 }
 

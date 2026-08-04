@@ -4,6 +4,8 @@ project(APP C ASM)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+find_program(PYTHON_EXECUTABLE NAMES python python3)
+
 if(CMAKE_CROSSCOMPILING)
     # ============================================================
     # 固件目标（arm-none-eabi-gcc）
@@ -142,6 +144,15 @@ if(CMAKE_CROSSCOMPILING)
                 ${CMAKE_BINARY_DIR}/APP.bin
         COMMENT "Generate APP.bin"
     )
+    if(PYTHON_EXECUTABLE)
+        add_custom_command(TARGET firmware.elf POST_BUILD
+            COMMAND ${PYTHON_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/Script/append_app_magic.py
+                    ${CMAKE_BINARY_DIR}/APP.bin
+                    --out ${CMAKE_BINARY_DIR}/APP_flash.bin
+            COMMENT "Generate APP_flash.bin (with validity magic)"
+        )
+    endif()
 else()
     # ============================================================
     # 主机单元测试（纯逻辑层）

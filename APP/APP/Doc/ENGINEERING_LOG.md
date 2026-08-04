@@ -168,3 +168,138 @@
 | TIM1+DMA2 采样 | `la_dma_start 100000` → `la_dma_stop` 检查计数与波形 |
 | 触发/预触发链路 | `la_trig` + 信号源验证边沿捕获 |
 | 双构建产物一致性 | 分别烧录 Keil 与 GCC 产物做冒烟 |
+
+---
+
+## 8. BOOT 联合检查与分区一致性（2026-08）
+
+### 8.1 GCC 链接脚本范围与 BOOT 分区不符（自研缺陷，已修复）
+- **根因**：`Core/Startup/STM32F407ZGTx_APP.ld` 将 FLASH 设为 960 KB、RAM 设为 192 KB，
+  而 BOOT 分区约定 APP 仅 256 KB（`0x08010000~0x0804FFFF`）、F407 主 SRAM 仅 128 KB。
+  若固件膨胀会静默覆盖 Download 分区与魔数区。
+- **解决**：FLASH `0x40000`、RAM `0x20000`，与 `APP.sct`、BOOT 分区三方一致。
+- **验证**：GCC 构建后 `_estack=0x20020000`、代码止于 `0x08020F58`、bss 止于 `0x20013F50`。
+
+### 8.2 直烧 APP 无有效性魔数（机制缺口，已补工具）
+- **根因**：`0x0804FFF8` 的 APP 有效性魔数（`0x4F54412E`）只在 BOOT 的 OTA 流程末尾写入；
+  整片擦除后直接烧录 APP.bin（SWD/Keil）时该处为 `0xFFFFFFFF`，BOOT 判定无效进入升级模式。
+- **解决**：新增 `Script/append_app_magic.py`，把原始 APP.bin 补齐为 256 KB 完整分区镜像
+  （0xFF 填充 + 魔数 + 版本号），并接入 GCC 构建自动生成 `APP_flash.bin`。
+- **验证**：`APP_flash.bin` 大小 262144、`0x3FFF8=0x4F54412E`、`0x3FFFC=version`。
+- **用法**：Keil 路径下执行
+  `python ..\Script\append_app_magic.py .\Output\APP.bin --version N`。
+
+### 8.3 APP.sct 注释乱码且魔数区未落地
+- **解决**：重写 `MDK-ARM/APP/APP.sct`（纯 ASCII 注释），明确魔数/版本由 OTA 或
+  `append_app_magic.py` 写入、不参与链接；RW 区声明与 128 KB 主 SRAM 一致。
+
+### 8.4 BOOT 侧问题（详见 BOOT 工程日志）
+- BOOT.sct 的 `RW_IRAM1` 曾声明 192 KB（实际 128 KB），已修正。
+
+---
+
+## 9. 上板回归：任务看门狗误复位（已修复）
+
+### 9.1 DataAgent 心跳位置导致无限复位（自研回归）
+- **现象**：烧录后约 5.5 s 出现 `[WDOG] Task 'DataAgent' stalled (5490 ms silent) -> reset!`，
+  之后无限复位重启。
+- **根因**：`WDOG_Kick(self)` 被放在 `if (count == 0) continue;` **之后**——
+  无上位机订阅时（`count == 0`）每周期直接跳过踢狗，5 s 后任务级看门狗判定 stall。
+- **解决**：将心跳移到循环顶部，**无条件**每周期上报；
+  EventBus 同步加固：阻塞接收改为 1 s 超时接收，无论是否收到消息都踢狗。
+- **验证**：Keil 全量重编译 0/0、GCC 固件构建通过、`APP_flash.bin` 重新生成；
+  上板后应持续运行不再复位。
+
+### 9.2 sysmon CPU 统计在 DWT 回绕后失真（上板发现）
+- **现象**：实机 `sysmon` 的 CPU 百分比乱跳（DataAgent 28%~52%、IDLE 20%~65%），
+  与任务真实负载严重不符（10 ms 周期任务不可能占 28% CPU）。
+- **根因**：DWT 周期计数器在 168 MHz 下 32 位约 **25.6 s 回绕**，FreeRTOS
+  “启动以来累加值”溢出后直接求百分比无意义。
+- **解决**：`print_cpu_usage` 改为 **1 s 窗口差分算法**（两次快照按任务名求差，
+  64 位中间量防乘溢出），窗口远小于回绕周期，数值稳定；
+  同时将 `vTaskList` 缓冲 512 → 768，消除任务列表截断。
+- **验证**：Keil 0/0、GCC 构建通过、`APP_flash.bin` 重新生成；上板复测通过
+  （IDLE 99%、其余任务 0%，数值稳定合理）。
+
+### 9.3 sysmon 任务列表截断 + EventBus 栈余量过低（上板发现）
+- **现象**：`sysmon` 的 TASKS 段在约 230 字节处被截断（`taskstats` 正常），
+  且 `eventBusTask` 栈余量最低只剩 184 字节。
+- **根因**：一次性打印超长字符串（vTaskList 全量输出 + 头部）越过日志缓冲边界；
+  新版 `sysmon`（1 s 延时 + CPU 统计）放大了 EventBus 任务的栈压力。
+- **解决**：任务列表改为 `uxTaskGetSystemState` **逐行格式化输出**（每行均短，
+  彻底绕开长串截断）；`eventBusTask` 栈 2048 → 4096 字节。
+- **验证**：Keil 0/0、GCC 构建通过、DAP 烧录 Verify OK；上板复测通过
+  （TASKS 9 任务完整、eventBusTask 栈余量 184 → 902）。
+
+---
+
+## 10. 实机测试记录（2026-08，DAP + 双串口联调）
+
+### 10.1 烧录/复位/启动链路
+- DAP（CMSIS-DAP）+ Keil `-f` 烧录：Erase / Programming / Verify OK；
+- shell `reset` 软复位：BOOT 校验魔数 → 跳转 APP → 9 模块初始化全流程正常；
+- 复位原因识别：手动复位=External pin reset。
+
+### 10.2 HOSTLINK 协议全功能回归（COM13, 921600，10/10 通过）
+| # | 用例 | 结果 |
+| --- | --- | --- |
+| 1 | GET_INFO 版本查询 | ✅ 协议 v1 / APP 1.0.0 |
+| 2 | READ_VAR 结构 | ✅ 返回 id/len/reserved/value |
+| 3 | WRITE_VAR 写 12345 | ✅ 无错误响应 |
+| 4 | 回读=12345 | ✅ |
+| 5 | 长度字段越界 | ✅ 拒绝并回 BAD_PAYLOAD_LEN |
+| 6 | 未知命令 0xFF | ✅ 回 UNKNOWN_CMD 错误帧 |
+| 7 | LIST_VARS 非法 payload | ✅ 回 BAD_PAYLOAD_LEN |
+| 8 | 坏 CRC | ✅ 丢弃无响应 |
+| 9 | 写后持久 | ✅ 仍为 12345 |
+| 10 | 恢复 writable=0 | ✅ |
+
+### 10.3 发现与说明
+- 协议暂无“取消订阅”命令：SUBSCRIBE 后数据帧持续上报，需复位或重新订阅清零；
+  如需可后续新增 `CMD_UNSUBSCRIBE`（当前不影响功能）。
+
+### 10.4 逻辑分析仪全量测试（PB4 ← PC6 100Hz PWM，占空比 ~5%）
+
+**DMA 流模式（TIM1+DMA2，100 kHz）**
+| 指标 | 实测 | 理论 | 结果 |
+| --- | --- | --- | --- |
+| 采样率 | 200112 样本 / 2 s | 100 kHz | ✅ |
+| 信号频率 | 100.0 Hz（周期 1000.0 样本） | 100 Hz | ✅ |
+| 占空比 | 4.9% | ~5% | ✅ |
+
+**时间戳模式（EXTI 双边沿）**：2 s 采集 704 边沿（≈100 Hz × 2 边沿 × 窗口），
+时间戳与状态字正确。
+
+**触发模式（CH4 上升沿 + 自动停采）**：13 s 后自动停采，样本 **2051** =
+后触发 2048 + 预触发 3，预触发数据完整保留，触发状态机（armed→fire→disarm→
+auto-stop）全部按设计工作。
+
+### 10.5 测试期间修复：大体积日志静默丢帧
+- **根因**：`la_dump` 一次性快速输出 18 KB，2 KB 日志流缓冲被灌满后 `LOG_Printf`
+  静默丢弃（115200 波特率排空约 11.5 KB/s，生成速度远超排空速度）。
+- **解决**：导出命令按行限速（每行 `vTaskDelay(10ms)`），匹配串口吞吐。
+- **验证**：2048 样本完整导出（此前仅 337 样本即被截断）。
+
+---
+
+## 11. 逻辑分析仪 MCU 端极致化（2026-08）
+
+### 11.1 新增能力
+- **条件触发**：边沿 + 条件通道电平组合（如 I2C START = SDA 下降沿且 SCL 为高）；
+  命令 `la_trig <type> <ch> [post] [cond_ch] [cond_level]`。
+- **可配置触发深度**：`post` 参数设定触发后自动停采点数。
+- **DMA 双缓冲模式**：`la_dma_buf <sram|iram>` 运行时切换
+  （IRAM 8192 点 / SRAM 32768 点，采集中禁止切换）。
+- **溢出检测**：DMA 错误回调 + overrun 标志，`la_dma_stat` 可查。
+- **状态查询**：`la_info`（缓冲/自检/触发配置）、`la_dma_stat`（计数/溢出/缓冲）。
+- **全缓冲导出**：`la_dump` 上限提升到当前缓冲深度，按行限速防丢帧。
+
+### 11.2 实测数据
+| 模式 | 速率 | 结果 |
+| --- | --- | --- |
+| IRAM 8192 | 10 MHz | 21.4M 样本/2s，无溢出（≥21 MHz 仍可用） |
+| SRAM 32768 | 100 kHz | 深捕获正常，无溢出 |
+| SRAM 32768 | ~6 MHz | FSMC 带宽上限（更高速率建议 IRAM） |
+| 条件触发正向 | CH4↑ 且 CH2==0 | 2051 样本，触发正常 |
+| 条件触发反向 | CH4↑ 且 CH2==1（恒假） | 0 样本，永不触发 ✅ |
+| SRAM 波形 | 100Hz PWM | 周期 1000 样本 / 占空比 4.9% ✅ |

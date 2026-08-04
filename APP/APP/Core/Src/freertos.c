@@ -77,7 +77,7 @@ const osThreadAttr_t loggerTXTask_attributes = {
 osThreadId_t eventBusTaskHandle;
 const osThreadAttr_t eventBusTask_attributes = {
   .name = "eventBusTask",
-  .stack_size = 512 * 4,
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityRealtime,
 };
 

@@ -26,6 +26,7 @@ static void DataAgentTaskFunc(void *arg)
             WDOG_RegisterTask("DataAgent", self, 5000);
             wdg_registered = 1;
         }
+        WDOG_Kick(self);    /* 心跳必须无条件上报，与是否有订阅无关 */
 
         g_system_tick = xTaskGetTickCount();
 
@@ -62,7 +63,6 @@ static void DataAgentTaskFunc(void *arg)
         buf[4] = (payload_len >> 8) & 0xFF;
 
         DataLink_SendPacket(buf, idx);          /* 自动追加 CRC */
-        WDOG_Kick(self);
     }
 }
 
