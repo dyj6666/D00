@@ -11,6 +11,8 @@ class Command(IntEnum):
     DATA      = 0x03
     READ_VAR  = 0x04
     WRITE_VAR = 0x05
+    GET_INFO  = 0x06
+    ERROR     = 0xFE
 
 class VarType(IntEnum):
     UINT8 = 0

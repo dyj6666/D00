@@ -245,9 +245,9 @@
                 <Size>0x0</Size>
               </Ocm6>
               <IRAM>
-                <Type>0</Type>
+                <Type>1</Type>
                 <StartAddress>0x20000000</StartAddress>
-                <Size>0x1c000</Size>
+                <Size>0x20000</Size>
               </IRAM>
               <IROM>
                 <Type>1</Type>
@@ -281,8 +281,8 @@
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
-                <StartAddress>0x0</StartAddress>
-                <Size>0x0</Size>
+                <StartAddress>0x20000000</StartAddress>
+                <Size>0x20000</Size>
               </OCR_RVCT5>
               <OCR_RVCT6>
                 <Type>0</Type>
@@ -300,9 +300,9 @@
                 <Size>0x0</Size>
               </OCR_RVCT8>
               <OCR_RVCT9>
-                <Type>0</Type>
+                <Type>1</Type>
                 <StartAddress>0x20000000</StartAddress>
-                <Size>0x30000</Size>
+                <Size>0x20000</Size>
               </OCR_RVCT9>
               <OCR_RVCT10>
                 <Type>0</Type>
@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F407xx,AES256=1</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../component/wolfSSL/inc</IncludePath>
+              <IncludePath>../Core/Inc;../Config;../BootApp;../BootServices;../Drivers/STM32F4xx_HAL_Driver/Inc;../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F4xx/Include;../Drivers/CMSIS/Include;../component/wolfSSL/inc</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -371,7 +371,7 @@
             <TextAddressRange></TextAddressRange>
             <DataAddressRange></DataAddressRange>
             <pXoBase></pXoBase>
-            <ScatterFile></ScatterFile>
+  <ScatterFile>BOOT\BOOT.sct</ScatterFile>
             <IncludeLibs></IncludeLibs>
             <IncludeLibsPath></IncludeLibsPath>
             <Misc></Misc>
@@ -397,47 +397,52 @@
             <File>
               <FileName>crc32.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\crc32.c</FilePath>
+              <FilePath>..\BootServices\crc32.c</FilePath>
             </File>
             <File>
               <FileName>ymodem.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\ymodem.c</FilePath>
+              <FilePath>..\BootServices\ymodem.c</FilePath>
             </File>
             <File>
               <FileName>fifo.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\fifo.c</FilePath>
+              <FilePath>..\BootServices\fifo.c</FilePath>
             </File>
             <File>
               <FileName>ymodem_port.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\ymodem_port.c</FilePath>
+              <FilePath>..\BootServices\ymodem_port.c</FilePath>
             </File>
             <File>
               <FileName>flash_if.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\flash_if.c</FilePath>
+              <FilePath>..\BootServices\flash_if.c</FilePath>
             </File>
             <File>
               <FileName>aes.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\aes.c</FilePath>
+              <FilePath>..\BootServices\aes.c</FilePath>
             </File>
             <File>
               <FileName>security.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\security.c</FilePath>
+              <FilePath>..\BootServices\security.c</FilePath>
             </File>
             <File>
               <FileName>my_sha256.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\my_sha256.c</FilePath>
+              <FilePath>..\BootServices\my_sha256.c</FilePath>
             </File>
             <File>
               <FileName>uECC.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\Core\Src\uECC.c</FilePath>
+              <FilePath>..\BootServices\uECC.c</FilePath>
+            </File>
+            <File>
+              <FileName>boot_app.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BootApp\boot_app.c</FilePath>
             </File>
             <File>
               <FileName>main.c</FileName>

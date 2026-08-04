@@ -74,37 +74,6 @@ bool flash_erase(uint32_t start_addr, uint32_t end_addr) {
 }
 
 /*----------------------------------------------------------------------------
- * Program one word (register-level, no HAL)
- *----------------------------------------------------------------------------*/
-static bool flash_program_word(uint32_t addr, uint32_t data) {
-    /* Wait until flash is not busy */
-    while (FLASH->SR & FLASH_SR_BSY);
-
-    /* Clear any previous error flags */
-    FLASH->SR = (FLASH_SR_PGSERR | FLASH_SR_PGPERR | FLASH_SR_PGAERR | FLASH_SR_WRPERR);
-
-    /* Enable programming */
-    FLASH->CR |= FLASH_CR_PG;
-
-    /* Write the word */
-    *(volatile uint32_t *)addr = data;
-
-    /* Wait for completion */
-    while (FLASH->SR & FLASH_SR_BSY);
-
-    /* Check for errors */
-    uint32_t sr = FLASH->SR;
-    if (sr & (FLASH_SR_PGSERR | FLASH_SR_PGPERR | FLASH_SR_PGAERR | FLASH_SR_WRPERR)) {
-        FLASH->CR &= ~FLASH_CR_PG;
-        return false;
-    }
-
-    /* Disable programming */
-    FLASH->CR &= ~FLASH_CR_PG;
-    return true;
-}
-
-/*----------------------------------------------------------------------------
  * Write bytes (uses register-level program, interrupts disabled)
  *----------------------------------------------------------------------------*/
 bool flash_write(uint32_t addr, const uint8_t *data, uint32_t len) {

@@ -35,3 +35,52 @@
 ## 3. 待办
 
 - 上板回归：升级请求 → OTA → 校验 → 跳转 → 运行，全链路验证。
+
+---
+
+## 4. 分层重构（2026-08）
+
+### 4.1 目录分层
+- 原 `Core/Src`、`Core/Inc` 业务代码平铺 → 参照 APP 分层拆解：
+  - `BootApp/`   应用层：启动流程 / APP 校验 / 跳转 / 升级状态机
+    （从 main.c 抽离，main.c 由 379 行瘦身到 162 行，仅保留 CubeMX 骨架）；
+  - `BootServices/` 服务层：ymodem / ymodem_port / flash_if / security /
+    aes / my_sha256 / uECC / crc32 / fifo；
+  - `Config/`   配置集中：boot_config.h；
+  - `Core/`     仅保留 CubeMX 生成文件（main/gpio/dma/iwdg/rtc/usart/it/msp/system）。
+- Keil 工程与 include 路径同步更新。
+
+### 4.2 构建与测试
+- 新增 **GCC 交叉编译目标**（`CMakeLists.txt` + `Core/Startup/BOOT.ld` +
+  `cmake/toolchain-stm32f4.cmake`），独立产出 BOOT.bin；
+- 新增 **主机单元测试**（`tests/test_services.c`：CRC-32 标准向量 +
+  FIFO 容量/环绕），CMake host 目标。
+
+### 4.3 顺手修复
+- `my_sha256.c` 缺失末尾换行（Keil #1-D 告警）；
+- `flash_if.c` 未使用的 `flash_program_word` 静态函数（Keil #177-D 告警）；
+- `security.h` 的 ARMCC `#pragma diag_suppress` 增加编译器条件守卫（GCC 兼容）。
+
+### 4.4 验证
+- Keil 全量重编译：0 Error / 0 Warning；
+- GCC 固件交叉编译：通过（text≈44.7 KB < 64 KB Flash）；
+- 主机单元测试：全部通过。
+
+### 4.5 192 KB RAM“幽灵”根因（重要复盘点）
+- **现象**：BOOT.sct 手改为 128 KB 后，每次 `UV4 -r` 重建都被覆盖回 192 KB
+  （`RW_IRAM1 0x20000000 0x00030000`）。
+- **排查过程**：改 `<IRAM>`、`<ScatterFile>`、`OCR_RVCT5`、设只读均无效——
+  Keil 每次重建都重新生成 sct。
+- **真正根因**：`BOOT.uvprojx` 的 **`OCR_RVCT9`**（散列模式 RAM 区域）被配置成
+  `0x20000000 / 0x30000`（192 KB），Keil 生成器按它生成 sct。
+  STM32F407 主 SRAM 仅 128 KB（0x20000000~0x2001FFFF）。
+- **解决**：`OCR_RVCT9` 改为 `0x20000000 / 0x20000`（Type=1），
+  重建后 sct 正确生成 128 KB 且不再被覆盖。
+- **验证**：BOOT `-r -b` 0/0，sct 保持 `RW_IRAM1 0x00020000`。
+
+### 4.6 烧录与工具链优化（2026-08）
+- **BOOT 下载擦除模式**：`CMSIS_AGDI` 的 `-FO` 从 23（Full Chip Erase）改为 15
+  （Erase Sectors）——烧 BOOT 不再整片擦除，APP 与有效性魔数得以保留；
+  实测日志由 `Full Chip Erase Done` 变为 `Erase Done`，烧录后自动运行且 APP 正常跳转。
+- **OTA_Tool 迁移**：升级工具本质是上位机，已整体迁移至 `HOST/OTA_Tool/`
+  （加密打包 + YMODEM 发送，COM 口 115200），与 VLink_Debugger 并列。

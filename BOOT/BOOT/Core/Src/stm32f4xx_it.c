@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usart.h"
+#include "ymodem_port.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/

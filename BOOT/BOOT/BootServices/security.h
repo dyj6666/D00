@@ -1,4 +1,6 @@
+#if defined(__CC_ARM) || defined(__ARMCC_VERSION)
 #pragma diag_suppress 1
+#endif
 #ifndef SECURITY_H
 #define SECURITY_H
 

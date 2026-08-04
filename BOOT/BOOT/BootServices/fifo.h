@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define FIFO_SIZE 2048
+#define FIFO_SIZE 2048    /* 缓冲大小；实际容量为 FIFO_SIZE-1（环空/满判定占一格） */
 
 typedef struct {
     uint8_t  buffer[FIFO_SIZE];
