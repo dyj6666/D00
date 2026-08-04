@@ -8,7 +8,7 @@
 D00/
 ├── APP/     应用固件工程（FreeRTOS + HOSTLINK 协议 + 逻辑分析仪）
 ├── BOOT/    安全 OTA 引导工程（AES/ECC/SHA256 验签 + YMODEM 传输）
-├── HOST/    上位机（VLink_Debugger 调试器 + OTA_Tool 升级工具，Python）
+├── HOST/    上位机（VLink_Debugger 调试器 + OTA_Tool 升级工具 + LogicAnalyzer 逻辑分析仪）
 ├── .gitignore   统一忽略规则（Keil/GCC/Python 产物）
 └── LICENSE
 ```
@@ -19,7 +19,7 @@ D00/
 | --- | --- | --- |
 | **APP** | 业务固件 | 事件总线、变量管理器、HOSTLINK 协议、任务级看门狗、8 通道逻辑分析仪（条件触发 / DMA 双缓冲） |
 | **BOOT** | 安全引导 | 升级标志检测、APP 有效性魔数校验、YMODEM 接收、AES-CTR 解密、ECC/SHA256 验签、防回滚、跳转前外设清理 |
-| **HOST** | 上位机 | VLink_Debugger（HOSTLINK 客户端/波形）、OTA_Tool（安全固件打包 + YMODEM 升级） |
+| **HOST** | 上位机 | VLink_Debugger（HOSTLINK 客户端/波形）、OTA_Tool（安全固件升级）、LogicAnalyzer（8 通道逻辑分析仪） |
 
 ## 构建指引
 
@@ -64,6 +64,12 @@ python tests/test_protocol.py   # 协议层单元测试
 # OTA_Tool：BOOT 安全升级工具（加密打包 + YMODEM 发送，COM 口 115200）
 cd HOST/OTA_Tool
 python main.py                   # GUI 或参考 test_send.py 脚本化驱动
+
+# LogicAnalyzer：8 通道逻辑分析仪（控制口 115200 + 数据口 921600）
+cd HOST/LogicAnalyzer
+pip install -r requirements.txt
+python main.py
+python tests/test_decoders.py    # 解码器单元测试
 ```
 
 ## 三工程联动契约
@@ -94,6 +100,7 @@ BOOT(0x08000000, 64KB) ──跳转──▶ APP(0x08010000, 256KB) ──HOSTLI
 | BOOT 工程日志 | `BOOT/BOOT/Other/ENGINEERING_LOG.md` | BOOT 问题复盘 + 联动契约 |
 | HOST 说明 | `HOST/VLink_Debugger/README.md` | 结构、运行、测试 |
 | HOST 升级工具 | `HOST/OTA_Tool/` | BOOT 安全 OTA 打包与发送（UID 派生密钥 + ECC 签名） |
+| HOST 逻辑分析仪 | `HOST/LogicAnalyzer/README.md` | 8 通道采集/波形/UART·I2C·SPI 解码 |
 
 ## 协作约定
 

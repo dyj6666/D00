@@ -7,7 +7,9 @@
 #include "protocol.h"
 #include "queue.h"
 #include "stream_buffer.h"
+#include "task.h"
 #include "var_manager.h"
+#include "la_sample.h"
 
 #include <string.h>
 
@@ -269,6 +271,49 @@ static void handle_command(const uint8_t *data, uint16_t len)
             uint8_t ver[4];
             Protocol_GetVersion(ver);
             DataLink_SendFrame(CMD_GET_INFO, ver, sizeof(ver));
+            break;
+        }
+
+        case CMD_LA_DUMP: {
+            /* 请求：offset(u32 LE) + count(u32 LE)
+             * 响应：多帧 CMD_LA_DUMP，payload = offset(u32) + sent(u16) + samples(4B each)
+             * 从逻辑分析仪 DMA 缓冲导出原始采样（二进制，供上位机分析）。 */
+            if (f.payload_len != 8) {
+                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                break;
+            }
+            uint32_t offset = (uint32_t)(f.payload[0] | (f.payload[1] << 8) |
+                                         (f.payload[2] << 16) | (f.payload[3] << 24));
+            uint32_t count = (uint32_t)(f.payload[4] | (f.payload[5] << 8) |
+                                        (f.payload[6] << 16) | (f.payload[7] << 24));
+
+            uint32_t buf_size = LA_Sample_GetDMABufferSize();
+            if (offset >= buf_size || count == 0) {
+                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                break;
+            }
+            if (count > buf_size - offset) count = buf_size - offset;
+
+            /* 每帧最多 28 个样本（payload 121 字节内），帧间限速防 TX 流缓冲溢出 */
+            uint8_t samples[28 * 4];
+            uint32_t sent = 0;
+            while (sent < count) {
+                uint32_t n = count - sent;
+                if (n > 28) n = 28;
+                LA_Sample_ReadDMABuffer((uint32_t *)samples, offset + sent, n);
+
+                uint8_t payload[4 + 2 + 28 * 4];
+                payload[0] = offset & 0xFF;
+                payload[1] = (offset >> 8) & 0xFF;
+                payload[2] = (offset >> 16) & 0xFF;
+                payload[3] = (offset >> 24) & 0xFF;
+                payload[4] = (uint8_t)(n & 0xFF);
+                payload[5] = (uint8_t)((n >> 8) & 0xFF);
+                memcpy(&payload[6], samples, n * 4);
+                DataLink_SendFrame(CMD_LA_DUMP, payload, 6 + n * 4);
+                sent += n;
+                vTaskDelay(pdMS_TO_TICKS(2));   /* 匹配 921600 波特率排空速度 */
+            }
             break;
         }
 

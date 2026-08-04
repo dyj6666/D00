@@ -31,6 +31,7 @@
 #define CMD_READ_VAR        0x04
 #define CMD_WRITE_VAR       0x05
 #define CMD_GET_INFO        0x06
+#define CMD_LA_DUMP         0x07
 #define CMD_ERROR           0xFE
 
 /* ---------------- 错误码 ---------------- */

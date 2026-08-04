@@ -303,3 +303,20 @@ auto-stop）全部按设计工作。
 | 条件触发正向 | CH4↑ 且 CH2==0 | 2051 样本，触发正常 |
 | 条件触发反向 | CH4↑ 且 CH2==1（恒假） | 0 样本，永不触发 ✅ |
 | SRAM 波形 | 100Hz PWM | 周期 1000 样本 / 占空比 4.9% ✅ |
+
+---
+
+## 12. 逻辑分析仪上位机配套（2026-08）
+
+### 12.1 新增 `CMD_LA_DUMP` 二进制高速导出
+- **动机**：shell 文本导出（115200）太慢，无法支撑上位机实时分析。
+- **实现**：HOSTLINK 新增 `CMD_LA_DUMP(0x07)`，请求 `offset(u32)+count(u32)`，
+  响应分帧回传原始 32 位采样（每帧 28 样本，帧间限速防 TX 流缓冲溢出）。
+- **验证**：实机 921600 下载 1024 样本，PWM 模式正确（占空比 4.9%）。
+
+### 12.2 上位机 LogicAnalyzer Pro
+- 位置：`HOST/LogicAnalyzer/`，PyQt5 + pyqtgraph + numpy。
+- 功能：采集控制（shell）+ 二进制下载（HOSTLINK）、8 通道波形/缩放/光标/区间测量、
+  UART/I2C/SPI 解码器（纯逻辑可单测）、位视图（二进制/HEX/十进制/ASCII）、CSV 导出。
+- 验证：解码器单元测试全绿（UART 0x55 / I2C START-ADDR-DATA-STOP / SPI MOSI·MISO）；
+  UI 离屏加载 + 波形冒烟通过。
