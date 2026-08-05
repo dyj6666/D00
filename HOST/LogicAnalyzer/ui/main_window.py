@@ -43,22 +43,26 @@ class CaptureThread(QtCore.QThread):
 
 class DecodeThread(QtCore.QThread):
     finished_ok = QtCore.Signal(object)
+    failed = QtCore.Signal(str)
 
     def __init__(self, trace, protocol, cfg, parent=None):
         super().__init__(parent)
         self._t = (trace, protocol, cfg)
 
     def run(self):
-        trace, protocol, cfg = self._t
-        if protocol == "UART":
-            packets = dec.decode_uart(trace.samples, trace.rate, cfg)
-        elif protocol == "I2C":
-            packets = dec.decode_i2c(trace.samples, trace.rate, cfg)
-        elif protocol == "SPI":
-            packets = dec.decode_spi(trace.samples, trace.rate, cfg)
-        else:
-            packets = []
-        self.finished_ok.emit(DecodeResult(protocol, packets))
+        try:
+            trace, protocol, cfg = self._t
+            if protocol == "UART":
+                packets = dec.decode_uart(trace.samples, trace.rate, cfg)
+            elif protocol == "I2C":
+                packets = dec.decode_i2c(trace.samples, trace.rate, cfg)
+            elif protocol == "SPI":
+                packets = dec.decode_spi(trace.samples, trace.rate, cfg)
+            else:
+                packets = []
+            self.finished_ok.emit(DecodeResult(protocol, packets))
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(str(e))
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -336,7 +340,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(f"正在解码 {proto} ...")
         self._dthread = DecodeThread(self.trace, proto, cfg)
         self._dthread.finished_ok.connect(self._on_decode_done)
+        self._dthread.failed.connect(self._on_decode_failed)
         self._dthread.start()
+
+    def _on_decode_failed(self, msg: str):
+        self.statusBar().showMessage(f"解码失败: {msg}")
 
     def _on_decode_done(self, result: DecodeResult):
         self.packet_panel.set_packets(result.packets, self.trace.rate)

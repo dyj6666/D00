@@ -38,9 +38,13 @@ def _decode_uart_line(bits: np.ndarray, rate: int, cfg: UartConfig,
                       line_name: str) -> List[Packet]:
     spb = rate / cfg.baud         # 每 bit 的样本数（浮点）
     packets: List[Packet] = []
+    if spb < 2.0:
+        # 每 bit 不足 2 个样本无法可靠解码（如 100kHz 采样 115200 波特率），
+        # 提前返回避免 int(spb)==0 时循环越界。
+        return packets
     n = len(bits)
     i = 0
-    while i < n - int(spb):
+    while i < n - 1:
         # 找起始位：下降沿（1→0）后电平保持低至少 0.5 bit。
         # 注意 start 取下降沿后的第一个低样本（i+1），否则起始位中心整体
         # 前移 1 个样本，数据位采样在非整数 spb 下会错位。
