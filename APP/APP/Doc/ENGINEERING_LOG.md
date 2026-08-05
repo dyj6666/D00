@@ -350,3 +350,14 @@ auto-stop）全部按设计工作。
     与信号源完全吻合；
   - CH1~3 恒为板载空闲高电平（无线 CE/CS、LCD CS、摄像头复位相关电路默认电平），
     无任何总线伪信号，4 通道映射与归一化正确。
+
+### 12.4 UART 信号发生器 hex 模式与复杂帧验证
+- **动机**：文本模式（HELLO）只覆盖可打印 ASCII，无法验证 0x00/0xFF/0x80 等
+  边界值与二进制协议帧；新增 `sg_uart_hex` 命令按十六进制字符串发送任意字节帧。
+- **实现**：`signal_gen.c` 重构为字节缓冲（`sg_data`+`sg_len`），
+  `SG_UartStartHex()` 解析偶数长度 hex 串（非法字符返回 -1）；
+  shell 新增 `sg_uart_hex <baud> <hexstr> [interval_ms]`。
+- **实机验证**（115200，帧 `AA 55 08 00 FF 7F 80 0D 0A 5A 4B`，11 字节 × 6 帧）：
+  - 解码 66 字节：帧内字节逐位匹配，0x00/0xFF/0x7F/0x80/CR/LF 全部正确；
+  - 位标注（S/Dn/STOP/HEX+ASCII）与解码结果一致；
+  - 上位机波形协议位标注功能（字节级 HEX+ASCII 汇总 + 位级 S/D/STOP）同步验证通过。

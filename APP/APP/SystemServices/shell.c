@@ -42,6 +42,7 @@ static void cmd_la_state(const char *args);
 static void cmd_la_peek(const char *args);
 static void cmd_sg_uart_start(const char *args);
 static void cmd_sg_uart_stop(const char *args);
+static void cmd_sg_uart_hex(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",         cmd_help},
@@ -65,6 +66,7 @@ static const cmd_entry_t cmd_table[] = {
     {"la_peek",      cmd_la_peek},
     {"sg_uart_start", cmd_sg_uart_start},
     {"sg_uart_stop",  cmd_sg_uart_stop},
+    {"sg_uart_hex",   cmd_sg_uart_hex},
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
@@ -407,4 +409,19 @@ static void cmd_sg_uart_stop(const char *args)
     (void)args;
     SG_UartStop();
     LOG_Printf("SG UART: stopped\r\n");
+}
+
+static void cmd_sg_uart_hex(const char *args)
+{
+    uint32_t baud = 115200;
+    char hex[SG_TEXT_MAX * 2 + 1] = {0};
+    int interval = 5;
+    if (args && *args) {
+        sscanf(args, "%lu %127s %d", &baud, hex, &interval);
+    }
+    if (interval < 1) interval = 1;
+    int ret = SG_UartStartHex(baud, hex, (uint16_t)interval);
+    LOG_Printf("SG UART HEX: %s (baud=%lu len=%zu bytes interval=%dms)\r\n",
+               ret == 0 ? "STARTED" : "FAILED",
+               (unsigned long)baud, strlen(hex) / 2, interval);
 }

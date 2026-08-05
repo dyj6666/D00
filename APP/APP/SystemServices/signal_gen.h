@@ -16,6 +16,10 @@
  * 成功返回 0；参数非法返回 -1，外设初始化失败返回 -2，任务创建失败返回 -3。 */
 int    SG_UartStart(uint32_t baud, const char *text, uint16_t interval_ms);
 
+/* 十六进制模式：hex 为偶数字符串（如 "AA550801FF"），解析为字节帧发送。
+ * 支持 0x00/0xFF 等任意二进制值，便于协议帧验证。返回码同 SG_UartStart。 */
+int    SG_UartStartHex(uint32_t baud, const char *hex, uint16_t interval_ms);
+
 /* 停止发生器（PC6 保持 USART6_TX 空闲高电平，复位后恢复 TIM8 PWM） */
 void   SG_UartStop(void);
 
