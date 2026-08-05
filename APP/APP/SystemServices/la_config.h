@@ -3,6 +3,7 @@
 #define LA_CONFIG_H
 
 #include <stdint.h>
+#include "stm32f4xx.h"
 
 typedef enum {
     LA_MODE_IDLE = 0,
@@ -35,12 +36,20 @@ typedef struct {
 #define LA_DMA_SRAM_SIZE      32768
 #define LA_DMA_SRAM_ADDR      LA_SRAM_START_ADDR
 
+/* ---------------- 采样通道映射（改这里即可换引脚） ----------------
+ * LA_GPIO_PORT      采样端口（DMA 单端口读取）
+ * LA_CHANNEL_PINS   通道 0..7 对应的引脚，0 表示该通道未使用；
+ *                   导出时自动归一化为 数据位 i = 通道 i（上位机无需感知）。
+ * 当前 4 通道：探索者V3 的 PG6/PG7/PG12/PG15（全部“完全独立”）。
+ */
+#define LA_GPIO_PORT         GPIOG
+#define LA_CHANNEL_PINS      {GPIO_PIN_6, GPIO_PIN_7, GPIO_PIN_12, GPIO_PIN_15, \
+                               0, 0, 0, 0}
+
 /* ---------------- 时间戳模式 ---------------- */
 #define PRE_TRIGGER_DEPTH    1024    /* 预触发环形缓冲深度（内部 RAM） */
 #define LA_MAX_CHANNELS      8
 #define LA_TIMESTAMP_TIMER   TIM2
-#define LA_GPIO_PORT         GPIOB
-#define LA_GPIO_PIN_MASK     0x00FF
 
 /* 采样点结构：3 个 16 位字，适配外部 16 位 SRAM */
 typedef struct {

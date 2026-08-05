@@ -97,7 +97,7 @@ static void test_var_list_packets(void)
 {
     static const char *names[] = {
         "sys_tick", "led_state", "key_count", "ota_status", "la_samples",
-        "la_ch0", "la_ch4", "temp", "voltage", "current",
+        "la_ch0", "la_ch3", "temp", "voltage", "current",
         "pwm_duty", "adc_ch0", "adc_ch1", "adc_ch2", "angle",
         "speed", "accel_x", "accel_y", "accel_z", "gyro_z"
     };

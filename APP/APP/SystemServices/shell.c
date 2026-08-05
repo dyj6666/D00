@@ -37,7 +37,7 @@ static void cmd_la_dump(const char *args);
 static void cmd_la_dma_stat(const char *args);
 static void cmd_la_dma_buf(const char *args);
 static void cmd_la_info(const char *args);
-static void cmd_la_read_pb4(const char *args);
+static void cmd_la_state(const char *args);
 static void cmd_la_peek(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
@@ -58,7 +58,7 @@ static const cmd_entry_t cmd_table[] = {
     {"la_dma_stat",  cmd_la_dma_stat},
     {"la_dma_buf",   cmd_la_dma_buf},
     {"la_info",      cmd_la_info},
-    {"la_read_pb4",  cmd_la_read_pb4},
+    {"la_state",     cmd_la_state},
     {"la_peek",      cmd_la_peek},
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
@@ -365,15 +365,19 @@ static void cmd_la_info(const char *args)
     }
 }
 
-static void cmd_la_read_pb4(const char *args)
+static void cmd_la_state(const char *args)
 {
     (void)args;
-    LOG_Printf("PB4 = %d\r\n", (LA_Sample_GetChannelStates() & 0x10) ? 1 : 0);
+    uint8_t states = LA_Sample_GetChannelStates();
+    LOG_Printf("CH states: 0x%02X (CH0=%d CH1=%d CH2=%d CH3=%d)\r\n",
+               states, (states >> 0) & 1, (states >> 1) & 1,
+               (states >> 2) & 1, (states >> 3) & 1);
 }
 
 static void cmd_la_peek(const char *args)
 {
     (void)args;
-    LOG_Printf("PB4=%d, la_ch4=%lu, la_samples=%lu\r\n",
-               (LA_Sample_GetChannelStates() & 0x10) ? 1 : 0, la_ch4_state, la_samples);
+    uint8_t states = LA_Sample_GetChannelStates();
+    LOG_Printf("states=0x%02X, ch0=%d, ch3=%d, la_samples=%lu\r\n",
+               states, (states & 0x01) ? 1 : 0, la_ch3_state, la_samples);
 }

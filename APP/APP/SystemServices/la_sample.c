@@ -11,13 +11,13 @@
 /* 采样状态变量（供 shell / 变量注册使用） */
 uint32_t la_samples = 0;
 uint32_t la_ch0_state = 0;
-uint32_t la_ch4_state = 0;
+uint32_t la_ch3_state = 0;
 
 void LA_RegisterVariables(void)
 {
     VAR_Register(VAR_ID_LA_SAMPLES, "la_samples", VAR_TYPE_INT32, 0, &la_samples);
     VAR_Register(VAR_ID_LA_CH0,     "la_ch0",     VAR_TYPE_INT32, 0, &la_ch0_state);
-    VAR_Register(VAR_ID_LA_CH4,     "la_ch4",     VAR_TYPE_INT32, 0, &la_ch4_state);
+    VAR_Register(VAR_ID_LA_CH3,     "la_ch3",     VAR_TYPE_INT32, 0, &la_ch3_state);
 }
 
 /* --------------------- 时间戳模式（EXTI）相关 --------------------- */
@@ -32,10 +32,12 @@ static volatile uint8_t  capture_done = 0;
 static uint8_t last_trigger_state = 0xFF;   /* 触发通道上一状态，用于边沿检测 */
 
 /* --------------------- DMA 流模式相关 ---------------------
- * 引擎：TIM1 更新事件 -> DMA2_Stream5(Ch6) 将 GPIOB->IDR 整字搬入环形缓冲。
+ * 引擎：TIM1 更新事件 -> DMA2_Stream5(Ch6) 将 LA_GPIO_PORT->IDR 整字搬入环形缓冲。
  * TIM1 位于 APB2(168MHz)，采样率由 PSC/ARR 组合精确设定。
  * DMA1 无法访问 AHB1（GPIO），因此不能用 TIM3+DMA1 做此功能。 */
 #define LA_TIM_CLOCK_HZ  168000000UL
+/* 通道→引脚映射（LA_CHANNEL_PINS），0 = 通道未使用 */
+static const uint16_t la_ch_pins[LA_MAX_CHANNELS] = LA_CHANNEL_PINS;
 static uint32_t la_stream_iram[LA_DMA_IRAM_SIZE] __attribute__((aligned(4)));
 static uint32_t *la_stream_buf = (uint32_t *)LA_DMA_SRAM_ADDR;
 static uint32_t la_dma_buf_size = LA_DMA_SRAM_SIZE;
@@ -133,12 +135,8 @@ void LA_Sample_Start(LA_SampleMode mode)
             LA_Trigger_Arm();
         }
 
-        HAL_NVIC_EnableIRQ(EXTI0_IRQn);
-        HAL_NVIC_EnableIRQ(EXTI1_IRQn);
-        HAL_NVIC_EnableIRQ(EXTI2_IRQn);
-        HAL_NVIC_EnableIRQ(EXTI3_IRQn);
-        HAL_NVIC_EnableIRQ(EXTI4_IRQn);
         HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+        HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
         current_mode = LA_MODE_TIMESTAMP;
     }
@@ -146,22 +144,24 @@ void LA_Sample_Start(LA_SampleMode mode)
 
 void LA_Diag_PrintExtiStatus(void)
 {
-    LOG_Printf("EXTI4 IMR: %s\r\n",
-               (EXTI->IMR & EXTI_IMR_IM4) ? "enabled" : "DISABLED");
-    LOG_Printf("EXTI4 IRQ: %s\r\n",
-               (NVIC->ISER[EXTI4_IRQn >> 5] & (1 << (EXTI4_IRQn & 0x1F))) ?
-               "enabled" : "DISABLED");
+    uint32_t imr = EXTI->IMR;
+    uint32_t nvic95 = NVIC->ISER[EXTI9_5_IRQn >> 5] & (1u << (EXTI9_5_IRQn & 0x1F));
+    uint32_t nvic1510 = NVIC->ISER[EXTI15_10_IRQn >> 5] & (1u << (EXTI15_10_IRQn & 0x1F));
+    LOG_Printf("EXTI IMR: 6=%s 7=%s 12=%s 15=%s\r\n",
+               (imr & EXTI_IMR_IM6) ? "en" : "--",
+               (imr & EXTI_IMR_IM7) ? "en" : "--",
+               (imr & EXTI_IMR_IM12) ? "en" : "--",
+               (imr & EXTI_IMR_IM15) ? "en" : "--");
+    LOG_Printf("NVIC: EXTI9_5=%s EXTI15_10=%s\r\n",
+               nvic95 ? "enabled" : "DISABLED",
+               nvic1510 ? "enabled" : "DISABLED");
 }
 
 void LA_Sample_Stop(void)
 {
     if (current_mode == LA_MODE_TIMESTAMP) {
-        HAL_NVIC_DisableIRQ(EXTI0_IRQn);
-        HAL_NVIC_DisableIRQ(EXTI1_IRQn);
-        HAL_NVIC_DisableIRQ(EXTI2_IRQn);
-        HAL_NVIC_DisableIRQ(EXTI3_IRQn);
-        HAL_NVIC_DisableIRQ(EXTI4_IRQn);
         HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
+        HAL_NVIC_DisableIRQ(EXTI15_10_IRQn);
         current_mode = LA_MODE_IDLE;
 
         /* 触发后停止：把预触发环形缓冲按时间顺序补到 SRAM 缓冲前部
@@ -194,7 +194,15 @@ uint64_t LA_Sample_GetTimestamp(void)
 
 uint8_t LA_Sample_GetChannelStates(void)
 {
-    return (uint8_t)(GPIOB->IDR & 0xFF);
+    /* 打包：数据位 i = 通道 i 的电平（0 = 未使用通道恒 0） */
+    uint16_t idr = (uint16_t)LA_GPIO_PORT->IDR;
+    uint8_t states = 0;
+    for (uint8_t i = 0; i < LA_MAX_CHANNELS; i++) {
+        if (la_ch_pins[i] != 0 && (idr & la_ch_pins[i])) {
+            states |= (uint8_t)(1u << i);
+        }
+    }
+    return states;
 }
 
 void LA_Timestamp_Overflow_Handler(void)
@@ -207,23 +215,18 @@ void LA_Timestamp_Overflow_Handler(void)
 
 static uint8_t la_pin_to_channel(uint16_t pin)
 {
-    switch (pin) {
-        case GPIO_PIN_0: return 0;
-        case GPIO_PIN_1: return 1;
-        case GPIO_PIN_2: return 2;
-        case GPIO_PIN_3: return 3;
-        case GPIO_PIN_4: return 4;
-        case GPIO_PIN_5: return 5;
-        case GPIO_PIN_6: return 6;
-        case GPIO_PIN_7: return 7;
-        default:         return 0xFF;
+    for (uint8_t i = 0; i < LA_MAX_CHANNELS; i++) {
+        if (la_ch_pins[i] == pin) {
+            return i;
+        }
     }
+    return 0xFF;
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
     if (current_mode != LA_MODE_TIMESTAMP) return;
-    if (GPIO_Pin < GPIO_PIN_0 || GPIO_Pin > GPIO_PIN_7) return;
+    if (la_pin_to_channel(GPIO_Pin) == 0xFF) return;
 
     uint64_t timestamp = LA_Sample_GetTimestamp();
     uint8_t states = LA_Sample_GetChannelStates();
@@ -274,19 +277,15 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
         if (post_trigger_count >= cfg.post_samples) {
             /* 触发深度满足，自动停采，保留缓冲数据 */
             capture_done = 1;
-            HAL_NVIC_DisableIRQ(EXTI0_IRQn);
-            HAL_NVIC_DisableIRQ(EXTI1_IRQn);
-            HAL_NVIC_DisableIRQ(EXTI2_IRQn);
-            HAL_NVIC_DisableIRQ(EXTI3_IRQn);
-            HAL_NVIC_DisableIRQ(EXTI4_IRQn);
             HAL_NVIC_DisableIRQ(EXTI9_5_IRQn);
+            HAL_NVIC_DisableIRQ(EXTI15_10_IRQn);
         }
     }
 
     /* 状态变量（调试/上位机读取） */
     la_samples = LA_Buffer_GetCount();
     la_ch0_state = (states & 0x01) ? 1 : 0;
-    la_ch4_state = (states & 0x10) ? 1 : 0;
+    la_ch3_state = (states & 0x08) ? 1 : 0;
 }
 
 /* ================================================================
@@ -334,8 +333,8 @@ void LA_Sample_Start_DMA(uint32_t sample_rate_hz)
     dma_running = 0;
     current_mode = LA_MODE_DMA_STREAM;
 
-    /* 外围地址固定为 GPIOB->IDR（AHB1，仅 DMA2 可访问） */
-    if (HAL_DMA_Start_IT(&hdma_tim1_up, (uint32_t)&GPIOB->IDR,
+    /* 外围地址固定为 LA_GPIO_PORT->IDR（AHB1，仅 DMA2 可访问） */
+    if (HAL_DMA_Start_IT(&hdma_tim1_up, (uint32_t)&LA_GPIO_PORT->IDR,
                          (uint32_t)la_stream_buf, la_dma_buf_size) != HAL_OK) {
         current_mode = LA_MODE_IDLE;
         LOG_Printf("LA: DMA start failed\r\n");
@@ -403,6 +402,14 @@ void LA_Sample_ReadDMABuffer(uint32_t *buf, uint32_t start, uint32_t count)
 {
     if (buf == NULL) return;
     for (uint32_t i = 0; i < count; i++) {
-        buf[i] = la_stream_buf[(start + i) % la_dma_buf_size];
+        /* 归一化：原始 IDR 字 → 通道位打包，保证数据位 i = 通道 i */
+        uint32_t raw = la_stream_buf[(start + i) % la_dma_buf_size];
+        uint32_t packed = 0;
+        for (uint8_t c = 0; c < LA_MAX_CHANNELS; c++) {
+            if (la_ch_pins[c] != 0 && (raw & la_ch_pins[c])) {
+                packed |= (1u << c);
+            }
+        }
+        buf[i] = packed;
     }
 }

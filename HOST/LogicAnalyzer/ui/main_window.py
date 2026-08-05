@@ -25,16 +25,17 @@ class CaptureThread(QtCore.QThread):
     progressed = QtCore.Signal(int, int)
 
     def __init__(self, session, rate, duration, buffer_src, count, trig_args,
-                 parent=None):
+                 nchannels, parent=None):
         super().__init__(parent)
-        self._s = (session, rate, duration, buffer_src, count, trig_args)
+        self._s = (session, rate, duration, buffer_src, count, trig_args,
+                   nchannels)
 
     def run(self):
         try:
-            session, rate, duration, buf, count, trig = self._s
+            session, rate, duration, buf, count, trig, nch = self._s
             trace = session.capture(rate, duration, buf, count,
                                     progress=self.progressed.emit,
-                                    trig_args=trig)
+                                    trig_args=trig, nchannels=nch)
             self.finished_ok.emit(trace)
         except Exception as e:  # noqa: BLE001
             self.failed.emit(str(e))
@@ -63,7 +64,7 @@ class DecodeThread(QtCore.QThread):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("LogicAnalyzer Pro — STM32F407 8CH")
+        self.setWindowTitle("LogicAnalyzer Pro — STM32F407")
         self.resize(1500, 900)
         self.session: CaptureSession | None = None
         self.trace: TraceData | None = None
@@ -122,8 +123,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rate_combo.setEditable(True)
         form.addRow("采样率 Hz", self.rate_combo)
 
+        self.channels_combo = QtWidgets.QComboBox()
+        self.channels_combo.addItems(["4", "8"])
+        self.channels_combo.setCurrentIndex(0)
+        self.channels_combo.currentIndexChanged.connect(
+            lambda _: self._update_decoder_form(self.proto_combo.currentText()))
+        form.addRow("通道数", self.channels_combo)
+
         self.buffer_combo = QtWidgets.QComboBox()
         self.buffer_combo.addItems(["sram", "iram"])
+        # 默认 IRAM：本板 PB1~PB3/PB5~PB7 与外部 SRAM 总线相连，
+        # SRAM 缓冲模式会采到总线写地址的计数序列（非真实信号）
+        self.buffer_combo.setCurrentIndex(1)
         form.addRow("缓冲", self.buffer_combo)
 
         self.duration_spin = QtWidgets.QDoubleSpinBox()
@@ -137,6 +148,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.count_spin.setValue(0)
         self.count_spin.setSpecialValueText("全部")
         form.addRow("下载点数(0=全部)", self.count_spin)
+
+        self.region_check = QtWidgets.QCheckBox("显示测量区（可拖动）")
+        self.region_check.setChecked(True)
+        self.region_check.toggled.connect(
+            lambda on: self.wave.show_region(on))
+        form.addRow(self.region_check)
 
         self.trig_edit = QtWidgets.QLineEdit()
         self.trig_edit.setPlaceholderText("如: 1 4 2048 2 0 (type ch post cond_ch cond_lv)")
@@ -212,6 +229,7 @@ class MainWindow(QtWidgets.QMainWindow):
         while self.decoder_form.rowCount():
             self.decoder_form.removeRow(0)
         self._decoder_spins = {}
+        nch = int(self.channels_combo.currentText())
 
         def spin(name, lo, hi, val, suffix=""):
             s = QtWidgets.QSpinBox()
@@ -224,16 +242,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if protocol == "UART":
             spin("波特率", 1200, 4000000, 115200)
-            spin("TX 通道", 0, 7, 0)
-            spin("RX 通道", 0, 7, 1)
+            spin("TX 通道", 0, nch - 1, 0)
+            spin("RX 通道", 0, nch - 1, 1)
         elif protocol == "I2C":
-            spin("SCL 通道", 0, 7, 0)
-            spin("SDA 通道", 0, 7, 1)
+            spin("SCL 通道", 0, nch - 1, 0)
+            spin("SDA 通道", 0, nch - 1, 1)
         elif protocol == "SPI":
-            spin("CLK 通道", 0, 7, 0)
-            spin("MOSI 通道", 0, 7, 1)
-            spin("MISO 通道", 0, 7, 2)
-            spin("CS 通道", 0, 7, 3)
+            spin("CLK 通道", 0, nch - 1, 0)
+            spin("MOSI 通道", 0, nch - 1, 1)
+            spin("MISO 通道", 0, nch - 1, 2)
+            spin("CS 通道", 0, nch - 1, 3)
             spin("CPOL", 0, 1, 0)
             spin("CPHA", 0, 1, 0)
 
@@ -258,7 +276,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.progress.setValue(0)
         self._thread = CaptureThread(
             self.session, rate, self.duration_spin.value(),
-            self.buffer_combo.currentText(), count, trig)
+            self.buffer_combo.currentText(), count, trig,
+            int(self.channels_combo.currentText()))
         self._thread.progressed.connect(self._on_progress)
         self._thread.finished_ok.connect(self._on_capture_done)
         self._thread.failed.connect(self._on_capture_failed)
@@ -284,7 +303,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stop_btn.setEnabled(False)
         self.statusBar().showMessage(
             f"采集完成: {trace.count} 样本, {trace.duration_us / 1e6:.3f} s "
-            f"@{trace.rate} Hz, 8 通道  ——  拖动蓝色测量区查看频率/占空比")
+            f"@{trace.rate} Hz, {trace.nchannels} 通道  ——  "
+            f"拖动蓝色测量区查看频率/占空比")
         self.wave.fit_all()
 
     def _on_capture_failed(self, msg: str):
@@ -351,12 +371,16 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         rate = self.trace.rate
         with open(path, "w", newline="") as f:
-            f.write("index,time_us," + ",".join(f"ch{i}" for i in range(8)) + "\n")
+            f.write("index,time_us,"
+                    + ",".join(f"ch{i}" for i in range(self.trace.nchannels))
+                    + "\n")
             t_us = np.arange(self.trace.count) / rate * 1e6
             for i in range(0, self.trace.count, 1):
                 s = self.trace.samples[i]
                 f.write(f"{i},{t_us[i]:.3f},"
-                        + ",".join(str((s >> ch) & 1) for ch in range(8)) + "\n")
+                        + ",".join(str((s >> ch) & 1)
+                                   for ch in range(self.trace.nchannels))
+                        + "\n")
         self.statusBar().showMessage(f"已导出: {path}")
 
     def _export_packets(self):

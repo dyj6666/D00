@@ -40,9 +40,9 @@ class WaveformWidget(pg.PlotWidget):
 
         self._region = pg.LinearRegionItem(
             [0, 100], movable=True,
-            brush=pg.mkBrush(80, 160, 255, 30),
-            pen=pg.mkPen("#64B5F6", width=1))
-        self._region.setZValue(15)
+            brush=pg.mkBrush(80, 170, 255, 45),
+            pen=pg.mkPen("#42A5F5", width=2))
+        self._region.setZValue(30)
         self._region.hide()
         self._region.sigRegionChanged.connect(self._on_region)
         self.addItem(self._region)
@@ -51,13 +51,17 @@ class WaveformWidget(pg.PlotWidget):
     def set_trace(self, trace: TraceData):
         self.trace = trace
         self.clear()
+        # clear() 会移除全部 item，需重新挂回光标与测量区
+        self.addItem(self._cursor)
+        self.addItem(self._region)
         self._curves = []
         self._labels = []
         if trace is None:
             return
         x = trace.time_axis_us()
-        for ch in range(min(trace.nchannels, 8)):
-            y = (8 - ch) * 2.0 + trace.channel(ch)
+        n = min(trace.nchannels, 8)
+        for ch in range(n):
+            y = (n - ch) * 2.0 + trace.channel(ch)
             curve = self.plot(x, y, pen=pg.mkPen(CH_COLORS[ch], width=1.4),
                               antialias=False,
                               connect="finite")
@@ -66,13 +70,14 @@ class WaveformWidget(pg.PlotWidget):
             self._curves.append(curve)
             label = pg.TextItem(f"CH{ch}", color=CH_COLORS[ch],
                                 anchor=(1, 0.5))
-            label.setPos(x[0], (8 - ch) * 2.0 + 0.5)
+            label.setPos(x[0], (n - ch) * 2.0 + 0.5)
             self.addItem(label)
             self._labels.append(label)
-        self.setYRange(0.5, 17.5)
+        self.setYRange(0.5, n * 2.0 + 1.5)
         self._cursor.setPos(x[0])
-        # 默认测量区覆盖约 2 个 PWM 周期（2000 样本 @100kHz = 20ms）
-        self._region.setRegion([x[0], x[min(2000, len(x) - 1)]])
+        # 默认测量区：波形中间三分之一，明显可见、可拖动
+        n = len(x)
+        self._region.setRegion([x[n // 3], x[min(2 * n // 3, n - 1)]])
         # 默认显示测量区（可拖动），让用户直接看到频率/占空比
         self._region.show()
 
@@ -100,7 +105,8 @@ class WaveformWidget(pg.PlotWidget):
             return
         x = self.trace.time_axis_us()
         self.setXRange(x[0], x[-1], padding=0.01)
-        self.setYRange(0.5, 17.5)
+        n = min(self.trace.nchannels, 8)
+        self.setYRange(0.5, n * 2.0 + 1.5)
 
     def _on_cursor(self, line):
         if self.trace is None:

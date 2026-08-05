@@ -11,7 +11,7 @@ import numpy as np
 class TraceData:
     samples: np.ndarray        # uint32, bit0..7 = 通道 0..7
     rate: int                  # 采样率 Hz
-    nchannels: int = 8
+    nchannels: int = 4
 
     @property
     def count(self) -> int:

@@ -24,9 +24,9 @@ void LA_Sample_ReadDMABuffer(uint32_t *buf, uint32_t start, uint32_t count);
 /* 采样状态变量（shell / 上位机变量注册使用） */
 extern uint32_t la_samples;
 extern uint32_t la_ch0_state;
-extern uint32_t la_ch4_state;
+extern uint32_t la_ch3_state;
 
-/* shell 诊断用：打印 EXTI4/NVIC 状态 */
+/* shell 诊断用：打印 EXTI/NVIC 状态 */
 void LA_Diag_PrintExtiStatus(void);
 
 #endif

@@ -16,6 +16,6 @@
 /* 0x7xxx: LogicAnalyzer */
 #define VAR_ID_LA_SAMPLES   0x7001
 #define VAR_ID_LA_CH0       0x7002
-#define VAR_ID_LA_CH4       0x7003
+#define VAR_ID_LA_CH3       0x7003
 
 #endif

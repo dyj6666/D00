@@ -320,3 +320,27 @@ auto-stop）全部按设计工作。
   UART/I2C/SPI 解码器（纯逻辑可单测）、位视图（二进制/HEX/十进制/ASCII）、CSV 导出。
 - 验证：解码器单元测试全绿（UART 0x55 / I2C START-ADDR-DATA-STOP / SPI MOSI·MISO）；
   UI 离屏加载 + 波形冒烟通过。
+
+### 12.3 采样通道重构：8 → 4 独立通道（PG6/PG7/PG12/PG15）
+- **动机**：探索者V3 板 PB1~PB3/PB5~PB7 在 PCB 上与外部 SRAM 总线直连，8 通道方案中
+  除 PB0/PB4 外均为总线伪信号；按引脚分配表（E 列"完全独立"=Y）核验后
+  改用 Port G 的 4 个空闲独立引脚，彻底消除伪通道。
+- **固件实现**：
+  - `la_config.h` 通道映射集中配置：`LA_GPIO_PORT=GPIOG` +
+    `LA_CHANNEL_PINS={GPIO_PIN_6,7,12,15,0,0,0,0}`，改一处即可换引脚；
+  - 采样打包与 DMA 导出按映射归一化（数据位 i = 通道 i），DMA 源改为 `LA_GPIO_PORT->IDR`；
+  - 时间戳 EXTI 迁至 PG 组：`gpio.c` 只保留 PG6/7/12/15 的 EXTI 配置与
+    EXTI9_5/EXTI15_10 中断；删除 PB0~PB7 的 EXTI0-4 中断处理，
+    新增 `EXTI15_10_IRQHandler`；
+  - `HAL_GPIO_EXTI_Callback` 由引脚范围限制改为 `la_pin_to_channel()` 查表过滤；
+  - `la_ch4_state` → `la_ch3_state`（变量名同步，ID `0x7003` 不变，协议兼容）；
+  - shell 诊断：`la_read_pb4` → `la_state`（打印 CH0~3 电平），`la_peek` 同步更新。
+- **上位机适配**：控制面板新增"通道数"（4/8，默认 4）；波形 y 布局、解码通道范围、
+  CSV 导出列数均随 `TraceData.nchannels` 动态适配。
+- **CubeMX 注意**：`.ioc` 中 PB0~PB7 的 EXTI 配置尚未迁移（手改 `Mcu.PinNN` 编号
+  不可靠，易破坏 CubeMX 工程）。下次用 CubeMX 打开工程时，删除 PB0~PB7 的
+  `GPXTI0~7` 信号与 NVIC EXTI0-4，改配 PG6/PG7/PG12/PG15 的
+  `GPXTI6/7/12/15`（NVIC 保留 EXTI9_5 并勾选 EXTI15_10），再重新生成
+  `gpio.c`/`stm32f4xx_it.c` 即可与当前手改结果一致。
+- **验证**：Keil AC5 0 Error / 0 Warning；GCC（arm-none-eabi 13.3.1）构建通过并产出
+  `APP_flash.bin`；解码器单元测试全绿；待实机接线 PG6 复测 PWM 确认通道归属。

@@ -37,7 +37,8 @@ class CaptureSession:
     def capture(self, rate: int, duration_s: float,
                 buffer_src: str = "sram", count: Optional[int] = None,
                 progress: Optional[Callable[[int, int], None]] = None,
-                trig_args: Optional[str] = None) -> TraceData:
+                trig_args: Optional[str] = None,
+                nchannels: int = 4) -> TraceData:
         """开始采样 → 等待 duration_s → 停止 → 下载最新缓冲"""
         with self._lock:
             self.ctrl.la_set_buffer(buffer_src)
@@ -59,4 +60,4 @@ class CaptureSession:
             if samples is None:
                 raise CaptureError("采样下载超时/不完整")
             return TraceData(samples=np.asarray(samples, dtype=np.uint32),
-                             rate=rate)
+                             rate=rate, nchannels=nchannels)
