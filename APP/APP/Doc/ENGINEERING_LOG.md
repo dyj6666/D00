@@ -361,3 +361,17 @@ auto-stop）全部按设计工作。
   - 解码 66 字节：帧内字节逐位匹配，0x00/0xFF/0x7F/0x80/CR/LF 全部正确；
   - 位标注（S/Dn/STOP/HEX+ASCII）与解码结果一致；
   - 上位机波形协议位标注功能（字节级 HEX+ASCII 汇总 + 位级 S/D/STOP）同步验证通过。
+
+### 12.5 SPI 信号发生器与多字节帧解码修复
+- **动机**：验证 SPI 协议解析；硬件上 SPI2（PB13=SCK/PB15=MOSI/PB12=CS）未被占用，
+  接线 PB13→PG6(CH0)、PB15→PG7(CH1)、PB12→PG12(CH2)。
+- **实现**：
+  - `signal_gen.c` 新增 SPI2 主机（模式0、164kHz、MSB、CS 低有效）后台任务，
+    shell 命令 `sg_spi_start <hexstr> [interval_ms]` / `sg_spi_stop`；
+  - 启用 `HAL_SPI_MODULE_ENABLED`，Keil/GCC 构建均加入 `stm32f4xx_hal_spi.c`。
+- **解码器修复**：`decode_spi` 解完一字节后把 i 推进到 CS 拉高，导致多字节 SPI 帧
+  只解出第一字节；改为在帧内自然续解。单测回归全绿。
+- **采样率要求**：SPI 164kHz 在 1MHz 采样（每半周期 3 样本）下边沿检测漏沿，
+  需 5MHz 采样（每 bit 30 样本）方可稳定解码——上位机采样率选 5MHz。
+- **实机验证**（5MHz 采样，帧 `A5 3C 55 AA FF 00`，2ms 间隔）：
+  窗口内 3 帧 × 6 字节全部正确，CS 帧长一致（1493 样本），无错位。

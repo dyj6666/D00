@@ -43,6 +43,8 @@ static void cmd_la_peek(const char *args);
 static void cmd_sg_uart_start(const char *args);
 static void cmd_sg_uart_stop(const char *args);
 static void cmd_sg_uart_hex(const char *args);
+static void cmd_sg_spi_start(const char *args);
+static void cmd_sg_spi_stop(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",         cmd_help},
@@ -67,6 +69,8 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_uart_start", cmd_sg_uart_start},
     {"sg_uart_stop",  cmd_sg_uart_stop},
     {"sg_uart_hex",   cmd_sg_uart_hex},
+    {"sg_spi_start",  cmd_sg_spi_start},
+    {"sg_spi_stop",   cmd_sg_spi_stop},
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
@@ -424,4 +428,24 @@ static void cmd_sg_uart_hex(const char *args)
     LOG_Printf("SG UART HEX: %s (baud=%lu len=%zu bytes interval=%dms)\r\n",
                ret == 0 ? "STARTED" : "FAILED",
                (unsigned long)baud, strlen(hex) / 2, interval);
+}
+
+static void cmd_sg_spi_start(const char *args)
+{
+    char hex[SG_TEXT_MAX * 2 + 1] = {0};
+    int interval = 5;
+    if (args && *args) {
+        sscanf(args, "%127s %d", hex, &interval);
+    }
+    if (interval < 1) interval = 1;
+    int ret = SG_SpiStartHex(hex, (uint16_t)interval);
+    LOG_Printf("SG SPI: %s (freq=164kHz mode0 len=%zu bytes interval=%dms)\r\n",
+               ret == 0 ? "STARTED" : "FAILED", strlen(hex) / 2, interval);
+}
+
+static void cmd_sg_spi_stop(const char *args)
+{
+    (void)args;
+    SG_SpiStop();
+    LOG_Printf("SG SPI: stopped\r\n");
 }

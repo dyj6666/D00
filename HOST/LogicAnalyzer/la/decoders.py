@@ -343,7 +343,6 @@ def decode_spi(samples: np.ndarray, rate: int, cfg: SpiConfig) -> List[Packet]:
                 data += bytes([sv])
             packets.append(Packet("SPI_FRAME", frame_start, i, data,
                                   " / ".join(parts)))
-        while i < n - 1 and (cs is None or cs[i] == cfg.cs_active):
-            i += 1
-        i += 1
+        # 解完一字节后 i 已停在帧内 CLK 空闲段，由外层循环按 cs 有效性
+        # 继续解下一字节；不得把 i 推进到 CS 拉高（否则多字节帧只解第一字节）
     return packets

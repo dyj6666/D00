@@ -4,28 +4,49 @@
 
 #include "cmsis_os2.h"
 #include "stm32f4xx_hal.h"
+#include "stm32f4xx_hal_spi.h"
 
 #define SG_STACK_SIZE  1024
 #define SG_FLAG_STOP   0x01
 
+typedef enum {
+    SG_MODE_NONE = 0,
+    SG_MODE_UART,
+    SG_MODE_SPI
+} sg_mode_t;
+
 static UART_HandleTypeDef sg_huart6;
+static SPI_HandleTypeDef  sg_spi2;
 static osThreadId_t       sg_task_id = NULL;
 static volatile uint8_t   sg_running = 0;
+static volatile sg_mode_t sg_mode = SG_MODE_NONE;
 static uint8_t            sg_data[SG_TEXT_MAX];
 static uint16_t           sg_len = 0;
 static uint16_t           sg_interval_ms = 5;
 
-static void sg_uart_task(void *arg)
+#define SG_SPI_CS_PORT   GPIOB
+#define SG_SPI_CS_PIN    GPIO_PIN_12
+
+static void sg_tx_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        HAL_UART_Transmit(&sg_huart6, sg_data, sg_len, HAL_MAX_DELAY);
+        if (sg_mode == SG_MODE_UART) {
+            HAL_UART_Transmit(&sg_huart6, sg_data, sg_len, HAL_MAX_DELAY);
+        } else if (sg_mode == SG_MODE_SPI) {
+            HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_RESET);
+            HAL_SPI_Transmit(&sg_spi2, sg_data, sg_len, HAL_MAX_DELAY);
+            HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_SET);
+        } else {
+            break;
+        }
         uint32_t flags = osThreadFlagsWait(SG_FLAG_STOP, osFlagsWaitAny,
                                            sg_interval_ms);
         if (flags & SG_FLAG_STOP) {
             break;
         }
     }
+    sg_mode = SG_MODE_NONE;
     sg_running = 0;
     osThreadExit();
 }
@@ -73,7 +94,7 @@ static int sg_start_common(uint32_t baud, uint16_t interval_ms)
         .stack_size = SG_STACK_SIZE,
         .priority = osPriorityLow,
     };
-    sg_task_id = osThreadNew(sg_uart_task, NULL, &attr);
+    sg_task_id = osThreadNew(sg_tx_task, NULL, &attr);
     if (sg_task_id == NULL) {
         sg_running = 0;
         HAL_UART_DeInit(&sg_huart6);
@@ -99,6 +120,7 @@ int SG_UartStart(uint32_t baud, const char *text, uint16_t interval_ms)
     if (len == 0 || len >= SG_TEXT_MAX) return -1;
     memcpy(sg_data, text, len);
     sg_len = (uint16_t)len;
+    sg_mode = SG_MODE_UART;
     return sg_start_common(baud, interval_ms);
 }
 
@@ -115,7 +137,105 @@ int SG_UartStartHex(uint32_t baud, const char *hex, uint16_t interval_ms)
         sg_data[i] = (uint8_t)((hi << 4) | lo);
     }
     sg_len = (uint16_t)(len / 2);
+    sg_mode = SG_MODE_UART;
     return sg_start_common(baud, interval_ms);
+}
+
+static int sg_spi_start_bytes(const uint8_t *data, uint16_t len,
+                              uint16_t interval_ms)
+{
+    if (data == NULL || len == 0 || len > SG_TEXT_MAX) return -1;
+    if (sg_running) {
+        SG_UartStop();
+    }
+
+    __HAL_RCC_SPI2_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    /* PB13=SPI2_SCK, PB15=SPI2_MOSI (AF5) */
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin = GPIO_PIN_13 | GPIO_PIN_15;
+    gpio.Mode = GPIO_MODE_AF_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    gpio.Alternate = GPIO_AF5_SPI2;
+    HAL_GPIO_Init(GPIOB, &gpio);
+
+    /* PB12 = CS，低有效，空闲高 */
+    gpio.Pin = SG_SPI_CS_PIN;
+    gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    gpio.Alternate = 0;
+    HAL_GPIO_Init(SG_SPI_CS_PORT, &gpio);
+    HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_SET);
+
+    memset(&sg_spi2, 0, sizeof(sg_spi2));
+    sg_spi2.Instance = SPI2;
+    sg_spi2.Init.Mode = SPI_MODE_MASTER;
+    sg_spi2.Init.Direction = SPI_DIRECTION_2LINES;
+    sg_spi2.Init.DataSize = SPI_DATASIZE_8BIT;
+    sg_spi2.Init.CLKPolarity = SPI_POLARITY_LOW;
+    sg_spi2.Init.CLKPhase = SPI_PHASE_1EDGE;
+    sg_spi2.Init.NSS = SPI_NSS_SOFT;
+    sg_spi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;  /* 42MHz/256=164kHz */
+    sg_spi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
+    sg_spi2.Init.TIMode = SPI_TIMODE_DISABLE;
+    sg_spi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+    sg_spi2.Init.CRCPolynomial = 7;
+    if (HAL_SPI_Init(&sg_spi2) != HAL_OK) {
+        __HAL_RCC_SPI2_CLK_DISABLE();
+        return -2;
+    }
+
+    memcpy(sg_data, data, len);
+    sg_len = len;
+    sg_interval_ms = interval_ms;
+    sg_mode = SG_MODE_SPI;
+    sg_running = 1;
+
+    osThreadAttr_t attr = {
+        .name = "SG_SPI",
+        .stack_size = SG_STACK_SIZE,
+        .priority = osPriorityLow,
+    };
+    sg_task_id = osThreadNew(sg_tx_task, NULL, &attr);
+    if (sg_task_id == NULL) {
+        sg_mode = SG_MODE_NONE;
+        sg_running = 0;
+        HAL_SPI_DeInit(&sg_spi2);
+        __HAL_RCC_SPI2_CLK_DISABLE();
+        return -3;
+    }
+    return 0;
+}
+
+int SG_SpiStartHex(const char *hex, uint16_t interval_ms)
+{
+    size_t len;
+    uint8_t buf[SG_TEXT_MAX];
+    if (hex == NULL) return -1;
+    len = strlen(hex);
+    if (len == 0 || len % 2 != 0 || len / 2 > SG_TEXT_MAX) return -1;
+    for (size_t i = 0; i < len / 2; i++) {
+        int hi = sg_hex_value(hex[i * 2]);
+        int lo = sg_hex_value(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        buf[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return sg_spi_start_bytes(buf, (uint16_t)(len / 2), interval_ms);
+}
+
+void SG_SpiStop(void)
+{
+    if (!sg_running && sg_task_id == NULL) {
+        return;
+    }
+    if (sg_task_id != NULL) {
+        osThreadFlagsSet(sg_task_id, SG_FLAG_STOP);
+        sg_task_id = NULL;
+    }
+    osDelay(20);
 }
 
 void SG_UartStop(void)

@@ -20,6 +20,14 @@ int    SG_UartStart(uint32_t baud, const char *text, uint16_t interval_ms);
  * 支持 0x00/0xFF 等任意二进制值，便于协议帧验证。返回码同 SG_UartStart。 */
 int    SG_UartStartHex(uint32_t baud, const char *hex, uint16_t interval_ms);
 
+/* SPI 测试帧发生器：SPI2 主机（PB13=SCK / PB15=MOSI，模式0，164kHz，
+ * PB12=CS 低有效），按 interval_ms 间隔循环发送 hex 字节帧。
+ * 返回码同 SG_UartStart。 */
+int    SG_SpiStartHex(const char *hex, uint16_t interval_ms);
+
+/* 停止 SPI 发生器 */
+void   SG_SpiStop(void);
+
 /* 停止发生器（PC6 保持 USART6_TX 空闲高电平，复位后恢复 TIM8 PWM） */
 void   SG_UartStop(void);
 
