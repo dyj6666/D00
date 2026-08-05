@@ -2171,6 +2171,11 @@
               <FilePath>..\SystemServices\la_sample.c</FilePath>
             </File>
             <File>
+              <FileName>signal_gen.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\signal_gen.c</FilePath>
+            </File>
+            <File>
               <FileName>la_buffer.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\SystemServices\la_buffer.c</FilePath>

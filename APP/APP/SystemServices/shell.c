@@ -6,6 +6,7 @@
 #include "la_sample.h"
 #include "la_buffer.h"
 #include "la_trigger.h"
+#include "signal_gen.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -39,6 +40,8 @@ static void cmd_la_dma_buf(const char *args);
 static void cmd_la_info(const char *args);
 static void cmd_la_state(const char *args);
 static void cmd_la_peek(const char *args);
+static void cmd_sg_uart_start(const char *args);
+static void cmd_sg_uart_stop(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",         cmd_help},
@@ -60,6 +63,8 @@ static const cmd_entry_t cmd_table[] = {
     {"la_info",      cmd_la_info},
     {"la_state",     cmd_la_state},
     {"la_peek",      cmd_la_peek},
+    {"sg_uart_start", cmd_sg_uart_start},
+    {"sg_uart_stop",  cmd_sg_uart_stop},
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
@@ -380,4 +385,26 @@ static void cmd_la_peek(const char *args)
     uint8_t states = LA_Sample_GetChannelStates();
     LOG_Printf("states=0x%02X, ch0=%d, ch3=%d, la_samples=%lu\r\n",
                states, (states & 0x01) ? 1 : 0, la_ch3_state, la_samples);
+}
+
+static void cmd_sg_uart_start(const char *args)
+{
+    uint32_t baud = 115200;
+    char text[SG_TEXT_MAX] = "HELLO";
+    int interval = 5;
+    if (args && *args) {
+        sscanf(args, "%lu %63s %d", &baud, text, &interval);
+    }
+    if (interval < 1) interval = 1;
+    int ret = SG_UartStart(baud, text, (uint16_t)interval);
+    LOG_Printf("SG UART: %s (baud=%lu text=%s interval=%dms)\r\n",
+               ret == 0 ? "STARTED" : "FAILED",
+               (unsigned long)baud, text, interval);
+}
+
+static void cmd_sg_uart_stop(const char *args)
+{
+    (void)args;
+    SG_UartStop();
+    LOG_Printf("SG UART: stopped\r\n");
 }

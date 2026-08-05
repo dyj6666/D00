@@ -51,6 +51,7 @@ if(CMAKE_CROSSCOMPILING)
         SystemServices/la_sample.c
         SystemServices/la_buffer.c
         SystemServices/la_trigger.c
+        SystemServices/signal_gen.c
         # 应用
         Application/key_app.c
         Application/led_app.c
