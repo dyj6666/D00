@@ -41,9 +41,11 @@ def _decode_uart_line(bits: np.ndarray, rate: int, cfg: UartConfig,
     n = len(bits)
     i = 0
     while i < n - int(spb):
-        # 找起始位：下降沿（1→0）后电平保持低至少 0.5 bit
+        # 找起始位：下降沿（1→0）后电平保持低至少 0.5 bit。
+        # 注意 start 取下降沿后的第一个低样本（i+1），否则起始位中心整体
+        # 前移 1 个样本，数据位采样在非整数 spb 下会错位。
         if bits[i] == 1 and bits[i + 1] == 0:
-            start = i
+            start = i + 1
             stable = 0
             j = i + 1
             while j < n and j < i + int(spb * 0.9) and bits[j] == 0:
@@ -52,23 +54,25 @@ def _decode_uart_line(bits: np.ndarray, rate: int, cfg: UartConfig,
             if stable < int(spb * 0.5):
                 i += 1
                 continue
-            center = start + int(spb * 1.5)
+            # 浮点中心 + 逐位四舍五入：避免非整数 spb 下取整误差随位号累积，
+            # 导致高位采样点漂移到 bit 边界（1MHz@115200 时 spb=8.68）。
+            center_f = start + 1.5 * spb
             value = 0
             ok = True
             for b in range(cfg.data_bits):
-                idx = center + int(b * spb)
+                idx = int(center_f + b * spb + 0.5)
                 if idx >= n:
                     ok = False
                     break
                 value |= (int(bits[idx]) << b)
             if not ok:
                 break
-            stop_idx = center + int(cfg.data_bits * spb)
+            stop_idx = int(center_f + cfg.data_bits * spb + 0.5)
             if stop_idx >= n or bits[stop_idx] != 1:
                 i = start + 1
                 continue
             if cfg.parity != "none":
-                p_idx = center + int(cfg.data_bits * spb)
+                p_idx = stop_idx
                 if p_idx >= n:
                     break
                 ones = bin(value).count("1")
@@ -77,7 +81,10 @@ def _decode_uart_line(bits: np.ndarray, rate: int, cfg: UartConfig,
                 if bits[p_idx] != want:
                     i = start + 1
                     continue
-            end = min(n, stop_idx + int(spb))
+            # end 停在停止位中心：若按帧尾（+1 bit）收尾会越过停止位结束，
+            # 漏掉连续字节下一帧的起始位下降沿（back-to-back 传输时会把
+            # 数据位边沿误判为起始位，导致后续字节全部错位）。
+            end = min(n, int(start + (1 + cfg.data_bits + cfg.stop_bits * 0.5) * spb))
             byte = bytes([value & 0xFF])
             packets.append(Packet(
                 kind="FRAME", start=start, end=end, data=byte,
