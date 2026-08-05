@@ -75,7 +75,7 @@ class WaveformWidget(pg.PlotWidget):
             label.setPos(x[0], (n - ch) * 2.0 + 0.5)
             self.addItem(label)
             self._labels.append(label)
-        self.setYRange(0.5, n * 2.0 + 1.5)
+        self.setYRange(0.5, n * 2.0 + 2.0)
         self._cursor.setPos(x[0])
         # 默认测量区：波形中间三分之一，明显可见、可拖动
         n = len(x)
@@ -91,8 +91,10 @@ class WaveformWidget(pg.PlotWidget):
         "addr":  ("#AB47BC", (171, 71, 188, 36)),
         "ack":   ("#26A69A", (38, 166, 154, 36)),
         "frame": ("#66BB6A", (102, 187, 106, 30)),
+        "byte":  ("#FFE082", (255, 224, 130, 30)),
         "idle":  ("#90A4AE", (144, 164, 174, 22)),
     }
+    ANNO_BORDER = (255, 235, 150, 55)   # 统一浅黄边界线
 
     def set_protocol_annotations(self, annos) -> None:
         """在波形上按样本区间绘制协议位色块与标签（1 条 = 1 bit/帧）。"""
@@ -101,20 +103,33 @@ class WaveformWidget(pg.PlotWidget):
             return
         rate = self.trace.rate
         n = min(self.trace.nchannels, 8)
-        y_top = n * 2.0 + 0.8
+        y_bit = n * 2.0 + 0.55       # 位级标签（S/Dn/STOP）
+        y_byte = n * 2.0 + 1.35      # 字节级汇总标签（HEX+ASCII，更高一层）
+        font_small = QtGui.QFont()
+        font_small.setPointSize(7)
+        font_bold = QtGui.QFont()
+        font_bold.setPointSize(8)
+        font_bold.setBold(True)
         for a in annos:
             x0 = a.start / rate * 1e6
             x1 = max(a.end / rate * 1e6, x0 + 0.01)
-            color, brush = self.ANNO_STYLE.get(
-                a.kind, ("#B0BEC5", (176, 190, 197, 30)))
+            if a.kind == "byte":
+                color, brush = self.ANNO_STYLE["byte"]
+                z_r, z_t, y, font = 9, 12, y_byte, font_bold
+            else:
+                color, brush = self.ANNO_STYLE.get(
+                    a.kind, ("#B0BEC5", (176, 190, 197, 30)))
+                z_r, z_t, y, font = 10, 11, y_bit, font_small
             region = pg.LinearRegionItem(
                 values=(x0, x1), movable=False,
-                brush=pg.mkBrush(*brush), pen=None)
-            region.setZValue(10)
+                brush=pg.mkBrush(*brush),
+                pen=pg.mkPen(*self.ANNO_BORDER))
+            region.setZValue(z_r)
             self.addItem(region)
             label = pg.TextItem(a.label, color=color, anchor=(0.5, 1.0))
-            label.setPos((x0 + x1) / 2, y_top)
-            label.setZValue(11)
+            label.setFont(font)
+            label.setPos((x0 + x1) / 2, y)
+            label.setZValue(z_t)
             self.addItem(label)
             self._anno_items.append((region, label))
 
@@ -149,7 +164,7 @@ class WaveformWidget(pg.PlotWidget):
         x = self.trace.time_axis_us()
         self.setXRange(x[0], x[-1], padding=0.01)
         n = min(self.trace.nchannels, 8)
-        self.setYRange(0.5, n * 2.0 + 1.5)
+        self.setYRange(0.5, n * 2.0 + 2.0)
 
     def _on_cursor(self, line):
         if self.trace is None:

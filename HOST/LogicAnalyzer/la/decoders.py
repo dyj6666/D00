@@ -142,8 +142,10 @@ def annotate_uart(samples: np.ndarray, rate: int, cfg: UartConfig) -> List[BitAn
                 continue
             out.append(BitAnno(start, int(start + spb), "S", "start"))
             center = start + 1.5 * spb
+            value = 0
             for b in range(cfg.data_bits):
                 v = int(bits[int(center + b * spb + 0.5)])
+                value |= v << b
                 bs = int(start + (1 + b) * spb)
                 be = int(start + (2 + b) * spb)
                 out.append(BitAnno(bs, be, f"D{b}={v}", "data"))
@@ -151,7 +153,12 @@ def annotate_uart(samples: np.ndarray, rate: int, cfg: UartConfig) -> List[BitAn
             out.append(BitAnno(stop_start,
                                int(stop_start + cfg.stop_bits * spb),
                                "STOP", "stop"))
-            i = int(start + (1 + cfg.data_bits + cfg.stop_bits) * spb)
+            frame_end = int(start + (1 + cfg.data_bits + cfg.stop_bits) * spb)
+            ch = chr(value) if 32 <= value < 127 else "."
+            out.append(BitAnno(start, frame_end,
+                               f"0x{value:02X} '{ch}'", "byte"))
+            # 推进到停止位中心：若推到帧尾会漏掉连续字节的下一帧起始位下降沿
+            i = int(start + (1 + cfg.data_bits + cfg.stop_bits * 0.5) * spb)
         else:
             i += 1
     return out
