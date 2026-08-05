@@ -324,9 +324,16 @@ class MainWindow(QtWidgets.QMainWindow):
         proto = self.proto_combo.currentText()
         s = self._decoder_spins
         if proto == "UART":
+            baud = s["波特率"].value()
+            if self.trace.rate / baud < 4.0:
+                self.statusBar().showMessage(
+                    f"解码失败: 采样率 {self.trace.rate} Hz 相对波特率 "
+                    f"{baud} 过低（每 bit 不足 4 样本），请将采样率提高到 "
+                    f"{baud * 4} Hz 以上再解码")
+                return
             cfg = dec.UartConfig(tx_ch=s["TX 通道"].value(),
                                  rx_ch=s["RX 通道"].value(),
-                                 baud=s["波特率"].value())
+                                 baud=baud)
         elif proto == "I2C":
             cfg = dec.I2cConfig(scl_ch=s["SCL 通道"].value(),
                                 sda_ch=s["SDA 通道"].value())
