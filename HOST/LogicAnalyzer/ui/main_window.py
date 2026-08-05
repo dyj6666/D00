@@ -81,6 +81,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.wave = WaveformWidget()
         self.wave.sampleSelected.connect(self._on_sample)
         self.wave.regionSelected.connect(self._on_region)
+        self.wave.doubleClickedAt.connect(self._on_wave_double_click)
         self.setCentralWidget(self.wave)
 
         self.packet_panel = PacketPanel()
@@ -373,6 +374,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         proto, cfg = self._last_decode
         self.wave.set_channel_names(self._channel_names(proto, cfg))
+        self.detail_panel.set_protocol(proto, cfg)
         if not self.annotate_check.isChecked():
             self.wave.clear_protocol_annotations()
             return
@@ -437,6 +439,30 @@ class MainWindow(QtWidgets.QMainWindow):
                     ms.append(f"CH{ch}: 边缘不足，请拖宽测量区  "
                               f"(区间 {m['us']:.0f} µs)")
         self.detail_panel.show_measure(ms)
+
+    def _on_wave_double_click(self, idx: int):
+        """双击波形：自动定位最近协议帧并框选，位视图同步刷新。"""
+        if self.trace is None or self._last_decode is None:
+            return
+        proto, cfg = self._last_decode
+        try:
+            if proto == "UART":
+                pkts = dec.decode_uart(self.trace.samples, self.trace.rate, cfg)
+            elif proto == "SPI":
+                pkts = dec.decode_spi(self.trace.samples, self.trace.rate, cfg)
+            else:
+                pkts = []
+        except Exception:  # noqa: BLE001
+            pkts = []
+        best = next((p for p in pkts if p.start <= idx < p.end), None)
+        if best is None and pkts:
+            best = min(pkts, key=lambda p: abs((p.start + p.end) // 2 - idx))
+        if best is not None:
+            self.wave.set_region_samples(best.start, best.end)
+            self.detail_panel.show_range(best.start, best.end)
+            self.statusBar().showMessage(
+                f"已框选帧 [{best.start} ~ {best.end}] "
+                f"({(best.end - best.start) / self.trace.rate * 1e6:.1f} µs)")
 
     # ---------------- 导出 ----------------
     def _export_raw(self):

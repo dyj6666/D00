@@ -159,7 +159,8 @@ def annotate_uart(samples: np.ndarray, rate: int, cfg: UartConfig) -> List[BitAn
             frame_end = int(start + (1 + cfg.data_bits + cfg.stop_bits) * spb)
             ch = chr(value) if 32 <= value < 127 else "."
             out.append(BitAnno(start, frame_end,
-                               f"0x{value:02X} '{ch}'", "byte"))
+                               f"0x{value:02X} '{ch}'", "byte",
+                               ch=cfg.tx_ch))
             # 推进到停止位中心：若推到帧尾会漏掉连续字节的下一帧起始位下降沿
             i = int(start + (1 + cfg.data_bits + cfg.stop_bits * 0.5) * spb)
         else:
@@ -229,12 +230,18 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
                                        ch=cfg.mosi_ch))
                     value = (value << 1) | v
                 out.append(BitAnno(bits_pos[0][0], bits_pos[-1][1],
-                                   f"0x{value:02X} {value:08b}", "byte"))
+                                   f"0x{value:02X} {value:08b}", "byte",
+                                   ch=cfg.mosi_ch))
                 if miso is not None:
+                    m_val = 0
                     for k, (bs, be, _) in enumerate(bits_pos):
                         mv = int(miso[bs])
+                        m_val = (m_val << 1) | mv
                         out.append(BitAnno(bs, be, f"b{7-k}={mv}", "miso",
                                            ch=cfg.miso_ch))
+                    out.append(BitAnno(bits_pos[0][0], bits_pos[-1][1],
+                                       f"0x{m_val:02X} {m_val:08b}", "byte",
+                                       ch=cfg.miso_ch))
                 i = j
                 prev_active = active
                 continue

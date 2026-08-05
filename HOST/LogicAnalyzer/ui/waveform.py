@@ -17,6 +17,7 @@ CH_COLORS = [
 class WaveformWidget(pg.PlotWidget):
     sampleSelected = QtCore.Signal(int)      # 光标样本下标
     regionSelected = QtCore.Signal(int, int)  # 区间起止
+    doubleClickedAt = QtCore.Signal(int)      # 双击位置样本下标
 
     def __init__(self, parent=None):
         super().__init__(parent, background="#0F1420")
@@ -115,7 +116,10 @@ class WaveformWidget(pg.PlotWidget):
         for a in annos:
             x0 = a.start / rate * 1e6
             x1 = max(a.end / rate * 1e6, x0 + 0.01)
-            if a.kind == "byte":
+            if a.kind == "byte" and a.ch is not None and a.ch < n:
+                color, brush = self.ANNO_STYLE["byte"]
+                z_r, z_t, y, font = 9, 12, (n - a.ch) * 2.0 + 1.15, font_bold
+            elif a.kind == "byte":
                 color, brush = self.ANNO_STYLE["byte"]
                 z_r, z_t, y, font = 9, 12, y_byte, font_bold
             elif a.ch is not None and a.ch < n:
@@ -177,6 +181,23 @@ class WaveformWidget(pg.PlotWidget):
         self.setXRange(x[0], x[-1], padding=0.01)
         n = min(self.trace.nchannels, 8)
         self.setYRange(0.5, n * 2.0 + 2.0)
+
+    def set_region_samples(self, a: int, b: int):
+        """程序化框选 [a, b) 样本区间（如双击定位协议帧）。"""
+        if self.trace is None:
+            return
+        x = self.trace.time_axis_us()
+        self._region.setRegion([x[a], x[min(b, len(x) - 1)]])
+        self._region.show()
+
+    def mouseDoubleClickEvent(self, ev):
+        if self.trace is not None:
+            vb = self.getPlotItem().vb
+            pos = vb.mapSceneToView(ev.pos())
+            idx = int(round(pos.x() * self.trace.rate / 1e6))
+            idx = max(0, min(self.trace.count - 1, idx))
+            self.doubleClickedAt.emit(idx)
+        super().mouseDoubleClickEvent(ev)
 
     def _on_cursor(self, line):
         if self.trace is None:
