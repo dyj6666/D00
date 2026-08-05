@@ -92,6 +92,7 @@ class WaveformWidget(pg.PlotWidget):
         "ack":   ("#26A69A", (38, 166, 154, 36)),
         "frame": ("#66BB6A", (102, 187, 106, 30)),
         "byte":  ("#FFE082", (255, 224, 130, 30)),
+        "miso":  ("#FF8A65", (255, 138, 101, 36)),
         "cs":    ("#FFD54F", (255, 213, 79, 26)),
         "idle":  ("#90A4AE", (144, 164, 174, 22)),
     }
@@ -117,6 +118,10 @@ class WaveformWidget(pg.PlotWidget):
             if a.kind == "byte":
                 color, brush = self.ANNO_STYLE["byte"]
                 z_r, z_t, y, font = 9, 12, y_byte, font_bold
+            elif a.ch is not None and a.ch < n:
+                color, brush = self.ANNO_STYLE.get(
+                    a.kind, ("#B0BEC5", (176, 190, 197, 30)))
+                z_r, z_t, y, font = 10, 11, (n - a.ch) * 2.0 + 0.7, font_small
             else:
                 color, brush = self.ANNO_STYLE.get(
                     a.kind, ("#B0BEC5", (176, 190, 197, 30)))

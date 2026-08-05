@@ -41,6 +41,7 @@ class BitAnno:
     end: int
     label: str
     kind: str        # start / data / stop / addr / ack / frame / idle
+    ch: Optional[int] = None   # 标注归属通道（None=顶部通用层）
 
 
 def _decode_uart_line(bits: np.ndarray, rate: int, cfg: UartConfig,
@@ -140,7 +141,8 @@ def annotate_uart(samples: np.ndarray, rate: int, cfg: UartConfig) -> List[BitAn
             if stable < int(spb * 0.5):
                 i += 1
                 continue
-            out.append(BitAnno(start, int(start + spb), "S", "start"))
+            out.append(BitAnno(start, int(start + spb), "S", "start",
+                               ch=cfg.tx_ch))
             center = start + 1.5 * spb
             value = 0
             for b in range(cfg.data_bits):
@@ -148,11 +150,12 @@ def annotate_uart(samples: np.ndarray, rate: int, cfg: UartConfig) -> List[BitAn
                 value |= v << b
                 bs = int(start + (1 + b) * spb)
                 be = int(start + (2 + b) * spb)
-                out.append(BitAnno(bs, be, f"D{b}={v}", "data"))
+                out.append(BitAnno(bs, be, f"D{b}={v}", "data",
+                                   ch=cfg.tx_ch))
             stop_start = int(start + (1 + cfg.data_bits) * spb)
             out.append(BitAnno(stop_start,
                                int(stop_start + cfg.stop_bits * spb),
-                               "STOP", "stop"))
+                               "STOP", "stop", ch=cfg.tx_ch))
             frame_end = int(start + (1 + cfg.data_bits + cfg.stop_bits) * spb)
             ch = chr(value) if 32 <= value < 127 else "."
             out.append(BitAnno(start, frame_end,
@@ -186,6 +189,7 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
     字节级标十六进制+二进制（如 0xA5 10100101）。"""
     clk = channel_bits(samples, cfg.clk_ch)
     mosi = channel_bits(samples, cfg.mosi_ch) if cfg.mosi_ch is not None else None
+    miso = channel_bits(samples, cfg.miso_ch) if cfg.miso_ch is not None else None
     cs = channel_bits(samples, cfg.cs_ch) if cfg.cs_ch is not None else None
     n = len(clk)
     out: List[BitAnno] = []
@@ -195,7 +199,9 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
     while i < n - 1:
         active = cs[i] == cfg.cs_active if cs is not None else True
         if active and not prev_active:
-            out.append(BitAnno(i, i + 1, "CS", "cs"))
+            out.append(BitAnno(i, i + 1, "CS\u2193", "cs", ch=cfg.cs_ch))
+        elif not active and prev_active:
+            out.append(BitAnno(i, i + 1, "CS\u2191", "cs", ch=cfg.cs_ch))
         if active:
             j = i
             bits_pos = []
@@ -219,10 +225,16 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
                 value = 0
                 for k, (bs, be, v) in enumerate(bits_pos):
                     bit_no = 7 - k          # MSB first：先采到的是 b7
-                    out.append(BitAnno(bs, be, f"b{bit_no}={v}", "data"))
+                    out.append(BitAnno(bs, be, f"b{bit_no}={v}", "data",
+                                       ch=cfg.mosi_ch))
                     value = (value << 1) | v
                 out.append(BitAnno(bits_pos[0][0], bits_pos[-1][1],
                                    f"0x{value:02X} {value:08b}", "byte"))
+                if miso is not None:
+                    for k, (bs, be, _) in enumerate(bits_pos):
+                        mv = int(miso[bs])
+                        out.append(BitAnno(bs, be, f"b{7-k}={mv}", "miso",
+                                           ch=cfg.miso_ch))
                 i = j
                 prev_active = active
                 continue
