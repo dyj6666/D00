@@ -180,6 +180,57 @@ def annotate_spi(samples: np.ndarray, rate: int, cfg: SpiConfig) -> List[BitAnno
     return out
 
 
+def annotate_spi_bits(samples: np.ndarray, rate: int,
+                      cfg: SpiConfig) -> List[BitAnno]:
+    """SPI 位级标注：CS 有效沿标 CS，每字节 8 个 bit（MSB 优先 b7..b0），
+    字节级标十六进制+二进制（如 0xA5 10100101）。"""
+    clk = channel_bits(samples, cfg.clk_ch)
+    mosi = channel_bits(samples, cfg.mosi_ch) if cfg.mosi_ch is not None else None
+    cs = channel_bits(samples, cfg.cs_ch) if cfg.cs_ch is not None else None
+    n = len(clk)
+    out: List[BitAnno] = []
+    i = 0
+    idle = cfg.cpol
+    prev_active = False
+    while i < n - 1:
+        active = cs[i] == cfg.cs_active if cs is not None else True
+        if active and not prev_active:
+            out.append(BitAnno(i, i + 1, "CS", "cs"))
+        if active:
+            j = i
+            bits_pos = []
+            ok = True
+            for _ in range(8):
+                edge = 1 - idle
+                while j < n - 1 and clk[j] != edge:
+                    j += 1
+                if j >= n - 1 or (cs is not None and cs[j] != cfg.cs_active):
+                    ok = False
+                    break
+                bs = j
+                v = int(mosi[j]) if mosi is not None else 0
+                j += 1
+                while j < n - 1 and clk[j] != idle:
+                    j += 1
+                be = j
+                j += 1
+                bits_pos.append((bs, be, v))
+            if ok and len(bits_pos) == 8:
+                value = 0
+                for k, (bs, be, v) in enumerate(bits_pos):
+                    bit_no = 7 - k          # MSB first：先采到的是 b7
+                    out.append(BitAnno(bs, be, f"b{bit_no}={v}", "data"))
+                    value = (value << 1) | v
+                out.append(BitAnno(bits_pos[0][0], bits_pos[-1][1],
+                                   f"0x{value:02X} {value:08b}", "byte"))
+                i = j
+                prev_active = active
+                continue
+        prev_active = active
+        i += 1
+    return out
+
+
 # ============================ I2C ============================
 @dataclass
 class I2cConfig:

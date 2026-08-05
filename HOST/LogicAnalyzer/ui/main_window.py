@@ -372,6 +372,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.trace is None or self._last_decode is None:
             return
         proto, cfg = self._last_decode
+        self.wave.set_channel_names(self._channel_names(proto, cfg))
         if not self.annotate_check.isChecked():
             self.wave.clear_protocol_annotations()
             return
@@ -381,12 +382,41 @@ class MainWindow(QtWidgets.QMainWindow):
             elif proto == "I2C":
                 annos = dec.annotate_i2c(self.trace.samples, self.trace.rate, cfg)
             elif proto == "SPI":
-                annos = dec.annotate_spi(self.trace.samples, self.trace.rate, cfg)
+                annos = dec.annotate_spi_bits(self.trace.samples,
+                                              self.trace.rate, cfg)
             else:
                 annos = []
         except Exception:  # noqa: BLE001
             annos = []
         self.wave.set_protocol_annotations(annos)
+
+    def _channel_names(self, proto: str, cfg) -> list:
+        """按解码配置把通道标签映射为实际协议信号名（CH0 -> CH0=SCK）。"""
+        nch = min(self.trace.nchannels, 8)
+        names = [f"CH{ch}" for ch in range(nch)]
+        try:
+            if proto == "UART":
+                if cfg.tx_ch is not None and cfg.tx_ch < nch:
+                    names[cfg.tx_ch] = f"CH{cfg.tx_ch}=TX"
+                if cfg.rx_ch is not None and cfg.rx_ch < nch:
+                    names[cfg.rx_ch] = f"CH{cfg.rx_ch}=RX"
+            elif proto == "I2C":
+                if cfg.scl_ch < nch:
+                    names[cfg.scl_ch] = f"CH{cfg.scl_ch}=SCL"
+                if cfg.sda_ch < nch:
+                    names[cfg.sda_ch] = f"CH{cfg.sda_ch}=SDA"
+            elif proto == "SPI":
+                if cfg.clk_ch < nch:
+                    names[cfg.clk_ch] = f"CH{cfg.clk_ch}=SCK"
+                if cfg.mosi_ch is not None and cfg.mosi_ch < nch:
+                    names[cfg.mosi_ch] = f"CH{cfg.mosi_ch}=MOSI"
+                if cfg.miso_ch is not None and cfg.miso_ch < nch:
+                    names[cfg.miso_ch] = f"CH{cfg.miso_ch}=MISO"
+                if cfg.cs_ch is not None and cfg.cs_ch < nch:
+                    names[cfg.cs_ch] = f"CH{cfg.cs_ch}=CS"
+        except Exception:  # noqa: BLE001
+            pass
+        return names
 
     # ---------------- 视图联动 ----------------
     def _on_sample(self, idx: int):

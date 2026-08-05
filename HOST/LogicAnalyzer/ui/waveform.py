@@ -92,6 +92,7 @@ class WaveformWidget(pg.PlotWidget):
         "ack":   ("#26A69A", (38, 166, 154, 36)),
         "frame": ("#66BB6A", (102, 187, 106, 30)),
         "byte":  ("#FFE082", (255, 224, 130, 30)),
+        "cs":    ("#FFD54F", (255, 213, 79, 26)),
         "idle":  ("#90A4AE", (144, 164, 174, 22)),
     }
     ANNO_BORDER = (255, 235, 150, 55)   # 统一浅黄边界线
@@ -138,6 +139,12 @@ class WaveformWidget(pg.PlotWidget):
             self.removeItem(region)
             self.removeItem(label)
         self._anno_items = []
+
+    def set_channel_names(self, names: list) -> None:
+        """更新波形左侧通道标签文本（如 CH0 -> CH0=SCK），位置保持不变。"""
+        for ch, label in enumerate(self._labels):
+            if ch < len(names):
+                label.setText(names[ch])
 
     # ---------- 交互 ----------
     def show_cursor(self, show: bool):
