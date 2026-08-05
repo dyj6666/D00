@@ -28,7 +28,7 @@ class DetailPanel(QtWidgets.QWidget):
 
         self._bit_table = QtWidgets.QTableWidget(0, 4)
         self._bit_table.setHorizontalHeaderLabels(
-            ["通道", "电平", "样本区间", "二进制"])
+            ["通道", "bit时长(µs)", "样本区间", "位序列(1字符=1bit)"])
         header = self._bit_table.horizontalHeader()
         header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
@@ -64,30 +64,52 @@ class DetailPanel(QtWidgets.QWidget):
         self._value_lbl.setText(
             f"CH0..7 电平: {[(s >> ch) & 1 for ch in range(8)]}")
 
+    def _run_length_bits(self, ch: int, a: int, b: int):
+        """把区间内采样点做游程压缩：返回 [(电平, 样本数), ...]，每项 = 1 bit。
+        位视图按 bit 而非采样点展示，1 字符 = 1 bit。"""
+        bits = self.trace.channel(ch)[a:b].astype(int)
+        runs = []
+        cur = int(bits[0])
+        cnt = 1
+        for v in bits[1:]:
+            if int(v) == cur:
+                cnt += 1
+            else:
+                runs.append((cur, cnt))
+                cur = int(v)
+                cnt = 1
+        runs.append((cur, cnt))
+        return runs
+
     def show_range(self, a: int, b: int):
         if self.trace is None or b <= a:
             return
         nch = min(self.trace.nchannels, 8)
         span = b - a
-        preview_b = min(b, a + BIT_PREVIEW_MAX)
         self._bit_table.setRowCount(nch)
         for ch in range(nch):
-            bits = self.trace.bit_string(ch, a, preview_b)
-            if span > BIT_PREVIEW_MAX:
-                bits += f" … (共 {span} bit，仅预览前 {BIT_PREVIEW_MAX} bit)"
+            runs = self._run_length_bits(ch, a, b)
+            total_bits = len(runs)
+            preview = runs[:BIT_PREVIEW_MAX]
+            seq = ''.join(str(level) for level, _ in preview)
+            if total_bits > BIT_PREVIEW_MAX:
+                seq += f" … (共 {total_bits} bit，仅预览前 {BIT_PREVIEW_MAX})"
             self._bit_table.setItem(ch, 0, QtWidgets.QTableWidgetItem(f"CH{ch}"))
-            self._bit_table.setItem(ch, 1, QtWidgets.QTableWidgetItem(""))
+            us = ' '.join(f"{cnt / self.trace.rate * 1e6:.1f}"
+                          for _, cnt in preview[:16])
+            self._bit_table.setItem(ch, 1, QtWidgets.QTableWidgetItem(us))
             self._bit_table.setItem(ch, 2,
                                     QtWidgets.QTableWidgetItem(f"{a} ~ {b}"))
-            self._bit_table.setItem(ch, 3, QtWidgets.QTableWidgetItem(bits))
+            self._bit_table.setItem(ch, 3, QtWidgets.QTableWidgetItem(seq))
 
-        # 十六进制/十进制/ASCII（基于预览窗口的 MSB 8 位）
-        m8 = self.trace.extract_bytes(0, a, preview_b, "msb")
+        # 十六进制/十进制/ASCII（取压缩序列的前 8 bit）
+        runs0 = self._run_length_bits(0, a, b)
+        seq0 = ''.join(str(level) for level, _ in runs0[:8])
+        m8 = int(seq0, 2) if seq0 else None
         lines = [f"区间 {a}~{b}  ({span} 样本, "
                  f"{span / self.trace.rate * 1e6:.3f} µs)"]
-        if span > BIT_PREVIEW_MAX:
-            lines.append(f"位串过长，仅解析预览前 {BIT_PREVIEW_MAX} bit "
-                         f"(已省略 {span - BIT_PREVIEW_MAX} bit)")
+        lines.append("位序列每字符 = 1 bit（连续同电平采样点合并），"
+                     "bit时长见表格第 2 列")
         if m8 is not None:
             lines.append(f"CH0 8位: 0x{m8:02X}  十进制: {m8}  "
                          f"ASCII '{chr(m8) if 32 <= m8 < 127 else '.'}'")
