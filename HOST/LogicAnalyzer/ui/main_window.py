@@ -348,6 +348,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.detail_panel.show_sample(idx)
 
     def _on_region(self, a: int, b: int):
+        if self.trace is None:
+            return
         self.detail_panel.show_range(a, b)
         ms = []
         for ch in range(min(self.trace.nchannels, 8)):
