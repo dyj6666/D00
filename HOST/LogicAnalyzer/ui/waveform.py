@@ -23,6 +23,7 @@ class WaveformWidget(pg.PlotWidget):
         self.trace: TraceData | None = None
         self._curves = []
         self._labels = []
+        self._anno_items: list = []
         self._cursor: pg.InfiniteLine | None = None
         self._region: pg.LinearRegionItem | None = None
 
@@ -56,6 +57,7 @@ class WaveformWidget(pg.PlotWidget):
         self.addItem(self._region)
         self._curves = []
         self._labels = []
+        self._anno_items = []
         if trace is None:
             return
         x = trace.time_axis_us()
@@ -80,6 +82,47 @@ class WaveformWidget(pg.PlotWidget):
         self._region.setRegion([x[n // 3], x[min(2 * n // 3, n - 1)]])
         # 默认显示测量区（可拖动），让用户直接看到频率/占空比
         self._region.show()
+
+    # ---------- 协议位标注 ----------
+    ANNO_STYLE = {
+        "start": ("#EF5350", (239, 83, 80, 48)),
+        "data":  ("#42A5F5", (66, 165, 245, 36)),
+        "stop":  ("#FFA726", (255, 167, 38, 42)),
+        "addr":  ("#AB47BC", (171, 71, 188, 36)),
+        "ack":   ("#26A69A", (38, 166, 154, 36)),
+        "frame": ("#66BB6A", (102, 187, 106, 30)),
+        "idle":  ("#90A4AE", (144, 164, 174, 22)),
+    }
+
+    def set_protocol_annotations(self, annos) -> None:
+        """在波形上按样本区间绘制协议位色块与标签（1 条 = 1 bit/帧）。"""
+        self.clear_protocol_annotations()
+        if not annos or self.trace is None:
+            return
+        rate = self.trace.rate
+        n = min(self.trace.nchannels, 8)
+        y_top = n * 2.0 + 0.8
+        for a in annos:
+            x0 = a.start / rate * 1e6
+            x1 = max(a.end / rate * 1e6, x0 + 0.01)
+            color, brush = self.ANNO_STYLE.get(
+                a.kind, ("#B0BEC5", (176, 190, 197, 30)))
+            region = pg.LinearRegionItem(
+                values=(x0, x1), movable=False,
+                brush=pg.mkBrush(*brush), pen=None)
+            region.setZValue(10)
+            self.addItem(region)
+            label = pg.TextItem(a.label, color=color, anchor=(0.5, 1.0))
+            label.setPos((x0 + x1) / 2, y_top)
+            label.setZValue(11)
+            self.addItem(label)
+            self._anno_items.append((region, label))
+
+    def clear_protocol_annotations(self) -> None:
+        for region, label in self._anno_items:
+            self.removeItem(region)
+            self.removeItem(label)
+        self._anno_items = []
 
     # ---------- 交互 ----------
     def show_cursor(self, show: bool):

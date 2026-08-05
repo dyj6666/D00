@@ -34,6 +34,15 @@ class UartConfig:
     stop_bits: float = 1.0
 
 
+@dataclass
+class BitAnno:
+    """波形协议位标注：样本区间 [start, end) + 标签 + 语义类别。"""
+    start: int
+    end: int
+    label: str
+    kind: str        # start / data / stop / addr / ack / frame / idle
+
+
 def _decode_uart_line(bits: np.ndarray, rate: int, cfg: UartConfig,
                       line_name: str) -> List[Packet]:
     spb = rate / cfg.baud         # 每 bit 的样本数（浮点）
@@ -107,6 +116,60 @@ def decode_uart(samples: np.ndarray, rate: int, cfg: UartConfig) -> List[Packet]
     if cfg.rx_ch is not None and cfg.rx_ch != cfg.tx_ch:
         out += _decode_uart_line(channel_bits(samples, cfg.rx_ch), rate, cfg, "RX")
     out.sort(key=lambda p: p.start)
+    return out
+
+
+def annotate_uart(samples: np.ndarray, rate: int, cfg: UartConfig) -> List[BitAnno]:
+    """按波特率把 UART 帧逐位标注：起始位 S / 数据位 Dn=v / 停止位 STOP。
+    返回样本区间与标签列表，供波形层绘制彩色协议位色块。"""
+    spb = rate / cfg.baud
+    if spb < 2.0:
+        return []
+    bits = channel_bits(samples, cfg.tx_ch)
+    n = len(bits)
+    out: List[BitAnno] = []
+    i = 0
+    while i < n - 1:
+        if bits[i] == 1 and bits[i + 1] == 0:
+            start = i + 1
+            stable = 0
+            j = start
+            while j < n and j < i + int(spb * 0.9) and bits[j] == 0:
+                stable += 1
+                j += 1
+            if stable < int(spb * 0.5):
+                i += 1
+                continue
+            out.append(BitAnno(start, int(start + spb), "S", "start"))
+            center = start + 1.5 * spb
+            for b in range(cfg.data_bits):
+                v = int(bits[int(center + b * spb + 0.5)])
+                bs = int(start + (1 + b) * spb)
+                be = int(start + (2 + b) * spb)
+                out.append(BitAnno(bs, be, f"D{b}={v}", "data"))
+            stop_start = int(start + (1 + cfg.data_bits) * spb)
+            out.append(BitAnno(stop_start,
+                               int(stop_start + cfg.stop_bits * spb),
+                               "STOP", "stop"))
+            i = int(start + (1 + cfg.data_bits + cfg.stop_bits) * spb)
+        else:
+            i += 1
+    return out
+
+
+def annotate_i2c(samples: np.ndarray, rate: int, cfg: I2cConfig) -> List[BitAnno]:
+    """I2C 帧级标注：复用解码结果，把 START/ADDR/DATA/ACK/STOP 映射为色块。"""
+    pkts = decode_i2c(samples, rate, cfg)
+    return [BitAnno(p.start, p.end, p.kind, p.kind.lower()) for p in pkts]
+
+
+def annotate_spi(samples: np.ndarray, rate: int, cfg: SpiConfig) -> List[BitAnno]:
+    """SPI 帧级标注：每帧一个色块，标签带 MOSI/MISO 值摘要。"""
+    pkts = decode_spi(samples, rate, cfg)
+    out = []
+    for p in pkts:
+        label = p.info[:24] if p.info else "FRAME"
+        out.append(BitAnno(p.start, p.end, label, "frame"))
     return out
 
 

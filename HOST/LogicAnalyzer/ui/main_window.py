@@ -72,6 +72,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1500, 900)
         self.session: CaptureSession | None = None
         self.trace: TraceData | None = None
+        self._last_decode: tuple | None = None
         self._build_ui()
         self._apply_style()
 
@@ -200,6 +201,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.decode_btn.clicked.connect(self._decode)
         form.addRow(self.decode_btn)
 
+        self.annotate_check = QtWidgets.QCheckBox("波形协议位标注")
+        self.annotate_check.setChecked(True)
+        self.annotate_check.toggled.connect(self._refresh_annotations)
+        form.addRow(self.annotate_check)
+
         export_row = QtWidgets.QWidget()
         el = QtWidgets.QHBoxLayout(export_row)
         el.setContentsMargins(0, 0, 0, 0)
@@ -303,6 +309,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.wave.set_trace(trace)
         self.detail_panel.set_trace(trace)
         self.packet_panel.clear()
+        self.wave.clear_protocol_annotations()
+        self._last_decode = None
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.statusBar().showMessage(
@@ -345,6 +353,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 cpol=s["CPOL"].value(),
                                 cpha=s["CPHA"].value())
         self.statusBar().showMessage(f"正在解码 {proto} ...")
+        self._last_decode = (proto, cfg)
         self._dthread = DecodeThread(self.trace, proto, cfg)
         self._dthread.finished_ok.connect(self._on_decode_done)
         self._dthread.failed.connect(self._on_decode_failed)
@@ -357,6 +366,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.packet_panel.set_packets(result.packets, self.trace.rate)
         self.statusBar().showMessage(
             f"{result.protocol} 解码完成: {len(result.packets)} 个数据包")
+        self._refresh_annotations()
+
+    def _refresh_annotations(self):
+        if self.trace is None or self._last_decode is None:
+            return
+        proto, cfg = self._last_decode
+        if not self.annotate_check.isChecked():
+            self.wave.clear_protocol_annotations()
+            return
+        try:
+            if proto == "UART":
+                annos = dec.annotate_uart(self.trace.samples, self.trace.rate, cfg)
+            elif proto == "I2C":
+                annos = dec.annotate_i2c(self.trace.samples, self.trace.rate, cfg)
+            elif proto == "SPI":
+                annos = dec.annotate_spi(self.trace.samples, self.trace.rate, cfg)
+            else:
+                annos = []
+        except Exception:  # noqa: BLE001
+            annos = []
+        self.wave.set_protocol_annotations(annos)
 
     # ---------------- 视图联动 ----------------
     def _on_sample(self, idx: int):
