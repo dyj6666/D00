@@ -196,6 +196,9 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
     out: List[BitAnno] = []
     i = 0
     idle = cfg.cpol
+    # 采样沿：CPHA=0 取非空闲沿（CPOL=0 上升沿 / CPOL=1 下降沿），
+    #         CPHA=1 取空闲沿（CPOL=0 下降沿 / CPOL=1 上升沿）
+    sample_edge = idle if cfg.cpha == 1 else (1 - idle)
     prev_active = False
     while i < n - 1:
         active = cs[i] == cfg.cs_active if cs is not None else True
@@ -208,19 +211,22 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
             bits_pos = []
             ok = True
             for _ in range(8):
-                edge = 1 - idle
-                while j < n - 1 and clk[j] != edge:
+                # 定位本 bit 的采样沿
+                while j < n - 1 and clk[j] != sample_edge:
                     j += 1
                 if j >= n - 1 or (cs is not None and cs[j] != cfg.cs_active):
                     ok = False
                     break
-                bs = j
+                bs = j                          # 采样沿 = bit 起点
                 v = int(mosi[j]) if mosi is not None else 0
                 j += 1
-                while j < n - 1 and clk[j] != idle:
+                # 先等 CLK 回落离开采样沿电平，再找下一个采样沿 = 本 bit 周期结束
+                while j < n - 1 and clk[j] == sample_edge:
                     j += 1
-                be = j
-                j += 1
+                while (j < n - 1 and clk[j] != sample_edge
+                       and (cs is None or cs[j] == cfg.cs_active)):
+                    j += 1
+                be = j                          # bit 框 = 完整时钟周期
                 bits_pos.append((bs, be, v))
             if ok and len(bits_pos) == 8:
                 value = 0
