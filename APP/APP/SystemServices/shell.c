@@ -45,6 +45,8 @@ static void cmd_sg_uart_stop(const char *args);
 static void cmd_sg_uart_hex(const char *args);
 static void cmd_sg_spi_start(const char *args);
 static void cmd_sg_spi_stop(const char *args);
+static void cmd_sg_i2c_start(const char *args);
+static void cmd_sg_i2c_stop(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",         cmd_help},
@@ -71,6 +73,8 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_uart_hex",   cmd_sg_uart_hex},
     {"sg_spi_start",  cmd_sg_spi_start},
     {"sg_spi_stop",   cmd_sg_spi_stop},
+    {"sg_i2c_start",  cmd_sg_i2c_start},
+    {"sg_i2c_stop",   cmd_sg_i2c_stop},
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
@@ -448,4 +452,27 @@ static void cmd_sg_spi_stop(const char *args)
     (void)args;
     SG_SpiStop();
     LOG_Printf("SG SPI: stopped\r\n");
+}
+
+static void cmd_sg_i2c_start(const char *args)
+{
+    unsigned addr = 0x50;
+    char hex[SG_TEXT_MAX * 2 + 1] = {0};
+    int interval = 5;
+    if (args && *args) {
+        sscanf(args, "%x %127s %d", &addr, hex, &interval);
+    }
+    if (interval < 1) interval = 1;
+    if (addr > 0x7F) addr = 0x50;
+    int ret = SG_I2CStart((uint8_t)addr, hex, (uint16_t)interval);
+    LOG_Printf("SG I2C: %s (addr=0x%02X len=%zu bytes interval=%dms)\r\n",
+               ret == 0 ? "STARTED" : "FAILED",
+               (unsigned)addr, strlen(hex) / 2, interval);
+}
+
+static void cmd_sg_i2c_stop(const char *args)
+{
+    (void)args;
+    SG_I2CStop();
+    LOG_Printf("SG I2C: stopped\r\n");
 }

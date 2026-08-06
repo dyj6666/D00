@@ -12,7 +12,8 @@
 typedef enum {
     SG_MODE_NONE = 0,
     SG_MODE_UART,
-    SG_MODE_SPI
+    SG_MODE_SPI,
+    SG_MODE_I2C
 } sg_mode_t;
 
 static UART_HandleTypeDef sg_huart6;
@@ -23,9 +24,81 @@ static volatile sg_mode_t sg_mode = SG_MODE_NONE;
 static uint8_t            sg_data[SG_TEXT_MAX];
 static uint16_t           sg_len = 0;
 static uint16_t           sg_interval_ms = 5;
+static uint16_t           sg_i2c_addr = 0x50 << 1;
 
 #define SG_SPI_CS_PORT   GPIOB
 #define SG_SPI_CS_PIN    GPIO_PIN_12
+
+/* 软件模拟 I2C（bit-bang）：PE2=SCL / PE3=SDA（按键引脚，独立引出） */
+#define SG_I2C_SCL_PORT  GPIOE
+#define SG_I2C_SCL_PIN   GPIO_PIN_2
+#define SG_I2C_SDA_PORT  GPIOE
+#define SG_I2C_SDA_PIN   GPIO_PIN_3
+
+static void sg_i2c_delay_half(void)
+{
+    uint32_t start = DWT->CYCCNT;
+    while ((DWT->CYCCNT - start) < 840u) {  /* ~5us @168MHz => SCL 100kHz */
+    }
+}
+
+static void sg_i2c_scl_high(void)
+{
+    HAL_GPIO_WritePin(SG_I2C_SCL_PORT, SG_I2C_SCL_PIN, GPIO_PIN_SET);
+    sg_i2c_delay_half();
+}
+
+static void sg_i2c_scl_low(void)
+{
+    HAL_GPIO_WritePin(SG_I2C_SCL_PORT, SG_I2C_SCL_PIN, GPIO_PIN_RESET);
+    sg_i2c_delay_half();
+}
+
+static void sg_i2c_sda(uint8_t v)
+{
+    HAL_GPIO_WritePin(SG_I2C_SDA_PORT, SG_I2C_SDA_PIN,
+                      v ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+static void sg_i2c_start(void)
+{
+    sg_i2c_sda(1);
+    sg_i2c_scl_high();
+    sg_i2c_sda(0);
+    sg_i2c_scl_low();
+}
+
+static void sg_i2c_stop(void)
+{
+    sg_i2c_sda(0);
+    sg_i2c_scl_high();
+    sg_i2c_sda(1);
+}
+
+static void sg_i2c_write_byte(uint8_t byte)
+{
+    for (int b = 7; b >= 0; b--) {
+        sg_i2c_sda((byte >> b) & 1);
+        sg_i2c_delay_half();   /* 等 SDA 稳定后再拉高 SCL，避免边沿混叠 */
+        sg_i2c_scl_high();
+        sg_i2c_scl_low();
+    }
+    /* ACK 位：释放 SDA（开漏+上拉），无从机应答时保持高 => NACK */
+    sg_i2c_sda(1);
+    sg_i2c_delay_half();
+    sg_i2c_scl_high();
+    sg_i2c_scl_low();
+}
+
+static void sg_i2c_tx_frame(uint8_t addr7, const uint8_t *data, uint16_t len)
+{
+    sg_i2c_start();
+    sg_i2c_write_byte((uint8_t)(addr7 << 1));
+    for (uint16_t i = 0; i < len; i++) {
+        sg_i2c_write_byte(data[i]);
+    }
+    sg_i2c_stop();
+}
 
 static void sg_tx_task(void *arg)
 {
@@ -37,6 +110,8 @@ static void sg_tx_task(void *arg)
             HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_RESET);
             HAL_SPI_Transmit(&sg_spi2, sg_data, sg_len, HAL_MAX_DELAY);
             HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_SET);
+        } else if (sg_mode == SG_MODE_I2C) {
+            sg_i2c_tx_frame((uint8_t)(sg_i2c_addr >> 1), sg_data, sg_len);
         } else {
             break;
         }
@@ -227,6 +302,77 @@ int SG_SpiStartHex(const char *hex, uint16_t interval_ms)
 }
 
 void SG_SpiStop(void)
+{
+    if (!sg_running && sg_task_id == NULL) {
+        return;
+    }
+    if (sg_task_id != NULL) {
+        osThreadFlagsSet(sg_task_id, SG_FLAG_STOP);
+        sg_task_id = NULL;
+    }
+    osDelay(20);
+}
+
+int SG_I2CStart(uint8_t addr, const char *hex, uint16_t interval_ms)
+{
+    size_t len;
+    uint8_t buf[SG_TEXT_MAX];
+    if (hex == NULL) return -1;
+    len = strlen(hex);
+    if (len == 0 || len % 2 != 0 || len / 2 > SG_TEXT_MAX) return -1;
+    for (size_t i = 0; i < len / 2; i++) {
+        int hi = sg_hex_value(hex[i * 2]);
+        int lo = sg_hex_value(hex[i * 2 + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        buf[i] = (uint8_t)((hi << 4) | lo);
+    }
+    if (sg_running) {
+        SG_UartStop();
+    }
+
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+
+    /* 使能 DWT 周期计数器（软件 I2C 微秒延时） */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+    /* PE2=SCL 推挽输出；PE3=SDA 开漏输出 + 上拉（读 ACK 可释放） */
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin = SG_I2C_SCL_PIN;
+    gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    HAL_GPIO_Init(SG_I2C_SCL_PORT, &gpio);
+
+    gpio.Pin = SG_I2C_SDA_PIN;
+    gpio.Mode = GPIO_MODE_OUTPUT_OD;
+    gpio.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(SG_I2C_SDA_PORT, &gpio);
+    sg_i2c_sda(1);
+
+    memcpy(sg_data, buf, len / 2);
+    sg_len = (uint16_t)(len / 2);
+    sg_i2c_addr = (uint16_t)(addr << 1);
+    sg_interval_ms = interval_ms;
+    sg_mode = SG_MODE_I2C;
+    sg_running = 1;
+
+    osThreadAttr_t attr = {
+        .name = "SG_I2C",
+        .stack_size = SG_STACK_SIZE,
+        .priority = osPriorityHigh,   /* bit-bang 时序需避免被任务抢占 */
+    };
+    sg_task_id = osThreadNew(sg_tx_task, NULL, &attr);
+    if (sg_task_id == NULL) {
+        sg_mode = SG_MODE_NONE;
+        sg_running = 0;
+        return -3;
+    }
+    return 0;
+}
+
+void SG_I2CStop(void)
 {
     if (!sg_running && sg_task_id == NULL) {
         return;

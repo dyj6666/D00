@@ -28,6 +28,13 @@ int    SG_SpiStartHex(const char *hex, uint16_t interval_ms);
 /* 停止 SPI 发生器 */
 void   SG_SpiStop(void);
 
+/* I2C 测试帧发生器：I2C2 主机（PB10=SCL / PB11=SDA，100kHz），
+ * 按 interval_ms 间隔发送 START + addr + hex 数据 + STOP。 */
+int    SG_I2CStart(uint8_t addr, const char *hex, uint16_t interval_ms);
+
+/* 停止 I2C 发生器 */
+void   SG_I2CStop(void);
+
 /* 停止发生器（PC6 保持 USART6_TX 空闲高电平，复位后恢复 TIM8 PWM） */
 void   SG_UartStop(void);
 

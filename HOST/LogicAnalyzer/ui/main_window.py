@@ -387,7 +387,8 @@ class MainWindow(QtWidgets.QMainWindow):
             if proto == "UART":
                 annos = dec.annotate_uart(self.trace.samples, self.trace.rate, cfg)
             elif proto == "I2C":
-                annos = dec.annotate_i2c(self.trace.samples, self.trace.rate, cfg)
+                annos = dec.annotate_i2c_bits(self.trace.samples,
+                                              self.trace.rate, cfg)
             elif proto == "SPI":
                 annos = dec.annotate_spi_bits(self.trace.samples,
                                               self.trace.rate, cfg)

@@ -172,7 +172,80 @@ def annotate_uart(samples: np.ndarray, rate: int, cfg: UartConfig) -> List[BitAn
 def annotate_i2c(samples: np.ndarray, rate: int, cfg: I2cConfig) -> List[BitAnno]:
     """I2C 帧级标注：复用解码结果，把 START/ADDR/DATA/ACK/STOP 映射为色块。"""
     pkts = decode_i2c(samples, rate, cfg)
-    return [BitAnno(p.start, p.end, p.kind, p.kind.lower()) for p in pkts]
+    return [BitAnno(p.start, p.end, p.kind, p.kind.lower(),
+                    ch=cfg.sda_ch) for p in pkts]
+
+
+def annotate_i2c_bits(samples: np.ndarray, rate: int,
+                      cfg: I2cConfig) -> List[BitAnno]:
+    """I2C 位级标注：START/STOP 条件 + 每字节 8 数据位(b7..b0) + ACK 位 +
+    字节级 ADDR/DATA 标签。"""
+    scl = channel_bits(samples, cfg.scl_ch)
+    sda = channel_bits(samples, cfg.sda_ch)
+    n = len(scl)
+    out: List[BitAnno] = []
+    i = 1
+    in_tx = False
+    first = False
+    while i < n - 1:
+        # START：SCL 高时 SDA 下降沿
+        if scl[i] == 1 and scl[i - 1] == 1 and sda[i] == 0 and sda[i - 1] == 1:
+            out.append(BitAnno(i - 1, i + 1, "START", "start", ch=cfg.sda_ch))
+            in_tx = True
+            first = True
+            i += 1
+            continue
+        # STOP：SCL 高时 SDA 上升沿
+        if scl[i] == 1 and scl[i - 1] == 1 and sda[i] == 1 and sda[i - 1] == 0:
+            out.append(BitAnno(i - 1, i + 1, "STOP", "stop", ch=cfg.sda_ch))
+            in_tx = False
+            first = False
+            i += 1
+            continue
+        if in_tx and scl[i] == 1 and scl[i - 1] == 0:
+            byte_start = i
+            bits: List[tuple[int, int]] = []
+            stopped = False
+            while len(bits) < 9 and i < n - 1:
+                if scl[i] == 1 and scl[i - 1] == 0:
+                    bits.append((i, int(sda[i])))
+                    i += 1
+                    while i < n - 1 and scl[i] == 1:
+                        if (scl[i - 1] == 1 and sda[i] == 1
+                                and sda[i - 1] == 0):
+                            stopped = True
+                            break
+                        i += 1
+                    if stopped:
+                        break
+                else:
+                    i += 1
+            if stopped:
+                out.append(BitAnno(i - 1, i + 1, "STOP", "stop",
+                                   ch=cfg.sda_ch))
+                in_tx = False
+                first = False
+                continue
+            if len(bits) >= 9:
+                value = 0
+                for k, (bs, v) in enumerate(bits[:8]):
+                    value = (value << 1) | v
+                    be = bits[k + 1][0] if k + 1 < len(bits) else bits[-1][0] + 1
+                    out.append(BitAnno(bs, be, f"b{7 - k}={v}", "data",
+                                       ch=cfg.sda_ch))
+                ack = bits[8][1]
+                step = max(1, bits[8][0] - bits[7][0])
+                out.append(BitAnno(bits[8][0], bits[8][0] + step,
+                                   f"ACK={'Y' if ack == 0 else 'N'}", "ack",
+                                   ch=cfg.sda_ch))
+                label = (f"ADDR 0x{value >> 1:02X}" if first
+                         else f"DATA 0x{value:02X}")
+                out.append(BitAnno(byte_start, bits[-1][0] + 1, label,
+                                   "byte", ch=cfg.sda_ch))
+                first = False
+            continue
+        i += 1
+    return out
 
 
 def annotate_spi(samples: np.ndarray, rate: int, cfg: SpiConfig) -> List[BitAnno]:

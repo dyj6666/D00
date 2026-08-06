@@ -78,21 +78,26 @@ class ProtocolOverlay(pg.GraphicsObject):
         # 第二遍：位级色块（相邻同色合并）/竖线/箭头 + 全部标签
         def flush_merge():
             if merge is not None:
-                p.fillRect(QtCore.QRectF(merge[2], (n - merge[0]) * 2.0,
+                yb = n * 2.0 + 0.5 if merge[0] is None else merge[0] * 2.0
+                p.fillRect(QtCore.QRectF(merge[2], yb,
                                          max(merge[3] - merge[2], us * 0.3),
                                          2.0),
                            QtGui.QColor(*ANNO_STYLE[merge[1]][1]))
 
         merge = None   # (ch, kind, x0, x1)
         for a in self._annos:
-            if a.ch is None or a.ch >= n:
+            if a.ch is not None and a.ch >= n:
                 continue
             x0 = a.start / rate * 1e6
             x1 = a.end / rate * 1e6
             if x1 < x_lo or x0 > x_hi:
                 continue
-            top = (n - a.ch) * 2.0 + 2.0
-            bot = (n - a.ch) * 2.0
+            if a.ch is None:
+                bot = n * 2.0 + 0.5
+                top = n * 2.0 + 2.5
+            else:
+                top = (n - a.ch) * 2.0 + 2.0
+                bot = (n - a.ch) * 2.0
             color, _ = ANNO_STYLE.get(a.kind, ("#B0BEC5", (176, 190, 197, 30)))
             if a.kind == "byte":
                 flush_merge()
@@ -160,13 +165,16 @@ class ProtocolOverlay(pg.GraphicsObject):
         # 第三遍：字节级标签（最后绘制，避免被位级色块覆盖）
         if show_byte_labels:
             for a in self._annos:
-                if a.kind != "byte" or a.ch is None or a.ch >= n:
+                if a.kind != "byte" or (a.ch is not None and a.ch >= n):
                     continue
                 x0 = a.start / rate * 1e6
                 x1 = a.end / rate * 1e6
                 if x1 < x_lo or x0 > x_hi:
                     continue
-                top = (n - a.ch) * 2.0 + 2.0
+                y_top = (n * 2.0 + 2.5 if a.ch is None
+                         else (n - a.ch) * 2.0 + 2.0)
+                y_bot = (n * 2.0 + 0.5 if a.ch is None
+                         else (n - a.ch) * 2.0)
                 w_px = max((x1 - x0) * scale, 1.0)
                 size = max(5, min(8, int(w_px / max(len(a.label), 1) * 1.5)))
                 font = QtGui.QFont("Consolas", size)
@@ -176,7 +184,7 @@ class ProtocolOverlay(pg.GraphicsObject):
                 # 屏幕空间绘制：字节范围水平居中，通道带内底部对齐
                 p.save()
                 pt = p.transform().map(
-                    QtCore.QPointF((x0 + x1) / 2, (n - a.ch) * 2.0 + 0.3))
+                    QtCore.QPointF((x0 + x1) / 2, y_bot + 0.3))
                 p.resetTransform()
                 tw = p.fontMetrics().horizontalAdvance(a.label)
                 p.drawText(QtCore.QPointF(pt.x() - tw / 2, pt.y()), a.label)
