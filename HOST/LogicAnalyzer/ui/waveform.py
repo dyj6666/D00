@@ -97,6 +97,10 @@ class ProtocolOverlay(pg.GraphicsObject):
             if a.kind == "byte":
                 flush_merge()
                 merge = None
+                # 字节边界分隔线（始终显示，直观区分每个字节）
+                p.setPen(QtGui.QPen(QtGui.QColor(255, 235, 150, 70), 0,
+                                    QtCore.Qt.DashLine))
+                p.drawLine(QtCore.QPointF(x1, bot), QtCore.QPointF(x1, top))
                 continue
             # 位级：相邻同通道同类型首尾相连则合并色块
             if (merge is not None and merge[0] == a.ch
@@ -111,7 +115,22 @@ class ProtocolOverlay(pg.GraphicsObject):
                 p.drawLine(QtCore.QPointF(x0, bot), QtCore.QPointF(x0, top))
                 p.setBrush(QtGui.QColor(color))
                 p.setPen(QtCore.Qt.NoPen)
-                if a.edge == "falling":
+                if a.kind == "cs":
+                    # CS 边沿：箭头放通道带内中点，紧贴 CS 波形跳变处
+                    mid = (bot + top) / 2
+                    if a.edge == "falling":
+                        tri = QtGui.QPolygonF([
+                            QtCore.QPointF(x0, mid - 0.35),
+                            QtCore.QPointF(x0 - 0.2, mid + 0.45),
+                            QtCore.QPointF(x0 + 0.2, mid + 0.45),
+                        ])
+                    else:
+                        tri = QtGui.QPolygonF([
+                            QtCore.QPointF(x0, mid + 0.35),
+                            QtCore.QPointF(x0 - 0.2, mid - 0.45),
+                            QtCore.QPointF(x0 + 0.2, mid - 0.45),
+                        ])
+                elif a.edge == "falling":
                     # 下降沿采样：箭头朝下（竖线底部）
                     tri = QtGui.QPolygonF([
                         QtCore.QPointF(x0, bot + 0.45),
