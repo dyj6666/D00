@@ -208,6 +208,26 @@ uint8_t Ota_End(void)
     ota_state = OTA_ST_DONE;
     LOG_Printf("OTA: download complete (%lu B), rebooting to BOOT...\r\n",
                (unsigned long)ota_total);
+
+    /* 触发 BOOT 升级模式（双保险）：
+     * 1) 参数区置 PENDING + boot_count=MAX —— BOOT 的 PENDING 超限路径
+     *    会经回滚（BACKUP 无效）进入升级模式接收固件；
+     * 2) BKP 标志（HAL 索引已修正）作为直接触发。 */
+    ota_param_t param;
+    memcpy(&param, (const void *)OTA_PARAM_ADDR, sizeof(param));
+    if (param.magic != OTA_PARAM_MAGIC || param.crc32 != ota_param_crc(&param)) {
+        memset(&param, 0, sizeof(param));
+        param.magic = OTA_PARAM_MAGIC;
+    }
+    param.boot_state = OTA_STATE_PENDING;
+    param.boot_count = 3;                 /* 与 BOOT MAX_BOOT_TRIES 一致 */
+    param.last_error = 0;
+    param.crc32 = ota_param_crc(&param);
+    ota_flash_erase(OTA_PARAM_ADDR, 0);
+    ota_flash_write(OTA_PARAM_ADDR, (const uint8_t *)&param, sizeof(param));
+    ota_flash_write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
+                    (const uint8_t *)&param, sizeof(param));
+
     BSP_RTC_WriteBackupReg(0, BOOT_FLAG_UPGRADE);
     BSP_DelayMs(100);
     BSP_SystemReset();

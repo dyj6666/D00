@@ -7,8 +7,10 @@ from Crypto.Hash import SHA256
 from ecdsa import SigningKey, NIST256p
 
 def derive_aes_key_from_uid(uid_hex: str) -> bytes:
-    """根据设备UID派生32字节AES密钥"""
-    uid_bytes = bytes.fromhex(uid_hex)
+    """根据设备UID派生32字节AES密钥。
+    与固件一致：UID hex 按 3 个 uint32 小端字节序排列（同 ymodem_sender 实现）。"""
+    uid_ints = [int(uid_hex[i:i + 8], 16) for i in range(0, 24, 8)]
+    uid_bytes = struct.pack("<III", *uid_ints)
     salt = b"OTA-AES-KEY-V1\x00"
     h = SHA256.new(uid_bytes + salt)
     return h.digest()

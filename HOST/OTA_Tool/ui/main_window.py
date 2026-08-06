@@ -13,7 +13,7 @@ from core.ota_worker import OtaWorker
 from ui.uid_capture_thread import UidCaptureThread
 from utils.config import Config
 
-VERSION = "v1.0.0"
+VERSION = "v2.0.0"
 
 # 日志颜色常量（深色系，适配浅色背景）
 COLOR_OK = "#228B22"
@@ -65,7 +65,7 @@ class MainWindow(QMainWindow):
 
         serial_layout.addWidget(QLabel("波特率:"))
         self.combo_baud = QComboBox()
-        self.combo_baud.addItems(["9600", "115200", "230400", "460800"])
+        self.combo_baud.addItems(["9600", "115200", "230400", "460800", "921600"])
         self.combo_baud.setCurrentText("115200")
         serial_layout.addWidget(self.combo_baud)
 
@@ -130,6 +130,13 @@ class MainWindow(QMainWindow):
 
         # ---- 控制按钮 ----
         btn_layout = QHBoxLayout()
+        btn_layout.addWidget(QLabel("升级模式:"))
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItems(["HOSTLINK 运行时", "YMODEM 传统(BOOT)"])
+        self.combo_mode.setCurrentIndex(0)
+        self.combo_mode.currentIndexChanged.connect(self._on_mode_changed)
+        btn_layout.addWidget(self.combo_mode)
+        btn_layout.addStretch()
         self.btn_start = QPushButton("开始升级")
         self.btn_start.setMinimumHeight(36)
         self.btn_start.clicked.connect(self._start_ota)
@@ -140,6 +147,11 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_stop)
         main_layout.addLayout(btn_layout)
+
+        self.lbl_mode_hint = QLabel()
+        self.lbl_mode_hint.setStyleSheet("color: #2F4F4F;")
+        main_layout.addWidget(self.lbl_mode_hint)
+        self._on_mode_changed(0)
 
         # ---- 进度条 ----
         self.progress = QProgressBar()
@@ -262,12 +274,26 @@ class MainWindow(QMainWindow):
             file_path=file_path,
             version=version,
             uid_hex=uid,
-            private_key_hex=key
+            private_key_hex=key,
+            mode="ymodem" if self.combo_mode.currentIndex() == 1 else "hostlink"
         )
         self.worker.log_signal.connect(self._append_log)
         self.worker.progress_signal.connect(self.progress.setValue)
         self.worker.finished_signal.connect(self._on_finished)
         self.worker.start()
+
+    def _on_mode_changed(self, index):
+        if index == 0:
+            self.lbl_mode_hint.setText(
+                "HOSTLINK 运行时：APP 在线下载到 Download 区，BOOT 校验后切换；"
+                "请使用数据口并选择 921600 波特率")
+            if "921600" not in [self.combo_baud.itemText(i)
+                                for i in range(self.combo_baud.count())]:
+                self.combo_baud.addItem("921600")
+        else:
+            self.lbl_mode_hint.setText(
+                "YMODEM 传统：需先让设备进入 BOOT 升级模式（发 ota 命令复位），"
+                "使用升级口 115200 波特率")
 
     def _stop_ota(self):
         if self.worker and self.worker.isRunning():

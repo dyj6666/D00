@@ -14,7 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/* 备份域访问宏，简化书写 */
+/* 备份域访问宏（HAL 第二参数为寄存器索引，BKP_DR1 = 索引 0） */
 #define BKP_READ(reg)   HAL_RTCEx_BKUPRead(&hrtc, (reg))
 #define BKP_WRITE(reg, val) HAL_RTCEx_BKUPWrite(&hrtc, (reg), (val))
 
@@ -231,7 +231,7 @@ static void boot_enter_upgrade_mode(void)
         param.last_error = 0;
         boot_param_save(&param);
 
-        BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
+        BKP_WRITE(0, BOOT_FLAG_NONE);
         printf("Update successful! Rebooting to new APP...\r\n");
         HAL_Delay(100);
         NVIC_SystemReset();
@@ -251,9 +251,9 @@ void BootApp_Run(void)
            param.boot_state, param.boot_count, param.rollback_count);
 
     /* 1) 强制升级标志（APP 主动触发） */
-    if (BKP_READ(RTC_BKP_DR1) == BOOT_FLAG_UPGRADE) {
+    if (BKP_READ(0) == BOOT_FLAG_UPGRADE) {
         printf("Upgrade flag set. Entering upgrade mode.\r\n");
-        BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
+        BKP_WRITE(0, BOOT_FLAG_NONE);
         boot_enter_upgrade_mode();
         return;
     }

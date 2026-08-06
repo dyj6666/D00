@@ -6,10 +6,11 @@
 void BSP_RTC_WriteBackupReg(uint32_t index, uint32_t value)
 {
     HAL_PWR_EnableBkUpAccess();
-    HAL_RTCEx_BKUPWrite(&hrtc, (uint32_t)(RTC_BKP_DR1 + (index * 4)), value);
+    /* HAL_RTCEx_BKUPWrite 第二参数为寄存器索引 0..19（非地址！） */
+    HAL_RTCEx_BKUPWrite(&hrtc, index, value);
 }
 
 uint32_t BSP_RTC_ReadBackupReg(uint32_t index)
 {
-    return HAL_RTCEx_BKUPRead(&hrtc, (uint32_t)(RTC_BKP_DR1 + (index * 4)));
+    return HAL_RTCEx_BKUPRead(&hrtc, index);
 }

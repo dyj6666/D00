@@ -15,7 +15,7 @@ import argparse
 import struct
 from pathlib import Path
 
-APP_PARTITION_SIZE = 256 * 1024          # 0x40000
+APP_PARTITION_SIZE = 320 * 1024          # 0x50000 (RUN 区, 扇区4-6)
 APP_VALID_OFFSET = APP_PARTITION_SIZE - 8
 APP_VALID_MAGIC = 0x4F54412E
 

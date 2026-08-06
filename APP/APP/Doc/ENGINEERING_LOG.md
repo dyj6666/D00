@@ -432,3 +432,21 @@ auto-stop）全部按设计工作。
   - 下载完成置备份域升级标志复位，BOOT 负责备份/切换/验证/解密。
 - **验证**：BOOT/APP Keil 0 Error 0 Warning；GCC 双路径构建通过；
   待实机验证：正常启动 → 升级 → 回滚全流程。
+
+### 12.9 OTA 实机验证与关键 Bug 修复
+- **实机验证（YMODEM 路径，DAP 故障下串口升级）**：
+  - 传输 62 帧 100% 接收、CRC 匹配、安全验证通过、AES 解密写入 RUN；
+  - 新固件复位后正常启动（Module registry 9 模块 + Event Bus Ready）；
+  - 期间发现上位机 `cryptor.py` UID 派生字节序与固件不一致（fromhex vs
+    uint32 小端），已修复并与 BOOT `AES_KEY_PREFIX` 对齐验证。
+- **关键 Bug：BKP 备份寄存器 HAL 参数错误**：
+  - `HAL_RTCEx_BKUPWrite/Read` 第二参数应为**寄存器索引 0..19**，而非地址；
+  - APP `BSP_RTC_WriteBackupReg` 与 BOOT `BKP_READ/WRITE` 均误传
+    `RTC_BKP_DR1 + offset` 地址值，导致升级标志从未真正写入、
+    APP→BOOT 升级触发失效（复位后 BOOT 走 NORMAL 而非升级模式）；
+  - 已修正为索引访问（BKP_DR1 = 索引 0）。
+- **升级触发双保险**：APP `Ota_End` 除 BKP 标志外，同时向参数区写
+  PENDING + boot_count=MAX（BOOT PENDING 超限路径经回滚进入升级模式接收
+  固件），不依赖备份域电池。
+- **部署状态**：修复代码 Keil/GCC 编译通过；因 DAP 故障无法烧录 BOOT，
+  需恢复调试器后烧录修复版 BOOT + APP 再完成回滚/确认全流程验证。

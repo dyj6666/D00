@@ -245,9 +245,9 @@
                 <Size>0x0</Size>
               </Ocm6>
               <IRAM>
-                <Type>1</Type>
+                <Type>0</Type>
                 <StartAddress>0x20000000</StartAddress>
-                <Size>0x20000</Size>
+                <Size>0x1c000</Size>
               </IRAM>
               <IROM>
                 <Type>1</Type>
@@ -281,7 +281,7 @@
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
-                <StartAddress>0x20000000</StartAddress>
+                <StartAddress>0x2000000</StartAddress>
                 <Size>0x20000</Size>
               </OCR_RVCT5>
               <OCR_RVCT6>
@@ -300,7 +300,7 @@
                 <Size>0x0</Size>
               </OCR_RVCT8>
               <OCR_RVCT9>
-                <Type>1</Type>
+                <Type>0</Type>
                 <StartAddress>0x20000000</StartAddress>
                 <Size>0x20000</Size>
               </OCR_RVCT9>
@@ -371,7 +371,7 @@
             <TextAddressRange></TextAddressRange>
             <DataAddressRange></DataAddressRange>
             <pXoBase></pXoBase>
-  <ScatterFile>BOOT\BOOT.sct</ScatterFile>
+            <ScatterFile>BOOT\BOOT.sct</ScatterFile>
             <IncludeLibs></IncludeLibs>
             <IncludeLibsPath></IncludeLibsPath>
             <Misc></Misc>
