@@ -129,9 +129,13 @@ class ProtocolOverlay(pg.GraphicsObject):
             if show_bit_labels:
                 p.setFont(self._font_bit)
                 p.setPen(QtGui.QColor(color))
-                p.drawText(QtCore.QRectF(x0 - 9, bot, 18, 2.2),
-                           QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop
-                           | QtCore.Qt.TextDontClip, a.label)
+                # 屏幕空间绘制文本：固定字号，避免随 ViewBox 缩放拉伸成巨字
+                p.save()
+                pt = p.transform().map(QtCore.QPointF(x0, bot + 0.05))
+                p.resetTransform()
+                tw = p.fontMetrics().horizontalAdvance(a.label)
+                p.drawText(QtCore.QPointF(pt.x() - tw / 2, pt.y()), a.label)
+                p.restore()
         flush_merge()
 
         # 第三遍：字节级标签（最后绘制，避免被位级色块覆盖）
@@ -150,11 +154,14 @@ class ProtocolOverlay(pg.GraphicsObject):
                 font.setBold(True)
                 p.setFont(font)
                 p.setPen(QtGui.QColor("#FFE082"))
-                p.drawText(
-                    QtCore.QRectF(x0, (n - a.ch) * 2.0 + 0.25,
-                                  max(x1 - x0, us * 8.0), 1.8),
-                    QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop
-                    | QtCore.Qt.TextDontClip, a.label)
+                # 屏幕空间绘制：字节范围水平居中，通道带内底部对齐
+                p.save()
+                pt = p.transform().map(
+                    QtCore.QPointF((x0 + x1) / 2, (n - a.ch) * 2.0 + 0.3))
+                p.resetTransform()
+                tw = p.fontMetrics().horizontalAdvance(a.label)
+                p.drawText(QtCore.QPointF(pt.x() - tw / 2, pt.y()), a.label)
+                p.restore()
 
 
 class WaveformWidget(pg.PlotWidget):
