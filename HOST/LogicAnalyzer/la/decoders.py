@@ -243,15 +243,31 @@ def annotate_i2c_bits(samples: np.ndarray, rate: int,
                 for k, (bs, v) in enumerate(bits[:8]):
                     value = (value << 1) | v
                     be = bits[k + 1][0] if k + 1 < len(bits) else bits[-1][0] + 1
-                    out.append(BitAnno(bs, be, f"b{7 - k}={v}", "data",
-                                       ch=cfg.sda_ch))
+                    if first:
+                        if k == 7:
+                            # 地址字节 bit0 = R/W 读写位
+                            out.append(BitAnno(
+                                bs, be, f"R/W={'W' if v == 0 else 'R'}",
+                                "rw", ch=cfg.sda_ch))
+                        else:
+                            # 地址位 A6..A0（bit7..bit1）
+                            out.append(BitAnno(
+                                bs, be, f"A{6 - k}={v}", "addr_bit",
+                                ch=cfg.sda_ch))
+                    else:
+                        out.append(BitAnno(bs, be, f"b{7 - k}={v}", "data",
+                                           ch=cfg.sda_ch))
                 ack = bits[8][1]
                 step = max(1, bits[8][0] - bits[7][0])
                 out.append(BitAnno(bits[8][0], bits[8][0] + step,
                                    f"ACK={'Y' if ack == 0 else 'N'}", "ack",
                                    ch=cfg.sda_ch))
-                label = (f"ADDR 0x{value >> 1:02X}" if first
-                         else f"DATA 0x{value:02X}")
+                if first:
+                    rw = "W" if (value & 1) == 0 else "R"
+                    label = (f"ADDR 0x{value >> 1:02X} "
+                             f"(0x{value:02X}) {rw}")
+                else:
+                    label = f"DATA 0x{value:02X}"
                 out.append(BitAnno(byte_start, bits[-1][0] + 1, label,
                                    "byte", ch=cfg.sda_ch))
                 first = False
