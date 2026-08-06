@@ -59,9 +59,9 @@ class ProtocolOverlay(pg.GraphicsObject):
         us = 1e6 / rate
         # 文本只在 bit 宽度达到阈值时绘制（缩放太小则只画色块/竖线，保证流畅）
         scale = p.transform().m11()
-        min_bit_px = 16.0
-        show_labels = scale * (31 * us) >= min_bit_px
         bit_px = scale * (31 * us)      # 当前缩放下一个 bit 的像素宽
+        show_bit_labels = bit_px >= 12.0       # 逐位标签：放大后才显示
+        show_byte_labels = bit_px * 8.0 >= 55.0  # 字节HEX+二进制：更早显示
 
         # 第一遍：字节级色块（底层淡黄）
         for a in self._annos:
@@ -97,7 +97,7 @@ class ProtocolOverlay(pg.GraphicsObject):
             if a.kind == "byte":
                 flush_merge()
                 merge = None
-                if show_labels:
+                if show_byte_labels:
                     p.setFont(self._font_byte)
                     p.setPen(QtGui.QColor("#FFE082"))
                     p.drawText(
@@ -118,12 +118,12 @@ class ProtocolOverlay(pg.GraphicsObject):
                 p.setBrush(QtGui.QColor(color))
                 p.setPen(QtCore.Qt.NoPen)
                 tri = QtGui.QPolygonF([
-                    QtCore.QPointF(x0, top),
-                    QtCore.QPointF(x0 - 1.1, top - 1.6),
-                    QtCore.QPointF(x0 + 1.1, top - 1.6),
+                    QtCore.QPointF(x0, top - 0.7),
+                    QtCore.QPointF(x0 - 0.45, top - 1.25),
+                    QtCore.QPointF(x0 + 0.45, top - 1.25),
                 ])
                 p.drawPolygon(tri)
-            if show_labels:
+            if show_bit_labels:
                 p.setFont(self._font_bit)
                 p.setPen(QtGui.QColor(color))
                 p.drawText(QtCore.QRectF(x0 - 7, bot + 0.05, 14, 0.7),
