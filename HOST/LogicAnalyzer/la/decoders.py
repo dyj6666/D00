@@ -190,14 +190,16 @@ def annotate_i2c_bits(samples: np.ndarray, rate: int,
     while i < n - 1:
         # START：SCL 高时 SDA 下降沿
         if scl[i] == 1 and scl[i - 1] == 1 and sda[i] == 0 and sda[i - 1] == 1:
-            out.append(BitAnno(i - 1, i + 1, "START", "start", ch=cfg.sda_ch))
+            out.append(BitAnno(i - 1, i + 1, "START", "start",
+                               ch=cfg.sda_ch, edge="falling"))
             in_tx = True
             first = True
             i += 1
             continue
         # STOP：SCL 高时 SDA 上升沿
         if scl[i] == 1 and scl[i - 1] == 1 and sda[i] == 1 and sda[i - 1] == 0:
-            out.append(BitAnno(i - 1, i + 1, "STOP", "stop", ch=cfg.sda_ch))
+            out.append(BitAnno(i - 1, i + 1, "STOP", "stop",
+                               ch=cfg.sda_ch, edge="rising"))
             in_tx = False
             first = False
             i += 1
@@ -206,6 +208,7 @@ def annotate_i2c_bits(samples: np.ndarray, rate: int,
             byte_start = i
             bits: List[tuple[int, int]] = []
             stopped = False
+            restarted = False
             while len(bits) < 9 and i < n - 1:
                 if scl[i] == 1 and scl[i - 1] == 0:
                     bits.append((i, int(sda[i])))
@@ -215,16 +218,25 @@ def annotate_i2c_bits(samples: np.ndarray, rate: int,
                                 and sda[i - 1] == 0):
                             stopped = True
                             break
+                        if (scl[i - 1] == 1 and sda[i] == 0
+                                and sda[i - 1] == 1):
+                            restarted = True
+                            break
                         i += 1
-                    if stopped:
+                    if stopped or restarted:
                         break
                 else:
                     i += 1
             if stopped:
                 out.append(BitAnno(i - 1, i + 1, "STOP", "stop",
-                                   ch=cfg.sda_ch))
+                                   ch=cfg.sda_ch, edge="rising"))
                 in_tx = False
                 first = False
+                continue
+            if restarted:
+                out.append(BitAnno(i - 1, i + 1, "START", "start",
+                                   ch=cfg.sda_ch, edge="falling"))
+                first = True
                 continue
             if len(bits) >= 9:
                 value = 0
@@ -371,6 +383,7 @@ def decode_i2c(samples: np.ndarray, rate: int, cfg: I2cConfig) -> List[Packet]:
             bits: List[int] = []
             collected = False
             stopped = False
+            restarted = False
             while len(bits) < 9 and i < n - 1:
                 if scl[i] == 1 and scl[i - 1] == 0:
                     bits.append(int(sda[i]))
@@ -385,8 +398,12 @@ def decode_i2c(samples: np.ndarray, rate: int, cfg: I2cConfig) -> List[Packet]:
                                 and sda[i - 1] == 0):
                             stopped = True
                             break
+                        if (scl[i - 1] == 1 and sda[i] == 0
+                                and sda[i - 1] == 1):
+                            restarted = True
+                            break
                         i += 1
-                    if stopped:
+                    if stopped or restarted:
                         break
                 else:
                     i += 1
@@ -395,6 +412,9 @@ def decode_i2c(samples: np.ndarray, rate: int, cfg: I2cConfig) -> List[Packet]:
                 in_transaction = False
                 first_byte = False
                 i += 1
+            elif restarted:
+                # 重复起始：丢弃不完整字节，i 停在 START 沿，主循环会检测到
+                first_byte = True
             elif collected:
                 byte_val = 0
                 for b in bits[:8]:

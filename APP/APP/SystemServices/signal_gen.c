@@ -13,7 +13,8 @@ typedef enum {
     SG_MODE_NONE = 0,
     SG_MODE_UART,
     SG_MODE_SPI,
-    SG_MODE_I2C
+    SG_MODE_I2C,
+    SG_MODE_I2C_COMPLEX
 } sg_mode_t;
 
 static UART_HandleTypeDef sg_huart6;
@@ -75,7 +76,7 @@ static void sg_i2c_stop(void)
     sg_i2c_sda(1);
 }
 
-static void sg_i2c_write_byte(uint8_t byte)
+static void sg_i2c_write_byte(uint8_t byte, uint8_t ack_bit)
 {
     for (int b = 7; b >= 0; b--) {
         sg_i2c_sda((byte >> b) & 1);
@@ -83,21 +84,69 @@ static void sg_i2c_write_byte(uint8_t byte)
         sg_i2c_scl_high();
         sg_i2c_scl_low();
     }
-    /* ACK 位：释放 SDA（开漏+上拉），无从机应答时保持高 => NACK */
-    sg_i2c_sda(1);
+    /* ACK 位：ack_bit=1 模拟从机应答（SDA 拉低），0 => NACK（SDA 高） */
+    sg_i2c_sda(ack_bit ? 0 : 1);
     sg_i2c_delay_half();
     sg_i2c_scl_high();
+    sg_i2c_scl_low();
+}
+
+static void sg_i2c_repeated_start(void)
+{
+    sg_i2c_sda(1);            /* 释放 SDA（SCL 低） */
+    sg_i2c_delay_half();
+    sg_i2c_scl_high();
+    sg_i2c_sda(0);            /* SCL 高时 SDA 下降 = 重复起始 */
+    sg_i2c_delay_half();
     sg_i2c_scl_low();
 }
 
 static void sg_i2c_tx_frame(uint8_t addr7, const uint8_t *data, uint16_t len)
 {
     sg_i2c_start();
-    sg_i2c_write_byte((uint8_t)(addr7 << 1));
+    sg_i2c_write_byte((uint8_t)(addr7 << 1), 1);
     for (uint16_t i = 0; i < len; i++) {
-        sg_i2c_write_byte(data[i]);
+        sg_i2c_write_byte(data[i], 1);
     }
     sg_i2c_stop();
+}
+
+/* 复杂演示帧：写3字节+ACK → 重复起始 → 读地址+ACK → 数据+NACK → STOP */
+static void sg_i2c_tx_complex(uint8_t addr7)
+{
+    sg_i2c_start();
+    sg_i2c_write_byte((uint8_t)(addr7 << 1), 1);
+    sg_i2c_write_byte(0xAA, 1);
+    sg_i2c_write_byte(0x55, 1);
+    sg_i2c_write_byte(0x01, 1);
+    sg_i2c_repeated_start();
+    sg_i2c_write_byte((uint8_t)((addr7 << 1) | 1), 1);
+    sg_i2c_write_byte(0x02, 0);   /* 最后数据 NACK */
+    sg_i2c_stop();
+}
+
+static void sg_i2c_init_gpio(void)
+{
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+
+    /* 使能 DWT 周期计数器（软件 I2C 微秒延时） */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+    /* PE2=SCL 推挽输出；PE3=SDA 开漏输出 + 上拉（读 ACK 可释放） */
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Pin = SG_I2C_SCL_PIN;
+    gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    HAL_GPIO_Init(SG_I2C_SCL_PORT, &gpio);
+
+    gpio.Pin = SG_I2C_SDA_PIN;
+    gpio.Mode = GPIO_MODE_OUTPUT_OD;
+    gpio.Pull = GPIO_PULLUP;
+    HAL_GPIO_Init(SG_I2C_SDA_PORT, &gpio);
+    sg_i2c_sda(1);
 }
 
 static void sg_tx_task(void *arg)
@@ -112,6 +161,8 @@ static void sg_tx_task(void *arg)
             HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_SET);
         } else if (sg_mode == SG_MODE_I2C) {
             sg_i2c_tx_frame((uint8_t)(sg_i2c_addr >> 1), sg_data, sg_len);
+        } else if (sg_mode == SG_MODE_I2C_COMPLEX) {
+            sg_i2c_tx_complex((uint8_t)(sg_i2c_addr >> 1));
         } else {
             break;
         }
@@ -330,26 +381,7 @@ int SG_I2CStart(uint8_t addr, const char *hex, uint16_t interval_ms)
         SG_UartStop();
     }
 
-    __HAL_RCC_GPIOE_CLK_ENABLE();
-
-    /* 使能 DWT 周期计数器（软件 I2C 微秒延时） */
-    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-    DWT->CYCCNT = 0;
-    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-
-    /* PE2=SCL 推挽输出；PE3=SDA 开漏输出 + 上拉（读 ACK 可释放） */
-    GPIO_InitTypeDef gpio = {0};
-    gpio.Pin = SG_I2C_SCL_PIN;
-    gpio.Mode = GPIO_MODE_OUTPUT_PP;
-    gpio.Pull = GPIO_NOPULL;
-    gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    HAL_GPIO_Init(SG_I2C_SCL_PORT, &gpio);
-
-    gpio.Pin = SG_I2C_SDA_PIN;
-    gpio.Mode = GPIO_MODE_OUTPUT_OD;
-    gpio.Pull = GPIO_PULLUP;
-    HAL_GPIO_Init(SG_I2C_SDA_PORT, &gpio);
-    sg_i2c_sda(1);
+    sg_i2c_init_gpio();
 
     memcpy(sg_data, buf, len / 2);
     sg_len = (uint16_t)(len / 2);
@@ -382,6 +414,31 @@ void SG_I2CStop(void)
         sg_task_id = NULL;
     }
     osDelay(20);
+}
+
+int SG_I2CComplexStart(uint8_t addr, uint16_t interval_ms)
+{
+    if (sg_running) {
+        SG_UartStop();
+    }
+    sg_i2c_init_gpio();
+    sg_i2c_addr = (uint16_t)(addr << 1);
+    sg_interval_ms = interval_ms;
+    sg_mode = SG_MODE_I2C_COMPLEX;
+    sg_running = 1;
+
+    osThreadAttr_t attr = {
+        .name = "SG_I2C",
+        .stack_size = SG_STACK_SIZE,
+        .priority = osPriorityHigh,
+    };
+    sg_task_id = osThreadNew(sg_tx_task, NULL, &attr);
+    if (sg_task_id == NULL) {
+        sg_mode = SG_MODE_NONE;
+        sg_running = 0;
+        return -3;
+    }
+    return 0;
 }
 
 void SG_UartStop(void)

@@ -47,6 +47,7 @@ static void cmd_sg_spi_start(const char *args);
 static void cmd_sg_spi_stop(const char *args);
 static void cmd_sg_i2c_start(const char *args);
 static void cmd_sg_i2c_stop(const char *args);
+static void cmd_sg_i2c_complex(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",         cmd_help},
@@ -75,6 +76,7 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_spi_stop",   cmd_sg_spi_stop},
     {"sg_i2c_start",  cmd_sg_i2c_start},
     {"sg_i2c_stop",   cmd_sg_i2c_stop},
+    {"sg_i2c_complex", cmd_sg_i2c_complex},
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
@@ -475,4 +477,18 @@ static void cmd_sg_i2c_stop(const char *args)
     (void)args;
     SG_I2CStop();
     LOG_Printf("SG I2C: stopped\r\n");
+}
+
+static void cmd_sg_i2c_complex(const char *args)
+{
+    unsigned addr = 0x50;
+    int interval = 5;
+    if (args && *args) {
+        sscanf(args, "%x %d", &addr, &interval);
+    }
+    if (interval < 1) interval = 1;
+    if (addr > 0x7F) addr = 0x50;
+    int ret = SG_I2CComplexStart((uint8_t)addr, (uint16_t)interval);
+    LOG_Printf("SG I2C COMPLEX: %s (addr=0x%02X interval=%dms)\r\n",
+               ret == 0 ? "STARTED" : "FAILED", (unsigned)addr, interval);
 }

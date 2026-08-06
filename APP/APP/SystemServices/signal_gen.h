@@ -35,6 +35,9 @@ int    SG_I2CStart(uint8_t addr, const char *hex, uint16_t interval_ms);
 /* 停止 I2C 发生器 */
 void   SG_I2CStop(void);
 
+/* 复杂 I2C 演示帧：写+ACK ×3 → 重复起始 → 读地址+ACK → 数据+NACK → STOP */
+int    SG_I2CComplexStart(uint8_t addr, uint16_t interval_ms);
+
 /* 停止发生器（PC6 保持 USART6_TX 空闲高电平，复位后恢复 TIM8 PWM） */
 void   SG_UartStop(void);
 
