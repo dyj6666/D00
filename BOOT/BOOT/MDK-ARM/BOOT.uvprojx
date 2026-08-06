@@ -420,6 +420,11 @@
               <FilePath>..\BootServices\flash_if.c</FilePath>
             </File>
             <File>
+              <FileName>boot_param.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BootServices\boot_param.c</FilePath>
+            </File>
+            <File>
               <FileName>aes.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BootServices\aes.c</FilePath>

@@ -413,3 +413,22 @@ auto-stop）全部按设计工作。
 - **自动化测试脚本**：`HOST/LogicAnalyzer/tests/test_robustness.py` 提供
   UART/SPI/I2C 各 20 组实机帧矩阵（可分段运行 `uart|spi|i2c`），
   注意协议切换需对应换线（UART:PC6 / SPI:PB13·15·12 / I2C:PE2·3）。
+
+### 12.8 OTA 全面升级：四区分区 + A/B 回滚体系 + APP 运行时下载
+- **分区重构（1MB 扇区对齐）**：
+  - BOOT 64K（0x08000000）/ RUN 320K（0x08010000，APP 链接地址不变）/
+    BACKUP 384K（0x08060000）/ DOWNLOAD 128K（0x080C0000）/
+    PARAM 128K（0x080E0000）。
+- **BOOT 升级**：
+  - 启动状态机：NORMAL / PENDING（新固件待确认）/ RECOVERY（回滚超限）；
+  - 升级前自动备份当前 RUN → BACKUP；新固件启动计数超限自动回滚；
+    RUN 损坏自动从 BACKUP 恢复；连续回滚 5 次进入 RECOVERY 等待强制重刷；
+  - 参数区双份冗余（magic+CRC32，写前整扇擦除写两份）。
+- **APP 升级**：
+  - 运行时 OTA 服务：HOSTLINK 新增 `CMD_OTA_BEGIN/DATA/END/STATUS`
+    （0x08~0x0B），块写入 DOWNLOAD 区（offset 连续性校验 + 越界防护）；
+  - 版本降级在 APP 端提前拦截，BOOT 侧二次校验；
+  - 启动确认：新固件首次正常运行后向参数区写 NORMAL（未确认则 BOOT 回滚）；
+  - 下载完成置备份域升级标志复位，BOOT 负责备份/切换/验证/解密。
+- **验证**：BOOT/APP Keil 0 Error 0 Warning；GCC 双路径构建通过；
+  待实机验证：正常启动 → 升级 → 回滚全流程。

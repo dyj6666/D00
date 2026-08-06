@@ -10,6 +10,7 @@
 #include "task.h"
 #include "var_manager.h"
 #include "la_sample.h"
+#include "ota_agent.h"
 
 #include <string.h>
 
@@ -314,6 +315,66 @@ static void handle_command(const uint8_t *data, uint16_t len)
                 sent += n;
                 vTaskDelay(pdMS_TO_TICKS(2));   /* 匹配 921600 波特率排空速度 */
             }
+            break;
+        }
+
+        case CMD_OTA_BEGIN: {
+            /* 请求：version(u32 LE) + size(u32 LE) */
+            if (f.payload_len != 8) {
+                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                break;
+            }
+            uint32_t ver = (uint32_t)(f.payload[0] | (f.payload[1] << 8) |
+                                      (f.payload[2] << 16) | (f.payload[3] << 24));
+            uint32_t size = (uint32_t)(f.payload[4] | (f.payload[5] << 8) |
+                                       (f.payload[6] << 16) | (f.payload[7] << 24));
+            uint8_t st = Ota_Begin(ver, size);
+            DataLink_SendFrame(CMD_OTA_BEGIN, &st, 1);
+            break;
+        }
+
+        case CMD_OTA_DATA: {
+            /* 请求：offset(u32 LE) + data(<=120B) */
+            if (f.payload_len < 5 || f.payload_len > 4 + OTA_CHUNK_MAX) {
+                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                break;
+            }
+            uint32_t off = (uint32_t)(f.payload[0] | (f.payload[1] << 8) |
+                                      (f.payload[2] << 16) | (f.payload[3] << 24));
+            uint8_t st = Ota_Data(off, &f.payload[4],
+                                  (uint16_t)(f.payload_len - 4));
+            uint32_t rx = 0, total = 0;
+            uint8_t state = 0;
+            Ota_Status(&state, &rx, &total);
+            uint8_t resp[5] = { st, 0, 0, 0, 0 };
+            resp[1] = (uint8_t)(rx & 0xFF);
+            resp[2] = (uint8_t)((rx >> 8) & 0xFF);
+            resp[3] = (uint8_t)((rx >> 16) & 0xFF);
+            resp[4] = (uint8_t)((rx >> 24) & 0xFF);
+            DataLink_SendFrame(CMD_OTA_DATA, resp, sizeof(resp));
+            break;
+        }
+
+        case CMD_OTA_END: {
+            uint8_t st = Ota_End();
+            DataLink_SendFrame(CMD_OTA_END, &st, 1);
+            break;
+        }
+
+        case CMD_OTA_STATUS: {
+            uint8_t state = 0;
+            uint32_t rx = 0, total = 0;
+            Ota_Status(&state, &rx, &total);
+            uint8_t resp[9] = { state, 0, 0, 0, 0, 0, 0, 0, 0 };
+            resp[1] = (uint8_t)(rx & 0xFF);
+            resp[2] = (uint8_t)((rx >> 8) & 0xFF);
+            resp[3] = (uint8_t)((rx >> 16) & 0xFF);
+            resp[4] = (uint8_t)((rx >> 24) & 0xFF);
+            resp[5] = (uint8_t)(total & 0xFF);
+            resp[6] = (uint8_t)((total >> 8) & 0xFF);
+            resp[7] = (uint8_t)((total >> 16) & 0xFF);
+            resp[8] = (uint8_t)((total >> 24) & 0xFF);
+            DataLink_SendFrame(CMD_OTA_STATUS, resp, sizeof(resp));
             break;
         }
 

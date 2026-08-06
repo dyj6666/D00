@@ -28,12 +28,14 @@ if(CMAKE_CROSSCOMPILING)
         BootServices/ymodem.c
         BootServices/ymodem_port.c
         BootServices/flash_if.c
+        BootServices/boot_param.c
         BootServices/security.c
         BootServices/aes.c
         BootServices/my_sha256.c
         BootServices/uECC.c
         BootServices/crc32.c
         BootServices/fifo.c
+        BootServices/boot_param.c
         Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c
         Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c
         Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c

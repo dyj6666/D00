@@ -9,6 +9,7 @@
 #include "ymodem_port.h"
 #include "flash_if.h"
 #include "security.h"
+#include "boot_param.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -98,6 +99,39 @@ static void boot_jump_to_app(uint32_t addr)
     ((void (*)(void))app_reset)();
 }
 
+static void boot_enter_upgrade_mode(void);
+
+/* 用 BACKUP 区恢复 RUN（回滚/自动修复），成功返回 true */
+static bool boot_restore_backup(void)
+{
+    if (!boot_check_app_valid(BACKUP_BASE_ADDR)) return false;
+    return flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1) &&
+           flash_copy_raw(APP_BASE_ADDR, BACKUP_BASE_ADDR, APP_SIZE);
+}
+
+/* 回滚：BACKUP -> RUN，更新回滚计数，超限进入 RECOVERY */
+static void boot_rollback(void)
+{
+    boot_param_t param;
+    boot_param_load(&param);
+    if (boot_restore_backup()) {
+        param.boot_state = BOOT_STATE_NORMAL;
+        param.boot_count = 0;
+        param.rollback_count++;
+        param.last_error = 0x1001;
+        if (param.rollback_count >= MAX_ROLLBACK_COUNT) {
+            param.boot_state = BOOT_STATE_RECOVERY;
+            printf("Rollback limit reached, entering recovery mode.\r\n");
+        }
+        boot_param_save(&param);
+        printf("Rollback OK, jumping to APP...\r\n");
+        boot_jump_to_app(APP_BASE_ADDR);
+        return;
+    }
+    printf("Rollback failed, entering upgrade mode.\r\n");
+    boot_enter_upgrade_mode();
+}
+
 /* 升级模式：接收 → 验证 → 解密写 APP → 写魔数 → 复位（防回滚） */
 static void boot_enter_upgrade_mode(void)
 {
@@ -142,6 +176,17 @@ static void boot_enter_upgrade_mode(void)
             continue;
         }
 
+        /* 升级前备份当前 RUN 到 BACKUP（若当前固件有效） */
+        if (boot_check_app_valid(APP_BASE_ADDR)) {
+            printf("Backing up current APP to BACKUP area...\r\n");
+            if (!flash_erase(BACKUP_BASE_ADDR,
+                             BACKUP_BASE_ADDR + BACKUP_SIZE - 1) ||
+                !flash_copy_raw(BACKUP_BASE_ADDR, APP_BASE_ADDR, APP_SIZE)) {
+                printf("BACKUP failed! System halted.\r\n");
+                while (1) { IWDG->KR = 0xAAAA; }
+            }
+        }
+
         printf("Erasing APP area...\r\n");
         if (!flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1)) {
             printf("APP erase failed! System halted.\r\n");
@@ -178,6 +223,14 @@ static void boot_enter_upgrade_mode(void)
         flash_write(APP_VALID_ADDR, (uint8_t *)&magic, sizeof(magic));
         flash_write(APP_VERSION_ADDR, (uint8_t *)&hdr.version, sizeof(hdr.version));
 
+        /* 置"待确认"参数：新固件首次启动计数，供回滚状态机使用 */
+        boot_param_t param;
+        boot_param_load(&param);
+        param.boot_state = BOOT_STATE_PENDING;
+        param.boot_count = 1;
+        param.last_error = 0;
+        boot_param_save(&param);
+
         BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
         printf("Update successful! Rebooting to new APP...\r\n");
         HAL_Delay(100);
@@ -192,14 +245,62 @@ void BootApp_Run(void)
     boot_log_init();
     printf("BOOT Started.\r\n");
 
+    boot_param_t param;
+    boot_param_load(&param);
+    printf("BOOT state=%lu tries=%lu rollbacks=%lu\r\n",
+           param.boot_state, param.boot_count, param.rollback_count);
+
+    /* 1) 强制升级标志（APP 主动触发） */
     if (BKP_READ(RTC_BKP_DR1) == BOOT_FLAG_UPGRADE) {
         printf("Upgrade flag set. Entering upgrade mode.\r\n");
+        BKP_WRITE(RTC_BKP_DR1, BOOT_FLAG_NONE);
         boot_enter_upgrade_mode();
-    } else if (boot_check_app_valid(APP_BASE_ADDR)) {
+        return;
+    }
+
+    /* 2) 待确认：新固件启动计数，超限回滚 */
+    if (param.boot_state == BOOT_STATE_PENDING) {
+        if (param.boot_count >= MAX_BOOT_TRIES) {
+            printf("New APP failed %lu tries, rolling back...\r\n",
+                   param.boot_count);
+            boot_rollback();
+            return;
+        }
+        param.boot_count++;
+        boot_param_save(&param);
+        if (boot_check_app_valid(APP_BASE_ADDR)) {
+            printf("Pending boot #%lu, jumping to APP...\r\n",
+                   param.boot_count);
+            boot_jump_to_app(APP_BASE_ADDR);
+            return;
+        }
+        printf("Pending APP invalid, rolling back...\r\n");
+        boot_rollback();
+        return;
+    }
+
+    /* 3) 恢复模式：回滚超限，等待上位机强制重刷 */
+    if (param.boot_state == BOOT_STATE_RECOVERY) {
+        printf("Recovery mode (rollbacks exceeded). Waiting for firmware...\r\n");
+        boot_enter_upgrade_mode();
+        return;
+    }
+
+    /* 4) 正常模式：RUN 有效则跳转；无效则 BACKUP 自动修复；再无则升级 */
+    if (boot_check_app_valid(APP_BASE_ADDR)) {
         printf("APP valid, jumping to APP...\r\n");
         boot_jump_to_app(APP_BASE_ADDR);
-    } else {
-        printf("APP invalid, entering upgrade mode.\r\n");
-        boot_enter_upgrade_mode();
+        return;
     }
+    if (boot_check_app_valid(BACKUP_BASE_ADDR)) {
+        printf("APP invalid, restoring from BACKUP...\r\n");
+        if (boot_restore_backup()) {
+            printf("Backup restored, jumping to APP...\r\n");
+            boot_jump_to_app(APP_BASE_ADDR);
+            return;
+        }
+        printf("Backup restore failed!\r\n");
+    }
+    printf("No valid firmware, entering upgrade mode.\r\n");
+    boot_enter_upgrade_mode();
 }

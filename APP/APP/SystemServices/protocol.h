@@ -32,6 +32,10 @@
 #define CMD_WRITE_VAR       0x05
 #define CMD_GET_INFO        0x06
 #define CMD_LA_DUMP         0x07
+#define CMD_OTA_BEGIN       0x08
+#define CMD_OTA_DATA        0x09
+#define CMD_OTA_END         0x0A
+#define CMD_OTA_STATUS      0x0B
 #define CMD_ERROR           0xFE
 
 /* ---------------- 错误码 ---------------- */
