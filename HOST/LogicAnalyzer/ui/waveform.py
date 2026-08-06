@@ -60,8 +60,8 @@ class ProtocolOverlay(pg.GraphicsObject):
         # 文本只在 bit 宽度达到阈值时绘制（缩放太小则只画色块/竖线，保证流畅）
         scale = p.transform().m11()
         bit_px = scale * (31 * us)      # 当前缩放下一个 bit 的像素宽
-        show_bit_labels = bit_px >= 12.0       # 逐位标签：放大后才显示
-        show_byte_labels = bit_px * 8.0 >= 55.0  # 字节HEX+二进制：更早显示
+        show_bit_labels = bit_px >= 7.0        # 逐位标签：放大后显示
+        show_byte_labels = bit_px * 8.0 >= 16.0  # 字节HEX+二进制：尽早显示
 
         # 第一遍：字节级色块（底层淡黄）
         for a in self._annos:
@@ -98,7 +98,12 @@ class ProtocolOverlay(pg.GraphicsObject):
                 flush_merge()
                 merge = None
                 if show_byte_labels:
-                    p.setFont(self._font_byte)
+                    # 按字节实际像素宽动态缩放字号，小缩放也能看清 HEX+二进制
+                    w_px = max((x1 - x0) * scale, 1.0)
+                    size = max(5, min(8, int(w_px / max(len(a.label), 1) * 1.5)))
+                    font = QtGui.QFont("Consolas", size)
+                    font.setBold(True)
+                    p.setFont(font)
                     p.setPen(QtGui.QColor("#FFE082"))
                     p.drawText(
                         QtCore.QRectF(x0, top - 0.85, max(x1 - x0, us), 0.6),
@@ -117,11 +122,20 @@ class ProtocolOverlay(pg.GraphicsObject):
                 p.drawLine(QtCore.QPointF(x0, bot), QtCore.QPointF(x0, top))
                 p.setBrush(QtGui.QColor(color))
                 p.setPen(QtCore.Qt.NoPen)
-                tri = QtGui.QPolygonF([
-                    QtCore.QPointF(x0, top - 0.7),
-                    QtCore.QPointF(x0 - 0.45, top - 1.25),
-                    QtCore.QPointF(x0 + 0.45, top - 1.25),
-                ])
+                if a.edge == "falling":
+                    # 下降沿采样：箭头朝下（竖线底部）
+                    tri = QtGui.QPolygonF([
+                        QtCore.QPointF(x0, bot + 0.55),
+                        QtCore.QPointF(x0 - 0.3, bot + 1.05),
+                        QtCore.QPointF(x0 + 0.3, bot + 1.05),
+                    ])
+                else:
+                    # 上升沿采样（或未知）：箭头朝上（竖线顶部）
+                    tri = QtGui.QPolygonF([
+                        QtCore.QPointF(x0, top - 0.55),
+                        QtCore.QPointF(x0 - 0.3, top - 1.05),
+                        QtCore.QPointF(x0 + 0.3, top - 1.05),
+                    ])
                 p.drawPolygon(tri)
             if show_bit_labels:
                 p.setFont(self._font_bit)

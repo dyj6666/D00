@@ -42,6 +42,7 @@ class BitAnno:
     label: str
     kind: str        # start / data / stop / addr / ack / frame / idle
     ch: Optional[int] = None   # 标注归属通道（None=顶部通用层）
+    edge: Optional[str] = None # 采样沿方向: rising / falling（无 CLK 时为 None）
 
 
 def _decode_uart_line(bits: np.ndarray, rate: int, cfg: UartConfig,
@@ -199,6 +200,7 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
     # 采样沿：CPHA=0 取非空闲沿（CPOL=0 上升沿 / CPOL=1 下降沿），
     #         CPHA=1 取空闲沿（CPOL=0 下降沿 / CPOL=1 上升沿）
     sample_edge = idle if cfg.cpha == 1 else (1 - idle)
+    edge_dir = "rising" if sample_edge == 1 else "falling"
     prev_active = False
     while i < n - 1:
         active = cs[i] == cfg.cs_active if cs is not None else True
@@ -233,7 +235,7 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
                 for k, (bs, be, v) in enumerate(bits_pos):
                     bit_no = 7 - k          # MSB first：先采到的是 b7
                     out.append(BitAnno(bs, be, f"b{bit_no}={v}", "data",
-                                       ch=cfg.mosi_ch))
+                                       ch=cfg.mosi_ch, edge=edge_dir))
                     value = (value << 1) | v
                 out.append(BitAnno(bits_pos[0][0], bits_pos[-1][1],
                                    f"0x{value:02X} {value:08b}", "byte",
@@ -244,7 +246,7 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
                         mv = int(miso[bs])
                         m_val = (m_val << 1) | mv
                         out.append(BitAnno(bs, be, f"b{7-k}={mv}", "miso",
-                                           ch=cfg.miso_ch))
+                                           ch=cfg.miso_ch, edge=edge_dir))
                     out.append(BitAnno(bits_pos[0][0], bits_pos[-1][1],
                                        f"0x{m_val:02X} {m_val:08b}", "byte",
                                        ch=cfg.miso_ch))
