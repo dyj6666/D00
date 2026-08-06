@@ -97,10 +97,10 @@ class ProtocolOverlay(pg.GraphicsObject):
             if a.kind == "byte":
                 flush_merge()
                 merge = None
-                # 字节边界分隔线（始终显示，直观区分每个字节）
-                p.setPen(QtGui.QPen(QtGui.QColor(255, 235, 150, 70), 0,
-                                    QtCore.Qt.DashLine))
-                p.drawLine(QtCore.QPointF(x1, bot), QtCore.QPointF(x1, top))
+                # 字节边界分隔线：贯穿整个波形高度，直观区分每个字节
+                p.setPen(QtGui.QPen(QtGui.QColor(255, 224, 130, 110), 0))
+                p.drawLine(QtCore.QPointF(x1, 0.5),
+                           QtCore.QPointF(x1, n * 2.0 + 2.0))
                 continue
             # 位级：相邻同通道同类型首尾相连则合并色块
             if (merge is not None and merge[0] == a.ch
