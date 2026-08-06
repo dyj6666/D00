@@ -64,6 +64,9 @@ class ProtocolOverlay(pg.GraphicsObject):
         bit_px = scale * (31 * us)      # 当前缩放下一个 bit 的像素宽
         show_bit_labels = bit_px >= 7.0        # 逐位标签：放大后显示
         show_byte_labels = bit_px * 8.0 >= 16.0  # 字节HEX+二进制：尽早显示
+        # 标注字号随 x 轴缩放同步变化（各向同性，不拉伸变形）
+        self._font_bit.setPointSize(max(6, min(12, int(bit_px * 0.55))))
+        bit_font = self._font_bit
 
         # 第一遍：字节级色块（底层淡黄）
         for a in self._annos:
@@ -153,7 +156,7 @@ class ProtocolOverlay(pg.GraphicsObject):
                     ])
                 p.drawPolygon(tri)
             if show_bit_labels:
-                p.setFont(self._font_bit)
+                p.setFont(bit_font)
                 p.setPen(QtGui.QColor(color))
                 # 屏幕空间绘制文本：固定字号，避免随 ViewBox 缩放拉伸成巨字
                 p.save()
@@ -178,7 +181,7 @@ class ProtocolOverlay(pg.GraphicsObject):
                 y_bot = (n * 2.0 + 0.5 if a.ch is None
                          else (n - a.ch) * 2.0)
                 w_px = max((x1 - x0) * scale, 1.0)
-                size = max(5, min(8, int(w_px / max(len(a.label), 1) * 1.5)))
+                size = max(7, min(14, int(w_px / max(len(a.label), 1) * 1.4)))
                 font = QtGui.QFont("Consolas", size)
                 font.setBold(True)
                 p.setFont(font)
