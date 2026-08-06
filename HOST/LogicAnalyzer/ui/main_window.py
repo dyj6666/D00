@@ -73,6 +73,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.session: CaptureSession | None = None
         self.trace: TraceData | None = None
         self._last_decode: tuple | None = None
+        self._pending_region: tuple[int, int] | None = None
+        self._region_timer = QtCore.QTimer(self)
+        self._region_timer.setSingleShot(True)
+        self._region_timer.setInterval(50)
+        self._region_timer.timeout.connect(self._region_flush)
         self._build_ui()
         self._apply_style()
 
@@ -425,8 +430,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.detail_panel.show_sample(idx)
 
     def _on_region(self, a: int, b: int):
-        if self.trace is None:
+        """区间拖动：50ms 防抖合并刷新，拖动过程不卡顿。"""
+        self._pending_region = (a, b)
+        self._region_timer.start()
+
+    def _region_flush(self):
+        if self.trace is None or self._pending_region is None:
             return
+        a, b = self._pending_region
+        self._pending_region = None
         self.detail_panel.show_range(a, b)
         ms = []
         for ch in range(min(self.trace.nchannels, 8)):

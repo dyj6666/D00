@@ -13,6 +13,123 @@ CH_COLORS = [
     "#BA68C8", "#FFF176", "#4DB6AC", "#E57373",
 ]
 
+ANNO_STYLE = {
+    "start": ("#EF5350", (239, 83, 80, 48)),
+    "data":  ("#42A5F5", (66, 165, 245, 40)),
+    "stop":  ("#FFA726", (255, 167, 38, 44)),
+    "addr":  ("#AB47BC", (171, 71, 188, 40)),
+    "ack":   ("#26A69A", (38, 166, 154, 40)),
+    "frame": ("#66BB6A", (102, 187, 106, 34)),
+    "byte":  ("#FFE082", (255, 224, 130, 32)),
+    "miso":  ("#FF8A65", (255, 138, 101, 40)),
+    "cs":    ("#FFD54F", (255, 213, 79, 30)),
+    "idle":  ("#90A4AE", (144, 164, 174, 24)),
+}
+ANNO_BORDER = (255, 235, 150, 70)
+
+
+class ProtocolOverlay(pg.GraphicsObject):
+    """协议标注单图层：把所有位/字节色块、采样沿竖线、箭头、标签
+    绘制在同一个 QGraphicsItem 内，拖动/缩放只需一次变换，保证流畅。"""
+
+    def __init__(self, annos, rate: int, nch: int):
+        super().__init__()
+        self._annos = annos
+        self._rate = rate
+        self._nch = nch
+        x_max = 1.0
+        for a in annos:
+            x1 = a.end / rate * 1e6
+            if x1 > x_max:
+                x_max = x1
+        self._bounds = QtCore.QRectF(0, 0, x_max, nch * 2.0 + 2.0)
+        self._font_bit = QtGui.QFont("Consolas", 7)
+        self._font_byte = QtGui.QFont("Consolas", 8)
+        self._font_byte.setBold(True)
+
+    def boundingRect(self):
+        return self._bounds
+
+    def paint(self, p, option, widget=None):
+        p.setRenderHint(QtGui.QPainter.Antialiasing, False)
+        er = option.exposedRect
+        x_lo, x_hi = er.left(), er.right()
+        rate = self._rate
+        n = self._nch
+        us = 1e6 / rate
+        # 文本只在 bit 宽度达到阈值时绘制（缩放太小则只画色块/竖线，保证流畅）
+        scale = p.transform().m11()
+        min_bit_px = 16.0
+        show_labels = scale * (31 * us) >= min_bit_px
+        bit_px = scale * (31 * us)      # 当前缩放下一个 bit 的像素宽
+
+        # 第一遍：字节级色块（底层淡黄）
+        for a in self._annos:
+            if a.kind != "byte" or a.ch is None or a.ch >= n:
+                continue
+            x0 = a.start / rate * 1e6
+            x1 = a.end / rate * 1e6
+            if x1 < x_lo or x0 > x_hi:
+                continue
+            bot = (n - a.ch) * 2.0
+            p.fillRect(QtCore.QRectF(x0, bot, max(x1 - x0, us * 0.5), 2.0),
+                       QtGui.QColor(255, 224, 130, 30))
+
+        # 第二遍：位级色块（相邻同色合并）/竖线/箭头 + 全部标签
+        def flush_merge():
+            if merge is not None:
+                p.fillRect(QtCore.QRectF(merge[2], (n - merge[0]) * 2.0,
+                                         max(merge[3] - merge[2], us * 0.3),
+                                         2.0),
+                           QtGui.QColor(*ANNO_STYLE[merge[1]][1]))
+
+        merge = None   # (ch, kind, x0, x1)
+        for a in self._annos:
+            if a.ch is None or a.ch >= n:
+                continue
+            x0 = a.start / rate * 1e6
+            x1 = a.end / rate * 1e6
+            if x1 < x_lo or x0 > x_hi:
+                continue
+            top = (n - a.ch) * 2.0 + 2.0
+            bot = (n - a.ch) * 2.0
+            color, _ = ANNO_STYLE.get(a.kind, ("#B0BEC5", (176, 190, 197, 30)))
+            if a.kind == "byte":
+                flush_merge()
+                merge = None
+                if show_labels:
+                    p.setFont(self._font_byte)
+                    p.setPen(QtGui.QColor("#FFE082"))
+                    p.drawText(
+                        QtCore.QRectF(x0, top - 0.85, max(x1 - x0, us), 0.6),
+                        QtCore.Qt.AlignHCenter | QtCore.Qt.AlignBottom, a.label)
+                continue
+            # 位级：相邻同通道同类型首尾相连则合并色块
+            if (merge is not None and merge[0] == a.ch
+                    and merge[1] == a.kind and abs(merge[3] - x0) < us * 0.5):
+                merge = (a.ch, a.kind, merge[2], max(merge[3], x1))
+            else:
+                flush_merge()
+                merge = (a.ch, a.kind, x0, x1)
+            # 采样沿竖线 + 顶部箭头（逐条绘制）
+            if bit_px >= 2.0:
+                p.setPen(QtGui.QPen(QtGui.QColor(*ANNO_BORDER), 0))
+                p.drawLine(QtCore.QPointF(x0, bot), QtCore.QPointF(x0, top))
+                p.setBrush(QtGui.QColor(color))
+                p.setPen(QtCore.Qt.NoPen)
+                tri = QtGui.QPolygonF([
+                    QtCore.QPointF(x0, top),
+                    QtCore.QPointF(x0 - 1.1, top - 1.6),
+                    QtCore.QPointF(x0 + 1.1, top - 1.6),
+                ])
+                p.drawPolygon(tri)
+            if show_labels:
+                p.setFont(self._font_bit)
+                p.setPen(QtGui.QColor(color))
+                p.drawText(QtCore.QRectF(x0 - 7, bot + 0.05, 14, 0.7),
+                           QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop, a.label)
+        flush_merge()
+
 
 class WaveformWidget(pg.PlotWidget):
     sampleSelected = QtCore.Signal(int)      # 光标样本下标
@@ -74,6 +191,7 @@ class WaveformWidget(pg.PlotWidget):
             label = pg.TextItem(f"CH{ch}", color=CH_COLORS[ch],
                                 anchor=(1, 0.5))
             label.setPos(x[0], (n - ch) * 2.0 + 0.5)
+            label.setZValue(25)
             self.addItem(label)
             self._labels.append(label)
         self.setYRange(0.5, n * 2.0 + 2.0)
@@ -85,68 +203,20 @@ class WaveformWidget(pg.PlotWidget):
         self._region.show()
 
     # ---------- 协议位标注 ----------
-    ANNO_STYLE = {
-        "start": ("#EF5350", (239, 83, 80, 48)),
-        "data":  ("#42A5F5", (66, 165, 245, 36)),
-        "stop":  ("#FFA726", (255, 167, 38, 42)),
-        "addr":  ("#AB47BC", (171, 71, 188, 36)),
-        "ack":   ("#26A69A", (38, 166, 154, 36)),
-        "frame": ("#66BB6A", (102, 187, 106, 30)),
-        "byte":  ("#FFE082", (255, 224, 130, 30)),
-        "miso":  ("#FF8A65", (255, 138, 101, 36)),
-        "cs":    ("#FFD54F", (255, 213, 79, 26)),
-        "idle":  ("#90A4AE", (144, 164, 174, 22)),
-    }
-    ANNO_BORDER = (255, 235, 150, 55)   # 统一浅黄边界线
-
     def set_protocol_annotations(self, annos) -> None:
-        """在波形上按样本区间绘制协议位色块与标签（1 条 = 1 bit/帧）。"""
+        """把协议标注合并为单个图层绘制，拖动/缩放保持流畅。"""
         self.clear_protocol_annotations()
         if not annos or self.trace is None:
             return
-        rate = self.trace.rate
-        n = min(self.trace.nchannels, 8)
-        y_bit = n * 2.0 + 0.55       # 位级标签（S/Dn/STOP）
-        y_byte = n * 2.0 + 1.35      # 字节级汇总标签（HEX+ASCII，更高一层）
-        font_small = QtGui.QFont()
-        font_small.setPointSize(7)
-        font_bold = QtGui.QFont()
-        font_bold.setPointSize(8)
-        font_bold.setBold(True)
-        for a in annos:
-            x0 = a.start / rate * 1e6
-            x1 = max(a.end / rate * 1e6, x0 + 0.01)
-            if a.kind == "byte" and a.ch is not None and a.ch < n:
-                color, brush = self.ANNO_STYLE["byte"]
-                z_r, z_t, y, font = 9, 12, (n - a.ch) * 2.0 + 1.15, font_bold
-            elif a.kind == "byte":
-                color, brush = self.ANNO_STYLE["byte"]
-                z_r, z_t, y, font = 9, 12, y_byte, font_bold
-            elif a.ch is not None and a.ch < n:
-                color, brush = self.ANNO_STYLE.get(
-                    a.kind, ("#B0BEC5", (176, 190, 197, 30)))
-                z_r, z_t, y, font = 10, 11, (n - a.ch) * 2.0 + 0.7, font_small
-            else:
-                color, brush = self.ANNO_STYLE.get(
-                    a.kind, ("#B0BEC5", (176, 190, 197, 30)))
-                z_r, z_t, y, font = 10, 11, y_bit, font_small
-            region = pg.LinearRegionItem(
-                values=(x0, x1), movable=False,
-                brush=pg.mkBrush(*brush),
-                pen=pg.mkPen(*self.ANNO_BORDER))
-            region.setZValue(z_r)
-            self.addItem(region)
-            label = pg.TextItem(a.label, color=color, anchor=(0.5, 1.0))
-            label.setFont(font)
-            label.setPos((x0 + x1) / 2, y)
-            label.setZValue(z_t)
-            self.addItem(label)
-            self._anno_items.append((region, label))
+        overlay = ProtocolOverlay(annos, self.trace.rate,
+                                  min(self.trace.nchannels, 8))
+        overlay.setZValue(9)
+        self.addItem(overlay)
+        self._anno_items = [overlay]
 
     def clear_protocol_annotations(self) -> None:
-        for region, label in self._anno_items:
-            self.removeItem(region)
-            self.removeItem(label)
+        for item in self._anno_items:
+            self.removeItem(item)
         self._anno_items = []
 
     def set_channel_names(self, names: list) -> None:
