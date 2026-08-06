@@ -205,9 +205,11 @@ def annotate_spi_bits(samples: np.ndarray, rate: int,
     while i < n - 1:
         active = cs[i] == cfg.cs_active if cs is not None else True
         if active and not prev_active:
-            out.append(BitAnno(i, i + 1, "CS\u2193", "cs", ch=cfg.cs_ch))
+            out.append(BitAnno(i, i + 1, "CS\u2193", "cs", ch=cfg.cs_ch,
+                               edge="falling"))
         elif not active and prev_active:
-            out.append(BitAnno(i, i + 1, "CS\u2191", "cs", ch=cfg.cs_ch))
+            out.append(BitAnno(i, i + 1, "CS\u2191", "cs", ch=cfg.cs_ch,
+                               edge="rising"))
         if active:
             j = i
             bits_pos = []

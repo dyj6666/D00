@@ -97,17 +97,6 @@ class ProtocolOverlay(pg.GraphicsObject):
             if a.kind == "byte":
                 flush_merge()
                 merge = None
-                if show_byte_labels:
-                    # 按字节实际像素宽动态缩放字号，小缩放也能看清 HEX+二进制
-                    w_px = max((x1 - x0) * scale, 1.0)
-                    size = max(5, min(8, int(w_px / max(len(a.label), 1) * 1.5)))
-                    font = QtGui.QFont("Consolas", size)
-                    font.setBold(True)
-                    p.setFont(font)
-                    p.setPen(QtGui.QColor("#FFE082"))
-                    p.drawText(
-                        QtCore.QRectF(x0, top - 0.85, max(x1 - x0, us), 0.6),
-                        QtCore.Qt.AlignHCenter | QtCore.Qt.AlignBottom, a.label)
                 continue
             # 位级：相邻同通道同类型首尾相连则合并色块
             if (merge is not None and merge[0] == a.ch
@@ -125,24 +114,47 @@ class ProtocolOverlay(pg.GraphicsObject):
                 if a.edge == "falling":
                     # 下降沿采样：箭头朝下（竖线底部）
                     tri = QtGui.QPolygonF([
-                        QtCore.QPointF(x0, bot + 0.55),
-                        QtCore.QPointF(x0 - 0.3, bot + 1.05),
-                        QtCore.QPointF(x0 + 0.3, bot + 1.05),
+                        QtCore.QPointF(x0, bot + 0.45),
+                        QtCore.QPointF(x0 - 0.2, bot + 0.85),
+                        QtCore.QPointF(x0 + 0.2, bot + 0.85),
                     ])
                 else:
                     # 上升沿采样（或未知）：箭头朝上（竖线顶部）
                     tri = QtGui.QPolygonF([
-                        QtCore.QPointF(x0, top - 0.55),
-                        QtCore.QPointF(x0 - 0.3, top - 1.05),
-                        QtCore.QPointF(x0 + 0.3, top - 1.05),
+                        QtCore.QPointF(x0, top - 0.45),
+                        QtCore.QPointF(x0 - 0.2, top - 0.85),
+                        QtCore.QPointF(x0 + 0.2, top - 0.85),
                     ])
                 p.drawPolygon(tri)
             if show_bit_labels:
                 p.setFont(self._font_bit)
                 p.setPen(QtGui.QColor(color))
-                p.drawText(QtCore.QRectF(x0 - 7, bot + 0.05, 14, 0.7),
-                           QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop, a.label)
+                p.drawText(QtCore.QRectF(x0 - 9, bot, 18, 2.2),
+                           QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop
+                           | QtCore.Qt.TextDontClip, a.label)
         flush_merge()
+
+        # 第三遍：字节级标签（最后绘制，避免被位级色块覆盖）
+        if show_byte_labels:
+            for a in self._annos:
+                if a.kind != "byte" or a.ch is None or a.ch >= n:
+                    continue
+                x0 = a.start / rate * 1e6
+                x1 = a.end / rate * 1e6
+                if x1 < x_lo or x0 > x_hi:
+                    continue
+                top = (n - a.ch) * 2.0 + 2.0
+                w_px = max((x1 - x0) * scale, 1.0)
+                size = max(5, min(8, int(w_px / max(len(a.label), 1) * 1.5)))
+                font = QtGui.QFont("Consolas", size)
+                font.setBold(True)
+                p.setFont(font)
+                p.setPen(QtGui.QColor("#FFE082"))
+                p.drawText(
+                    QtCore.QRectF(x0, (n - a.ch) * 2.0 + 0.25,
+                                  max(x1 - x0, us * 8.0), 1.8),
+                    QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop
+                    | QtCore.Qt.TextDontClip, a.label)
 
 
 class WaveformWidget(pg.PlotWidget):
