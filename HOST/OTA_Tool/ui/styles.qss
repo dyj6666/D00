@@ -127,3 +127,52 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
     width: 0px;
 }
+
+/* 输入框 hover */
+QLineEdit:hover, QComboBox:hover, QSpinBox:hover {
+    border-color: #95a5a6;
+}
+
+/* 复选框 */
+QCheckBox {
+    color: #2c3e50;
+    spacing: 6px;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+    background: #ffffff;
+}
+QCheckBox::indicator:checked {
+    background: #3498db;
+    border-color: #3498db;
+}
+
+/* 主操作按钮 */
+QPushButton#primary {
+    background-color: #27ae60;
+    font-size: 15px;
+    font-weight: bold;
+    padding: 9px 24px;
+}
+QPushButton#primary:hover {
+    background-color: #2ecc71;
+}
+QPushButton#primary:disabled {
+    background-color: #bdc3c7;
+}
+
+/* 批量升级按钮 */
+QPushButton#batch {
+    background-color: #9b59b6;
+}
+QPushButton#batch:hover {
+    background-color: #8e44ad;
+}
+
+/* 阶段流程条容器 */
+QFrame#stage_bar {
+    background: transparent;
+}

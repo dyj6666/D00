@@ -2,7 +2,7 @@ import sys
 import os
 import time
 import serial
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+from PyQt5.QtWidgets import (QMainWindow, QWidget, QFrame, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QComboBox, QPushButton,
                              QTextEdit, QProgressBar, QFileDialog, QMessageBox,
                              QGroupBox, QFormLayout, QSpinBox, QCheckBox)
@@ -14,7 +14,7 @@ from core.version_lib import load_lib
 from ui.uid_capture_thread import UidCaptureThread
 from utils.config import Config
 
-VERSION = "v2.0.0"
+VERSION = "v2.1.0"
 
 # 日志颜色常量（深色系，适配浅色背景）
 COLOR_OK = "#228B22"
@@ -28,7 +28,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"D00 固件升级上位机 {VERSION} —— 董衍俊")
-        self.resize(720, 620)
+        self.resize(900, 760)
+        self.setMinimumSize(820, 660)
         self.config = Config()
 
         # 应用样式
@@ -153,7 +154,8 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.combo_mode)
         btn_layout.addStretch()
         self.btn_start = QPushButton("开始升级")
-        self.btn_start.setMinimumHeight(36)
+        self.btn_start.setObjectName("primary")
+        self.btn_start.setMinimumHeight(42)
         self.btn_start.clicked.connect(self._start_ota)
         self.btn_stop = QPushButton("停止")
         self.btn_stop.setMinimumHeight(36)
@@ -168,6 +170,7 @@ class MainWindow(QMainWindow):
         self.edit_batch_ports.setPlaceholderText("COM13,COM16,...")
         batch_row.addWidget(self.edit_batch_ports)
         self.btn_batch = QPushButton("批量升级")
+        self.btn_batch.setObjectName("batch")
         self.btn_batch.clicked.connect(self._start_batch)
         batch_row.addWidget(self.btn_batch)
         batch_row.addStretch()
@@ -180,9 +183,19 @@ class MainWindow(QMainWindow):
         self._on_mode_changed(0)
 
 
-        self.lbl_stage = QLabel()
-        self.lbl_stage.setTextFormat(Qt.RichText)
-        main_layout.addWidget(self.lbl_stage)
+        # ---- 升级阶段流程条 ----
+        self.stage_bar = QFrame()
+        self.stage_bar.setObjectName("stage_bar")
+        self.stage_layout = QHBoxLayout(self.stage_bar)
+        self.stage_layout.setContentsMargins(0, 0, 0, 0)
+        self.stage_layout.setSpacing(6)
+        self.stage_segments = []
+        for name in ["IDLE", "DOWNLOADING", "VERIFYING", "COMMITTED", "RUNNING"]:
+            lbl = QLabel(name)
+            lbl.setAlignment(Qt.AlignCenter)
+            self.stage_layout.addWidget(lbl, 1)
+            self.stage_segments.append((name, lbl))
+        main_layout.addWidget(self.stage_bar)
         self._set_stage("IDLE")
         # ---- 进度条 ----
         self.progress = QProgressBar()
@@ -196,7 +209,7 @@ class MainWindow(QMainWindow):
         self.log_edit.setReadOnly(True)
         log_layout.addWidget(self.log_edit)
         log_group.setLayout(log_layout)
-        main_layout.addWidget(log_group)
+        main_layout.addWidget(log_group, 1)
 
         self.setAcceptDrops(True)                # 主窗口自身可接受拖放
 
@@ -345,6 +358,8 @@ class MainWindow(QMainWindow):
 
     def _append_log(self, message, color=COLOR_DEFAULT):
         self.log_edit.append(f'<span style="color:{color};">{message}</span>')
+        sb = self.log_edit.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     def _toggle_key_visibility(self, state):
         if state == Qt.Checked:
@@ -353,17 +368,23 @@ class MainWindow(QMainWindow):
             self.edit_key.setEchoMode(QLineEdit.Password)
 
 
-    # ---------- 升级阶段徽章 ----------
+    # ---------- 升级阶段流程条 ----------
     def _set_stage(self, stage):
-        colors = {
-            "IDLE": "#808080",
-            "DOWNLOADING": "#2F6FD0",
-            "VERIFYING": "#B8860B",
-            "COMMITTED": "#228B22",
-            "RUNNING": "#228B22",
-        }
-        c = colors.get(stage, "#808080")
-        self.lbl_stage.setText(f'<span style="color:{c};font-weight:bold;">● {stage}</span>')
+        segs = ["IDLE", "DOWNLOADING", "VERIFYING", "COMMITTED", "RUNNING"]
+        idx = segs.index(stage) if stage in segs else 0
+        done_ss = ("background:#27ae60;color:white;border-radius:6px;"
+                   "padding:8px 4px;font-weight:bold;")
+        cur_ss = ("background:#3498db;color:white;border-radius:6px;"
+                  "padding:8px 4px;font-weight:bold;")
+        wait_ss = ("background:#ecf0f1;color:#7f8c8d;border-radius:6px;"
+                   "padding:8px 4px;font-weight:bold;")
+        for i, (name, lbl) in enumerate(self.stage_segments):
+            if i < idx:
+                lbl.setStyleSheet(done_ss)
+            elif i == idx:
+                lbl.setStyleSheet(cur_ss)
+            else:
+                lbl.setStyleSheet(wait_ss)
 
     # ---------- 版本库 ----------
     def _reload_lib(self):
