@@ -1,13 +1,5 @@
 {
   "chip_id": "0x413",
-  "next_build": 2,
-  "entries": [
-    {
-      "version": 19,
-      "build": 1,
-      "file": "D:\\GIT-SPACE\\D00\\APP\\APP\\MDK-ARM\\Output\\APP.bin",
-      "note": "P2 ???/?????",
-      "date": "2026-08-07"
-    }
-  ]
+  "next_build": 1,
+  "entries": []
 }

@@ -35,10 +35,11 @@ DEFAULT_BAUD_RATE      = 115200           # 波特率 (必须与 MCU 一致)
 DEFAULT_FIRMWARE_FILE  = "APP.bin"        # 默认原始固件文件名 (可含路径)
 CURR_VERSION           = 5
 
-# 安全密钥配置 (测试用，实际产品中私钥必须保密，AES密钥应由UID派生)
-PRIVATE_KEY_HEX        = "53360076d1539e52f9cd5cb9f1ca5076ea5270df32b50003a6eaa16559245106"#私钥
-AES_KEY_HEX            = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"#测试的，不用
-DEVICE_UID             = "002900363132470830323031"#UID
+# 安全密钥配置：私钥严禁硬编码，必须从环境变量 OTA_PRIVKEY 注入
+PRIVATE_KEY_HEX        = os.environ.get("OTA_PRIVKEY", "").strip()
+if not PRIVATE_KEY_HEX:
+    raise SystemExit("错误：请先设置环境变量 OTA_PRIVKEY（64 位十六进制 ECDSA 私钥）")
+DEVICE_UID             = "002900363132470830323031"#UID（公开信息）
 # =============================================================================
 
 # ========================== 协议常量 (与 ymodem.h 完全一致) ====================

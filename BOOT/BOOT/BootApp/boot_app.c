@@ -14,6 +14,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* 断电注入测试：1=备份后 2=擦除后 3=写入后 4=提交后；0=禁用（生产必须为 0） */
+#define POWERLOSS_TEST_STAGE  0
+
 /* ---------- BOOT 升级状态广播（HOSTLINK 帧 0x0C，供上位机实时可视化） ---------- */
 #define HOSTLINK_CMD_OTA_BOOT_STATUS  0x0C
 #define BOOT_ST_PREP     1   /* 探测预下载包 */
@@ -239,6 +242,15 @@ static bool boot_apply_download(bool emit_status)
             while (1) { IWDG->KR = 0xAAAA; }
         }
     }
+#if POWERLOSS_TEST_STAGE == 1
+    boot_param_t plt; boot_param_load(&plt);
+    if (plt.last_error != 0x5A5A) {
+        plt.last_error = 0x5A5A;
+        boot_param_save(&plt);
+        printf("[PLT] power-loss after BACKUP\r\n");
+        NVIC_SystemReset();
+    }
+#endif
 
     printf("Erasing APP area...\r\n");
     boot_status_send(BOOT_ST_ERASE, 0);
@@ -246,6 +258,15 @@ static bool boot_apply_download(bool emit_status)
         printf("APP erase failed! System halted.\r\n");
         while (1) { IWDG->KR = 0xAAAA; }
     }
+#if POWERLOSS_TEST_STAGE == 2
+    boot_param_t plt; boot_param_load(&plt);
+    if (plt.last_error != 0x5A5A) {
+        plt.last_error = 0x5A5A;
+        boot_param_save(&plt);
+        printf("[PLT] power-loss after ERASE\r\n");
+        NVIC_SystemReset();
+    }
+#endif
 
     ota_header_t hdr;
     memcpy(&hdr, (void *)DOWNLOAD_BASE_ADDR, sizeof(hdr));
@@ -262,6 +283,15 @@ static bool boot_apply_download(bool emit_status)
         while (1) { IWDG->KR = 0xAAAA; }
     }
     boot_status_send(BOOT_ST_WRITE, 0);
+#if POWERLOSS_TEST_STAGE == 3
+    boot_param_t plt; boot_param_load(&plt);
+    if (plt.last_error != 0x5A5A) {
+        plt.last_error = 0x5A5A;
+        boot_param_save(&plt);
+        printf("[PLT] power-loss after WRITE\r\n");
+        NVIC_SystemReset();
+    }
+#endif
 
     uint32_t sp = *(volatile uint32_t *)APP_BASE_ADDR;
     uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
@@ -284,6 +314,15 @@ static bool boot_apply_download(bool emit_status)
     param.last_error = 0;
     param.last_build_no = hdr.build_no;
     boot_param_save(&param);
+#if POWERLOSS_TEST_STAGE == 4
+    boot_param_t plt; boot_param_load(&plt);
+    if (plt.last_error != 0x5A5A) {
+        plt.last_error = 0x5A5A;
+        boot_param_save(&plt);
+        printf("[PLT] power-loss after COMMIT\r\n");
+        NVIC_SystemReset();
+    }
+#endif
 
     BKP_WRITE(0, BOOT_FLAG_NONE);
     printf("Update successful! Rebooting to new APP...\r\n");
