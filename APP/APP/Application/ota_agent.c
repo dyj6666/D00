@@ -9,6 +9,7 @@
 
 #include <string.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "app_config.h"
 #include "bsp.h"
@@ -64,6 +65,11 @@ static bool ota_flash_erase(uint32_t addr, uint32_t len)
     else sector = FLASH_SECTOR_11;
 
     HAL_FLASH_Unlock();
+    /* 清全部错误标志（含 OPTERR/SOP）：RDP 解除或此前操作可能残留，
+     * HAL_FLASHEx_Erase 检测到错误会直接返回 HAL_ERROR */
+    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_PGSERR | FLASH_FLAG_PGPERR |
+                           FLASH_FLAG_PGAERR | FLASH_FLAG_WRPERR |
+                           FLASH_FLAG_OPERR);
     FLASH_EraseInitTypeDef er = {
         .TypeErase = FLASH_TYPEERASE_SECTORS,
         .Sector = sector,
@@ -74,6 +80,8 @@ static bool ota_flash_erase(uint32_t addr, uint32_t len)
     HAL_StatusTypeDef st = HAL_FLASHEx_Erase(&er, &err);
     HAL_FLASH_Lock();
     (void)len;
+    LOG_Printf("OTA: flash erase sector=%lu st=%d err=0x%08lX\r\n",
+               (unsigned long)sector, (int)st, (unsigned long)err);
     return (st == HAL_OK && err == 0xFFFFFFFF);
 }
 
@@ -121,7 +129,8 @@ static uint32_t ota_param_crc(const ota_param_t *p)
 {
     const uint8_t *d = (const uint8_t *)p;
     uint32_t crc = 0xFFFFFFFFu;
-    for (uint32_t i = 0; i < sizeof(ota_param_t); i++) {
+    /* 只计算 crc32 字段之前的数据（避免 CRC 自引用导致校验恒失败） */
+    for (uint32_t i = 0; i < offsetof(ota_param_t, crc32); i++) {
         crc ^= d[i];
         for (int b = 0; b < 8; b++) {
             crc = (crc & 1u) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
@@ -146,10 +155,13 @@ static void ota_confirm_startup(void)
     p.boot_state = OTA_STATE_NORMAL;
     p.boot_count = 0;
     p.crc32 = ota_param_crc(&p);
-    if (ota_flash_erase(OTA_PARAM_ADDR, 0) &&
-        ota_flash_write(OTA_PARAM_ADDR, (const uint8_t *)&p, sizeof(p)) &&
-        ota_flash_write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
-                        (const uint8_t *)&p, sizeof(p))) {
+    bool e = ota_flash_erase(OTA_PARAM_ADDR, 0);
+    bool w0 = ota_flash_write(OTA_PARAM_ADDR, (const uint8_t *)&p, sizeof(p));
+    bool w1 = ota_flash_write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
+                              (const uint8_t *)&p, sizeof(p));
+    LOG_Printf("OTA: confirm erase=%d write0=%d write1=%d\r\n",
+               (int)e, (int)w0, (int)w1);
+    if (e && w0 && w1) {
         LOG_Printf("OTA: startup confirmed OK\r\n");
     } else {
         LOG_Printf("OTA: confirm write FAILED\r\n");

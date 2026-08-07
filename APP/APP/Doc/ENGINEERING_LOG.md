@@ -450,3 +450,18 @@ auto-stop）全部按设计工作。
   固件），不依赖备份域电池。
 - **部署状态**：修复代码 Keil/GCC 编译通过；因 DAP 故障无法烧录 BOOT，
   需恢复调试器后烧录修复版 BOOT + APP 再完成回滚/确认全流程验证。
+
+### 12.10 OTA 参数区持久化与启动确认实机验证（三连击根治）
+- **实机现象**：升级后 `boot_param_save` 回读 state=2(PENDING) 成功，但复位后
+  BOOT 读到 state=1(NORMAL)——PENDING 无法跨复位持久。
+- **根因一（CRC 自引用）**：`boot_param_crc` 把 crc32 字段自身纳入 CRC 计算：
+  save 基于旧 crc 算值、写入新值后 load 用新值重算必然不等 → 参数永远校验失败。
+  修复：CRC 只计算 `offsetof(结构体, crc32)` 之前的数据字段（BOOT/APP 同步）。
+- **根因二（SOP/OPTERR 残留）**：RDP 解除后 `FLASH_SR_SOP` 操作错误位残留，
+  HAL_FLASHEx_Erase 检查到即返回 HAL_ERROR（st=1 err=0）。修复：APP 擦除前
+  清全部错误位（含 OPTERR），BOOT 擦除掩码补 SOP。
+- **验证通过**：
+  - 升级写 PENDING → 复位后 `BOOT state=2 tries=1`（持久化成功）；
+  - PENDING 分支 count++ → `Pending boot #2` → 跳 APP；
+  - APP 启动确认 `erase=1 write0=1 write1=1` → `startup confirmed OK`；
+  - 完整链路：升级→备份→切换→启动确认全部实机验证。

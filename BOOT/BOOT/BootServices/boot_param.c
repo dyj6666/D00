@@ -8,15 +8,16 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stddef.h>
 
 uint32_t boot_param_crc(const boot_param_t *p)
 {
-    /* CRC-32 (IEEE)：轻量软件实现。必须按结构体实际大小计算，
-     * 此前误用 PARAM_COPY_SIZE(32) 导致读到结构体后 8 字节越界垃圾，
-     * 使参数区 CRC 校验永远失败、PENDING 状态无法持久化。 */
+    /* CRC-32 (IEEE)：只计算 crc32 字段之前的数据字段。
+     * 若把 crc32 字段自身纳入计算，save 基于旧值算 CRC、写入新值后
+     * load 再用新值重算必然不等，参数区永远校验失败（PENDING 不持久化）。 */
     const uint8_t *data = (const uint8_t *)p;
     uint32_t crc = 0xFFFFFFFFu;
-    for (uint32_t i = 0; i < sizeof(boot_param_t); i++) {
+    for (uint32_t i = 0; i < offsetof(boot_param_t, crc32); i++) {
         crc ^= data[i];
         for (int b = 0; b < 8; b++) {
             uint32_t m = (crc & 1u) ? 0xEDB88320u : 0u;
@@ -82,6 +83,17 @@ bool boot_param_save(const boot_param_t *in)
     if (!flash_write(PARAM_BASE_ADDR + PARAM_SLOT_OFFSET,
                      (const uint8_t *)&p, sizeof(p))) {
         printf("[PARAM] write slot1 FAIL\r\n");
+        return false;
+    }
+    /* 回读验证：确认写入真实持久化（排查"假写成功"） */
+    boot_param_t chk;
+    memcpy(&chk, (const void *)PARAM_BASE_ADDR, sizeof(chk));
+    printf("[PARAM] verify slot0: magic=0x%08X state=%lu count=%lu crc=0x%08X/0x%08X\r\n",
+           (unsigned)chk.magic,
+           (unsigned long)chk.boot_state, (unsigned long)chk.boot_count,
+           (unsigned)chk.crc32, (unsigned)p.crc32);
+    if (chk.magic != PARAM_MAGIC || chk.boot_state != p.boot_state) {
+        printf("[PARAM] VERIFY FAIL: 写入未持久化!\r\n");
         return false;
     }
     printf("[PARAM] save OK (state=%lu count=%lu)\r\n",

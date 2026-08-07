@@ -250,8 +250,9 @@ void BootApp_Run(void)
 
     boot_param_t param;
     boot_param_load(&param);
-    printf("BOOT state=%lu tries=%lu rollbacks=%lu\r\n",
-           param.boot_state, param.boot_count, param.rollback_count);
+    printf("BOOT state=%lu tries=%lu rollbacks=%lu crc=0x%08X\r\n",
+           param.boot_state, param.boot_count, param.rollback_count,
+           (unsigned)param.crc32);
 
     /* 1) 强制升级标志（APP 主动触发） */
     if (BKP_READ(0) == BOOT_FLAG_UPGRADE) {

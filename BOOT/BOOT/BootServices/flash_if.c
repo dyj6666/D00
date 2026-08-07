@@ -44,7 +44,9 @@ bool flash_erase(uint32_t start_addr, uint32_t end_addr) {
         FLASH->KEYR = 0xCDEF89AB;
 
         /* 清除错误标志 */
-        FLASH->SR = (FLASH_SR_PGSERR | FLASH_SR_PGPERR | FLASH_SR_PGAERR | FLASH_SR_WRPERR);
+        /* 清全部错误（含 SOP/OPTERR：RDP 解除后可能残留，导致 HAL 擦除失败） */
+        FLASH->SR = (FLASH_SR_PGSERR | FLASH_SR_PGPERR | FLASH_SR_PGAERR |
+                     FLASH_SR_WRPERR | FLASH_SR_SOP);
 
         /* 设置扇区并启动擦除 */
         FLASH->CR &= ~FLASH_CR_SNB;
