@@ -647,3 +647,20 @@ auto-stop）全部按设计工作。
 - BOOT IWDG 64 分频 ≈8.2s（原 4s），消除 320KB 擦除+复制超时风险；
 - 签名私钥移出 `config.json` 明文，GUI 改由环境变量 `OTA_PRIVKEY` 注入；
 - APP `ota_flash_write` 全程关中断（防多任务下 HAL 编程序列被中断破坏）。
+
+### 12.24 BOOT 升级状态帧实时回传（上位机真实阶段可视化）
+- BOOT 升级模式经 UART1 广播 HOSTLINK 状态帧（CMD 0x0C：阶段+错误码+版本），
+  发送前临时切换 921600 波特率（与 HOSTLINK 数据口一致）后恢复；
+- 阶段：PREP/VERIFY/BACKUP/ERASE/WRITE/COMMIT/DONE/FAIL；YMODEM 路径不广播（防干扰）；
+- 上位机解析 0x0C 帧 → 阶段流程条显示真实推进（不再纯流程模拟）；
+- 实测：END 后捕获 ERASE(4.7s)→WRITE(7.7s)→COMMIT→DONE，升级成功。
+
+### 12.25 YMODEM 阻塞 SWD 根因确认（12.21 修复连带解决）
+- 重测：YMODEM 模式下 DAP 烧录正常（Erase/Programming/Verify OK）——
+  此前"YMODEM 阻塞 SWD"实为启动早期 Flash BSY 卡死阻塞 AHB 的连带现象，
+  12.21 移除 BKP 分支提前 boot_param_save 后彻底消失。
+
+### 12.26 Flash 读保护（RDP）脚本化支持
+- 新增 `HOST/OTA_Tool/enable_rdp.py`：CubeProgrammer 设置 RDP Level 1（0xBB），
+  附前置条件（BOOT0=1）与影响说明（防提取、解除触发全片擦除、OTA 不受影响）；
+- 生产发布前执行；开发调试阶段保持 RDP 关闭。

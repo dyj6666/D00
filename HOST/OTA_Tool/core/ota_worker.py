@@ -11,7 +11,8 @@ import struct
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from .hostlink import (FrameParser, OTA_CHUNK_MAX, build_ota_begin,
-                       build_ota_data, build_ota_end, build_ota_status)
+                       build_ota_data, build_ota_end, build_ota_status,
+                       CMD_OTA_BOOT_STATUS)
 from .ymodem_sender import YmodemSender, encrypt_and_sign, derive_aes_key_from_uid
 
 
@@ -84,6 +85,9 @@ class OtaWorker(QThread):
                     if d:
                         parser.feed(d)
                         for fr in parser.frames():
+                            if fr[2] == CMD_OTA_BOOT_STATUS:
+                                self._handle_boot_status(FrameParser.payload(fr))
+                                continue
                             if fr[2] == expect_cmd:
                                 return fr
                     if self._stop_flag:
@@ -152,7 +156,8 @@ class OtaWorker(QThread):
         self.log_signal.emit("END OK，设备正在重启并切换新固件", "green")
         self.stage_signal.emit("VERIFYING")
         self.progress_signal.emit(100)
-        self.stage_signal.emit("COMMITTED")
+        # 监听 BOOT 真实状态广播（校验/备份/写入/提交/完成）
+        self._listen_boot_status(12.0)
         self.finished_signal.emit(True)
 
     # ---------------- 传统 YMODEM ----------------
@@ -172,5 +177,52 @@ class OtaWorker(QThread):
             self.stage_signal.emit("COMMITTED")
         self.finished_signal.emit(success)
 
+
+    # ---------- BOOT 升级状态帧解析（真实阶段可视化） ----------
+    _BOOT_STAGE = {
+        1: "VERIFYING",   # PREP 探测
+        2: "VERIFYING",   # 安全校验
+        3: "VERIFYING",   # 备份 RUN
+        4: "VERIFYING",   # 擦除 APP
+        5: "VERIFYING",   # 解密写入
+        6: "COMMITTED",   # 提交 PENDING
+        7: "RUNNING",     # 完成重启
+    }
+    _BOOT_STAGE_NAME = {
+        1: "探测预下载包", 2: "安全校验", 3: "备份 RUN", 4: "擦除 APP",
+        5: "解密写入 RUN", 6: "提交待确认", 7: "完成重启",
+    }
+
+    def _handle_boot_status(self, payload):
+        if len(payload) < 2:
+            return
+        phase, err = payload[0], payload[1]
+        name = self._BOOT_STAGE_NAME.get(phase, "未知")
+        if phase == 0xFF:
+            self.log_signal.emit(f"BOOT 升级失败 (err={err})", "red")
+            self.stage_signal.emit("FAIL")
+        else:
+            stage = self._BOOT_STAGE.get(phase)
+            if stage:
+                self.stage_signal.emit(stage)
+            self.log_signal.emit(f"BOOT: {name}", "cyan")
+
+    def _listen_boot_status(self, duration):
+        t0 = time.time()
+        parser = FrameParser()
+        while time.time() - t0 < duration:
+            n = self.serial_instance.in_waiting
+            if n:
+                d = self.serial_instance.read(n)
+                if d:
+                    parser.feed(d)
+                    for fr in parser.frames():
+                        if fr[2] == CMD_OTA_BOOT_STATUS:
+                            self._handle_boot_status(FrameParser.payload(fr))
+            if self._stop_flag:
+                break
+            time.sleep(0.01)
+
     def _on_log(self, message, color="white"):
+
         self.log_signal.emit(message, color)

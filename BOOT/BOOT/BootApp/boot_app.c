@@ -14,6 +14,61 @@
 #include <stdio.h>
 #include <string.h>
 
+/* ---------- BOOT 升级状态广播（HOSTLINK 帧 0x0C，供上位机实时可视化） ---------- */
+#define HOSTLINK_CMD_OTA_BOOT_STATUS  0x0C
+#define BOOT_ST_PREP     1   /* 探测预下载包 */
+#define BOOT_ST_VERIFY   2   /* 安全校验 */
+#define BOOT_ST_BACKUP   3   /* 备份 RUN */
+#define BOOT_ST_ERASE    4   /* 擦除 APP */
+#define BOOT_ST_WRITE    5   /* 解密写入 */
+#define BOOT_ST_COMMIT   6   /* 提交 PENDING */
+#define BOOT_ST_DONE     7   /* 完成重启 */
+#define BOOT_ST_FAIL     0xFF
+
+static volatile bool g_emit_status = false;
+
+static uint16_t crc16_mbus(const uint8_t *data, uint32_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (uint32_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 1u) ? (uint16_t)((crc >> 1) ^ 0xA001u) : (uint16_t)(crc >> 1);
+        }
+    }
+    return crc;
+}
+
+/* 通过 UART1 广播升级状态：AA 55 0C len(6) phase err version(4) crc16 */
+static void boot_status_send(uint8_t phase, uint8_t err)
+{
+    if (!g_emit_status) return;
+    uint8_t pkt[13];
+    pkt[0] = 0xAA; pkt[1] = 0x55; pkt[2] = HOSTLINK_CMD_OTA_BOOT_STATUS;
+    pkt[3] = 6; pkt[4] = 0;
+    pkt[5] = phase;
+    pkt[6] = err;
+    uint32_t ver = *(volatile uint32_t *)APP_VERSION_ADDR;
+    pkt[7]  = (uint8_t)(ver & 0xFF);
+    pkt[8]  = (uint8_t)((ver >> 8) & 0xFF);
+    pkt[9]  = (uint8_t)((ver >> 16) & 0xFF);
+    pkt[10] = (uint8_t)((ver >> 24) & 0xFF);
+    uint16_t crc = crc16_mbus(pkt, 11);
+    pkt[11] = (uint8_t)(crc & 0xFF);
+    pkt[12] = (uint8_t)((crc >> 8) & 0xFF);
+    /* HOSTLINK 数据口为 921600：临时切换波特率发送状态帧，发完恢复 */
+    uint32_t baud = huart1.Init.BaudRate;
+    if (baud != 921600) {
+        huart1.Init.BaudRate = 921600;
+        HAL_UART_Init(&huart1);
+    }
+    HAL_UART_Transmit(&huart1, pkt, 13, 100);
+    if (huart1.Init.BaudRate != baud) {
+        huart1.Init.BaudRate = baud;
+        HAL_UART_Init(&huart1);
+    }
+}
+
 /* 备份域访问宏（HAL 第二参数为寄存器索引，BKP_DR1 = 索引 0） */
 #define BKP_READ(reg)   HAL_RTCEx_BKUPRead(&hrtc, (reg))
 #define BKP_WRITE(reg, val) HAL_RTCEx_BKUPWrite(&hrtc, (reg), (val))
@@ -150,8 +205,11 @@ static void boot_rollback(void)
  * Shared by runtime-OTA (pre-downloaded) and YMODEM receive paths.
  * Returns true on success (never returns, reboots); false on validation failure.
  * Flash-level failures halt (same safety semantics as before). */
-static bool boot_apply_download(void)
+static bool boot_apply_download(bool emit_status)
 {
+    g_emit_status = emit_status;
+    boot_status_send(BOOT_ST_VERIFY, 0);
+
     boot_param_t param;
     boot_param_load(&param);   /* 读取 last_build_no 供防重放校验 */
 
@@ -166,12 +224,14 @@ static bool boot_apply_download(void)
     if (!security_verify_and_decrypt(DOWNLOAD_BASE_ADDR, &app_size,
                                      current_version, param.last_build_no)) {
         printf("Security verification failed!\r\n");
+        boot_status_send(BOOT_ST_FAIL, 1);
         return false;
     }
 
     /* 升级前备份当前 RUN 到 BACKUP（若当前固件有效） */
     if (boot_check_app_valid(APP_BASE_ADDR)) {
         printf("Backing up current APP to BACKUP area...\r\n");
+        boot_status_send(BOOT_ST_BACKUP, 0);
         if (!flash_erase(BACKUP_BASE_ADDR,
                          BACKUP_BASE_ADDR + BACKUP_SIZE - 1) ||
             !flash_copy_raw(BACKUP_BASE_ADDR, APP_BASE_ADDR, APP_SIZE)) {
@@ -181,6 +241,7 @@ static bool boot_apply_download(void)
     }
 
     printf("Erasing APP area...\r\n");
+    boot_status_send(BOOT_ST_ERASE, 0);
     if (!flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1)) {
         printf("APP erase failed! System halted.\r\n");
         while (1) { IWDG->KR = 0xAAAA; }
@@ -200,6 +261,7 @@ static bool boot_apply_download(void)
         printf("APP write failed! System halted.\r\n");
         while (1) { IWDG->KR = 0xAAAA; }
     }
+    boot_status_send(BOOT_ST_WRITE, 0);
 
     uint32_t sp = *(volatile uint32_t *)APP_BASE_ADDR;
     uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
@@ -210,6 +272,7 @@ static bool boot_apply_download(void)
     }
 
     printf("Security verification passed. Writing magic and version...\r\n");
+    boot_status_send(BOOT_ST_COMMIT, 0);
     uint32_t magic = APP_VALID_MAGIC;
     flash_write(APP_VALID_ADDR, (uint8_t *)&magic, sizeof(magic));
     flash_write(APP_VERSION_ADDR, (uint8_t *)&hdr.version, sizeof(hdr.version));
@@ -224,6 +287,7 @@ static bool boot_apply_download(void)
 
     BKP_WRITE(0, BOOT_FLAG_NONE);
     printf("Update successful! Rebooting to new APP...\r\n");
+    boot_status_send(BOOT_ST_DONE, 0);
     HAL_Delay(100);
     NVIC_SystemReset();
     return true;   /* unreachable */
@@ -252,7 +316,7 @@ static void boot_enter_upgrade_mode(void)
         probe.firmware_size > 0 &&
         probe.firmware_size <= DOWNLOAD_SIZE - sizeof(ota_header_t) - OTA_SIGN_SIZE) {
         printf("Pre-downloaded package found, applying directly...\r\n");
-        if (boot_apply_download()) {
+        if (boot_apply_download(true)) {
             return;
         }
         /* 半成品/损坏/防重放拒绝：跳回 APP（支持断点续传或重新下载），
@@ -288,7 +352,7 @@ static void boot_enter_upgrade_mode(void)
         }
         printf("OTA success. File: %s, Size: %lu\r\n", ctx.file_name, ctx.received_size);
 
-        if (!boot_apply_download()) {
+        if (!boot_apply_download(false)) {
             printf("Package invalid, waiting for valid firmware...\r\n");
             IWDG->KR = 0xAAAA;
             continue;
