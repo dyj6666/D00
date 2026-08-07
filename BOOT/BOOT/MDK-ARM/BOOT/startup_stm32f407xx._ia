@@ -1,6 +1,0 @@
---cpu Cortex-M4.fp.sp -g --apcs=interwork --pd "__MICROLIB SETA 1"
--I.\RTE\_BOOT
--ID:\MDK\PACK\ARM\CMSIS\5.9.0\CMSIS\Core\Include
--ID:\MDK\PACK\Keil\STM32F4xx_DFP\2.17.0\Drivers\CMSIS\Device\ST\STM32F4xx\Include
---pd "__UVISION_VERSION SETA 538" --pd "_RTE_ SETA 1" --pd "STM32F407xx SETA 1" --pd "_RTE_ SETA 1"
---list startup_stm32f407xx.lst --xref -o boot\startup_stm32f407xx.o --depend boot\startup_stm32f407xx.d "startup_stm32f407xx.s"

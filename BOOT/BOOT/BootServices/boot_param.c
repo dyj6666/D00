@@ -7,6 +7,7 @@
 #include "flash_if.h"
 
 #include <string.h>
+#include <stdio.h>
 
 uint32_t boot_param_crc(const boot_param_t *p)
 {
