@@ -14,6 +14,7 @@ from .hostlink import (FrameParser, OTA_CHUNK_MAX, build_ota_begin,
                        build_ota_data, build_ota_end, build_ota_status,
                        CMD_OTA_BOOT_STATUS)
 from .ymodem_sender import YmodemSender, encrypt_and_sign, derive_aes_key_from_uid
+from .version_lib import load_lib, alloc_build_no, chip_id_int, add_entry
 
 
 class OtaWorker(QThread):
@@ -149,11 +150,15 @@ class OtaWorker(QThread):
         # 6) END 触发复位切换
         self.log_signal.emit("发送 END，触发 BOOT 切换...", "cyan")
         r = cmd(build_ota_end(), 0x0A)
-        if r is None or r[5] != 0:
-            self.log_signal.emit(f"END 失败: {r[5] if r else '无响应'}", "red")
+        if r is not None and r[5] != 0:
+            self.log_signal.emit(f"END 失败: {r[5]}", "red")
             self.finished_signal.emit(False)
             return
-        self.log_signal.emit("END OK，设备正在重启并切换新固件", "green")
+        if r is not None:
+            self.log_signal.emit("END OK，设备正在重启并切换新固件", "green")
+        else:
+            # Ota_End 成功路径直接复位设备（不回复 ACK），无响应属正常
+            self.log_signal.emit("END 已触发，设备复位中...", "cyan")
         self.stage_signal.emit("VERIFYING")
         self.progress_signal.emit(100)
         # 监听 BOOT 真实状态广播（校验/备份/写入/提交/完成）

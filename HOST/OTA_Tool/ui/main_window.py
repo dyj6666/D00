@@ -139,6 +139,8 @@ class MainWindow(QMainWindow):
         self.chk_show_key.stateChanged.connect(self._toggle_key_visibility)
         row3.addWidget(self.edit_key)
         row3.addWidget(self.chk_show_key)
+        self.lbl_key_status = QLabel()
+        row3.addWidget(self.lbl_key_status)
         file_layout.addLayout(row3)
 
         file_group.setLayout(file_layout)
@@ -236,6 +238,11 @@ class MainWindow(QMainWindow):
         env_key = os.environ.get("OTA_PRIVKEY", "").strip()
         if env_key:
             self.edit_key.setText(env_key)
+            self.lbl_key_status.setText("✓ 环境变量已注入")
+            self.lbl_key_status.setStyleSheet("color: #228B22;")
+        else:
+            self.lbl_key_status.setText("未设置(可手动粘贴)")
+            self.lbl_key_status.setStyleSheet("color: #B8860B;")
 
     def _save_config(self):
         self.config.set("last_port", self.combo_port.currentText())
