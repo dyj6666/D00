@@ -44,7 +44,8 @@ def aes_ctr_encrypt(key: bytes, iv12: bytes, plain: bytes) -> bytes:
 # ------------------------------------------------------------
 
 def encrypt_and_sign(input_bin: str, output_bin: str, private_key_hex: str,
-                     aes_key_hex: str = None, version: int = 1) -> None:
+                     aes_key_hex: str = None, version: int = 1,
+                     chip_id: int = 0x413, build_no: int = 1) -> None:
     """生成加密+签名的安全固件包"""
     with open(input_bin, 'rb') as f:
         plain = f.read()
@@ -58,7 +59,7 @@ def encrypt_and_sign(input_bin: str, output_bin: str, private_key_hex: str,
 
     # 构造头部（32 字节）
     magic = 0x4F5441FE
-    header = struct.pack('<III12s8s', magic, version, len(plain), iv, b'\x00' * 8)
+    header = struct.pack('<III12sII', magic, version, len(plain), iv, chip_id, build_no)
 
     # SHA256 + 签名
     h = SHA256.new(header + encrypted)

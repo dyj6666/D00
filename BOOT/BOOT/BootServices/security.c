@@ -44,9 +44,6 @@ void derive_aes_key(uint8_t key[32]) {
     memcpy(buffer + 12, salt, 15);         // 15 字节（盐）
     sha256(buffer, 27, key);               // 计算 SHA256(27 字节)
     
-    printf("AES_KEY_PREFIX: ");
-    for (int i = 0; i < 8; i++) printf("%02X", key[i]);
-    printf("\r\n");
 }
 
 /* 声明 uECC_secp256r1 曲线函数 */
@@ -113,11 +110,26 @@ static bool ecdsa_verify(const uint8_t *pubkey, const uint8_t *hash, const uint8
  * @retval true  验证通过，*out_size 为原始固件大小
  *         false 验证失败
  */
-bool security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size, uint32_t current_version) {
+bool security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
+                               uint32_t current_version, uint32_t last_build_no) {
     ota_header_t header;
     memcpy(&header, (void *)download_addr, sizeof(header));
     if (header.magic != 0x4F5441FE) {
         printf("[SEC] Magic mismatch!\r\n");
+        return false;
+    }
+
+    /* 芯片型号匹配：防止跨芯片烧录 */
+    if (header.chip_id != (DBGMCU->IDCODE & 0xFFF)) {
+        printf("[SEC] Chip mismatch! pkg=0x%04X dev=0x%04X\r\n",
+               (unsigned)header.chip_id, (unsigned)(DBGMCU->IDCODE & 0xFFF));
+        return false;
+    }
+
+    /* 防重放：构建号必须严格递增（参数区持久化 last_build_no） */
+    if (last_build_no != 0 && header.build_no <= last_build_no) {
+        printf("[SEC] Replay denied! build=%lu last=%lu\r\n",
+               (unsigned long)header.build_no, (unsigned long)last_build_no);
         return false;
     }
 

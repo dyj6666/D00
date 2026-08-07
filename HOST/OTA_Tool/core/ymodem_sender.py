@@ -97,7 +97,8 @@ def aes_ctr_encrypt(key: bytes, iv12: bytes, plain: bytes) -> bytes:
 
 # ========================== 加密 + 签名 ==========================
 def encrypt_and_sign(input_bin: str, output_bin: str, private_key_hex: str,
-                     aes_key_hex: str, version: int = 1):
+                     aes_key_hex: str, version: int = 1,
+                     chip_id: int = 0x413, build_no: int = 1):
     with open(input_bin, 'rb') as f:
         plain = f.read()
 
@@ -106,7 +107,7 @@ def encrypt_and_sign(input_bin: str, output_bin: str, private_key_hex: str,
     encrypted = aes_ctr_encrypt(aes_key, iv, plain)
 
     magic = 0x4F5441FE
-    header = struct.pack('<III12s8s', magic, version, len(plain), iv, b'\x00' * 8)
+    header = struct.pack('<III12sII', magic, version, len(plain), iv, chip_id, build_no)
 
     h = SHA256.new(header + encrypted)
     digest = h.digest()

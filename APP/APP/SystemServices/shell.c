@@ -7,6 +7,7 @@
 #include "la_buffer.h"
 #include "la_trigger.h"
 #include "signal_gen.h"
+#include "ota_agent.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -48,6 +49,7 @@ static void cmd_sg_spi_stop(const char *args);
 static void cmd_sg_i2c_start(const char *args);
 static void cmd_sg_i2c_stop(const char *args);
 static void cmd_sg_i2c_complex(const char *args);
+static void cmd_ota_rbtest(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",         cmd_help},
@@ -77,6 +79,7 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_i2c_start",  cmd_sg_i2c_start},
     {"sg_i2c_stop",   cmd_sg_i2c_stop},
     {"sg_i2c_complex", cmd_sg_i2c_complex},
+    {"ota_rbtest",     cmd_ota_rbtest},
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
@@ -491,4 +494,11 @@ static void cmd_sg_i2c_complex(const char *args)
     int ret = SG_I2CComplexStart((uint8_t)addr, (uint16_t)interval);
     LOG_Printf("SG I2C COMPLEX: %s (addr=0x%02X interval=%dms)\r\n",
                ret == 0 ? "STARTED" : "FAILED", (unsigned)addr, interval);
+}
+
+static void cmd_ota_rbtest(const char *args)
+{
+    (void)args;
+    LOG_Printf("OTA rollback test: arming...\r\n");
+    Ota_ForceRollbackTest();
 }

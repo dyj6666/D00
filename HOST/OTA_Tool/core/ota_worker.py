@@ -19,6 +19,7 @@ class OtaWorker(QThread):
     log_signal = pyqtSignal(str, str)       # 消息, 颜色
     progress_signal = pyqtSignal(int)       # 0-100
     finished_signal = pyqtSignal(bool)      # 成功/失败
+    stage_signal = pyqtSignal(str)         # IDLE/DOWNLOADING/VERIFYING/COMMITTED/RUNNING
 
     def __init__(self, serial_instance, file_path, version,
                  uid_hex, private_key_hex, mode="hostlink"):
@@ -30,12 +31,19 @@ class OtaWorker(QThread):
         self.private_key_hex = private_key_hex
         self.mode = mode
         self._stop_flag = False
+        self.chip_id = 0x413
+        self.build_no = 1
 
     def stop(self):
         self._stop_flag = True
 
     def run(self):
         try:
+            self.stage_signal.emit("IDLE")
+            lib = load_lib()
+            self.chip_id = chip_id_int(lib)
+            self.build_no = alloc_build_no(lib)
+            add_entry(self.version, self.build_no, self.file_path, "auto")
             if self.mode == "ymodem":
                 self._run_ymodem()
             else:
@@ -49,12 +57,14 @@ class OtaWorker(QThread):
         self.log_signal.emit("== HOSTLINK 运行时 OTA ==", "cyan")
         self.log_signal.emit(f"固件: {os.path.basename(self.file_path)}", "yellow")
         self.log_signal.emit(f"版本: {self.version}", "yellow")
+        self.log_signal.emit(f"构建号: {self.build_no}, 芯片: {self.chip_id:#x}", "yellow")
 
         # 1) 生成安全固件包（加密 + 签名）
         aes_key = derive_aes_key_from_uid(self.uid_hex)
         pkg_path = os.path.join(os.path.dirname(self.file_path), "_ota_pkg.bin")
         encrypt_and_sign(self.file_path, pkg_path, self.private_key_hex,
-                         aes_key.hex(), self.version)
+                         aes_key.hex(), self.version,
+                         self.chip_id, self.build_no)
         with open(pkg_path, "rb") as f:
             pkg = f.read()
         self.log_signal.emit(f"安全包: {len(pkg)} 字节", "cyan")
@@ -69,7 +79,8 @@ class OtaWorker(QThread):
             for _ in range(retries):
                 t0 = time.time()
                 while time.time() - t0 < timeout:
-                    d = ser.read(512)
+                    n = ser.in_waiting
+                    d = ser.read(n) if n else b''
                     if d:
                         parser.feed(d)
                         for fr in parser.frames():
@@ -88,6 +99,7 @@ class OtaWorker(QThread):
             self.finished_signal.emit(False)
             return
         self.log_signal.emit("BEGIN OK，下载区已就绪", "green")
+        self.stage_signal.emit("DOWNLOADING")
 
         # 3) DATA 分块（逐块确认）
         chunk = OTA_CHUNK_MAX
@@ -128,7 +140,9 @@ class OtaWorker(QThread):
             self.finished_signal.emit(False)
             return
         self.log_signal.emit("END OK，设备正在重启并切换新固件", "green")
+        self.stage_signal.emit("VERIFYING")
         self.progress_signal.emit(100)
+        self.stage_signal.emit("COMMITTED")
         self.finished_signal.emit(True)
 
     # ---------------- 传统 YMODEM ----------------
@@ -137,11 +151,15 @@ class OtaWorker(QThread):
         aes_key = derive_aes_key_from_uid(self.uid_hex)
         pkg_path = os.path.join(os.path.dirname(self.file_path), "_ota_pkg.bin")
         encrypt_and_sign(self.file_path, pkg_path, self.private_key_hex,
-                         aes_key.hex(), self.version)
+                         aes_key.hex(), self.version,
+                         self.chip_id, self.build_no)
         sender = YmodemSender(serial_instance=self.serial_instance,
                               log_callback=self._on_log,
                               progress_callback=self.progress_signal.emit)
         success = sender.send_file(pkg_path)
+        if success:
+            self.stage_signal.emit("VERIFYING")
+            self.stage_signal.emit("COMMITTED")
         self.finished_signal.emit(success)
 
     def _on_log(self, message, color="white"):

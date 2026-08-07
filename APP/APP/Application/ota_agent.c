@@ -26,6 +26,7 @@ typedef struct {
     uint32_t boot_count;
     uint32_t rollback_count;
     uint32_t last_error;
+    uint32_t last_build_no;
     uint32_t crc32;
 } ota_param_t;
 #pragma pack()
@@ -267,10 +268,37 @@ uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total)
     return 0;
 }
 
+void Ota_ForceRollbackTest(void)
+{
+    ota_param_t param;
+    memcpy(&param, (const void *)OTA_PARAM_ADDR, sizeof(param));
+    if (param.magic != OTA_PARAM_MAGIC || param.crc32 != ota_param_crc(&param)) {
+        memset(&param, 0, sizeof(param));
+        param.magic = OTA_PARAM_MAGIC;
+    }
+    param.boot_state = OTA_STATE_PENDING;
+    param.boot_count = 3;      /* 与 BOOT MAX_BOOT_TRIES 一致：下次复位即回滚 */
+    param.last_error = 0;
+    param.crc32 = ota_param_crc(&param);
+    ota_flash_erase(OTA_PARAM_ADDR, 0);
+    ota_flash_write(OTA_PARAM_ADDR, (const uint8_t *)&param, sizeof(param));
+    ota_flash_write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
+                    (const uint8_t *)&param, sizeof(param));
+    LOG_Printf("OTA: rollback test armed (PENDING+MAX), resetting...\r\n");
+    BSP_DelayMs(100);
+    BSP_SystemReset();
+}
+
 void OtaAgent_Init(void)
 {
     EventBus_Subscribe(MSG_CMD_OTA_START, handle_ota_start_msg);
     ota_confirm_startup();
-    LOG_Printf("OTA Agent ready (download@0x%08X).\r\n",
-               (unsigned)OTA_DOWNLOAD_ADDR);
+    ota_param_t st;
+    memcpy(&st, (const void *)OTA_PARAM_ADDR, sizeof(st));
+    if (st.magic == OTA_PARAM_MAGIC && st.crc32 == ota_param_crc(&st)) {
+        LOG_Printf("OTA Agent ready (last build %lu).\r\n",
+                   (unsigned long)st.last_build_no);
+    } else {
+        LOG_Printf("OTA Agent ready (param invalid).\r\n");
+    }
 }

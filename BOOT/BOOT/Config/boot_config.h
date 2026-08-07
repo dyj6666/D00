@@ -57,6 +57,7 @@ typedef struct {
     uint32_t boot_count;
     uint32_t rollback_count;
     uint32_t last_error;
+    uint32_t last_build_no;   /* 已接受的最大构建号（防重放） */
     uint32_t crc32;
 } boot_param_t;
 #pragma pack()

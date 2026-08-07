@@ -16,4 +16,7 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len);
 uint8_t Ota_End(void);
 uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total);
 
+/* 调试/测试：把参数区置为 PENDING+count=MAX，复位后 BOOT 将触发回滚 */
+void Ota_ForceRollbackTest(void);
+
 #endif

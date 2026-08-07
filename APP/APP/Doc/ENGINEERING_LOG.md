@@ -465,3 +465,143 @@ auto-stop）全部按设计工作。
   - PENDING 分支 count++ → `Pending boot #2` → 跳 APP；
   - APP 启动确认 `erase=1 write0=1 write1=1` → `startup confirmed OK`；
   - 完整链路：升级→备份→切换→启动确认全部实机验证。
+
+### 12.11 回滚恢复失败根治：`flash_copy_raw` 缺失 PSIZE（PGPERR）
+- **现象**：`ota_rbtest` 置 PENDING+count=3 复位后，BOOT 稳定复现
+  `New APP failed 3 tries, rolling back...` → `Rollback failed, entering upgrade mode.`，
+  而 BACKUP 区校验有效、RUN 区擦除也报告成功。
+- **调试过程（逐层收窄，三层日志）**：
+  1. 先给 `boot_restore_backup` 加 `[RB]` 日志 → `erase=1 copy=0`，锁定失败在
+     `flash_copy_raw`（BACKUP→RUN 复制），擦除与 BACKUP 校验均正常；
+  2. 再给 `flash_copy_raw` 错误分支加**失败点寄存器快照**（地址 + 待写数据 + SR + CR）：
+     `[COPY] FAIL addr=0x08010000 word=0x20014ED8 SR=0x00000040 CR=0x00000031`；
+  3. 对照 ST 官方 SVD 解码：`SR=0x40` = **PGPERR（Programming Parallelism Error，
+     编程并行度错误）**，且失败发生在**第一个字**。
+- **根因**：`flash_copy_raw` 用寄存器级编程写 32 位字，却**未设置 PSIZE 字段**。
+  STM32F407 复位后 `FLASH_CR.PSIZE=00` 表示 **x8 字节编程**，写入 32 位字即触发 PGPERR；
+  而 HAL 的 `HAL_FLASH_Program` 会先 `FLASH->CR |= FLASH_PSIZE_WORD(0x200)`（x32）。
+  因此 OTA 下载（HAL 路径）一切正常，回滚复制（裸寄存器路径）必然失败——同源代码两种命运。
+- **修复**：`flash_copy_raw` 解锁后、写循环前显式
+  `FLASH->CR &= ~FLASH_CR_PSIZE; FLASH->CR |= FLASH_PSIZE_WORD;`，
+  并顺带清掉擦除遗留的 SNB 扇区号，保持 CR 干净。
+- **验证**：`[RB] erase=1 copy=1` → `Rollback OK, jumping to APP...` →
+  参数区写 NORMAL（回滚计数 +1）→ APP 正常启动。
+- **复盘要点**：寄存器级 Flash 编程必须显式设置 PSIZE；排查疑难问题优先在
+  失败点抓寄存器快照，比猜代码快得多。
+
+### 12.12 运行时 OTA 全链路打通：BOOT 预下载镜像直通（业务不中断升级）
+- **缺口**：HOSTLINK 运行时 OTA 由 APP 把固件包写入 DOWNLOAD 区后复位，但 BOOT
+  `boot_enter_upgrade_mode` **无条件擦除 DOWNLOAD 区并进入 YMODEM 接收**，
+  预下载数据被毁、切换无从谈起——"运行时下载"形同虚设。
+- **重构**：把"校验 → 备份 RUN → 擦除 → 解密 → 写魔数/版本 → 置 PENDING → 重启"
+  抽成 `boot_apply_download()`（YMODEM 收包后与预下载路径共用同一实现）；
+  升级模式入口先探测 DOWNLOAD 区包头（`magic==0x4F5441FE` 且
+  `0 < firmware_size <= DOWNLOAD_SIZE - 头 - 签名`），命中则直通切换，
+  校验失败才回退 YMODEM。重构采用脚本化精确行替换并留 `.bak_refactor` 备份。
+- **验证（连续两次完整链路 v13→v14→v15）**：
+  ```
+  APP : begin v15 → download complete (63312 B in 2.60 s) → rebooting
+  BOOT: Pre-downloaded package found, applying directly...
+        Current APP version: 14 → Backup → Security passed → PENDING=1 → reboot
+  APP : new firmware confirmed → startup confirmed OK
+  ```
+  升级全程 APP 业务不中断，仅最后复位切换。
+
+### 12.13 DAP 失效排查与 UART bootloader 恢复通道
+- **现象**：Keil 报 `Flash Download failed - Target DLL has been cancelled`，
+  APP/BOOT 工程一致，几分钟前还能正常烧录。
+- **调试方法（绕过 Keil，直连 CMSIS-DAP HID 探测）**：
+  - 枚举确认 DAP（VID_C251/PID_F001，MuseLab 方案）HID 接口在线；
+  - 用 Windows HID API 直接发 CMSIS-DAP 原始命令：`DAP_Info` / `DAP_SWJ_Clock` /
+    `DAP_Connect(SWD)` / `DAP_SWJ_Sequence` 全部正常应答 → 适配器固件存活；
+  - `DAP_Transfer` 读 DPIDR 返回 **0 次传输完成**（SWD/JTAG 双模式均失败）→
+    目标芯片不应答；nRESET 也拉不低；
+  - 双串口交叉验证：COM9 有 BOOT ymodem 日志、COM13 有 `C` 轮询 → **MCU 活着**，
+    只是 DAP↔芯片 SWD 物理链路断开（代码层已排除 PA13/14 复用与 RDP）。
+- **恢复通道（不依赖 SWD）**：BOOT0=1 + 复位进系统 bootloader，
+  `STM32CubeProgrammer -c port=COM13 br=115200`（UART1）全片擦除 → 烧 BOOT →
+  烧 APP（RUN/BACKUP）→ 校验，全程可复现、可脚本化。后续用户重新接好排线后
+  DAP 自行恢复（Erase/Programming/Verify OK）。
+- **复盘要点**：DAP 报错 ≠ 适配器坏；HID 直连探测能在 5 分钟内区分
+  "适配器故障 / 芯片失联 / 物理接线"。
+
+### 12.14 HOST 工具下载慢 50 倍提速：pyserial `read(size)` 阻塞陷阱
+- **现象**：HOSTLINK 下载 63 KB 耗时 136.8 s（0.46 KB/s），每块响应固定 ~505 ms。
+- **排查过程（一步步排除 MCU）**：
+  - `taskstats` 显示系统空闲、IDLE 在跑；tick=1ms 正常；
+  - 单字符回显 1ms、10 字节突发用 `read(1)` 逐字节读回显 3ms → **MCU 全速**；
+  - 同一突发改用 `read(256/512)` 批量读 → 稳定 500ms —— 差异只在**读取方式**。
+- **根因**：pyserial `read(size)` 的 Windows 语义是"等到 `size` 字节或超时"，
+  数据不足 `size` 时即使有数据也会**等满超时**才返回；`ota_worker.py` 里
+  `ser.read(512)` 每块响应白等 ~0.5s，264 块 × 0.5s ≈ 136s。
+- **修复**：改为按实际可读字节数读取：
+  `n = ser.in_waiting; d = ser.read(n) if n else b''`。
+- **验证**：同链路 2.60 s 完成 63312 B（24 KB/s，受 MCU Flash 写速限制），提速 50 倍。
+- **复盘要点**：串口性能测量必须用 `in_waiting` 或 `read(1)` 逐字节；
+  大 size 的阻塞 `read` 会把"响应延迟"误判成"设备慢"。
+
+### 12.15 安全清理：AES 派生密钥前缀泄露
+- **问题**：`derive_aes_key()` 向调试串口打印 `AES_KEY_PREFIX: 4D4A7E95...`
+  （密钥前 8 字节），泄露密钥材料且污染启动日志。
+- **修复**：删除该调试打印；BOOT/APP 两侧密钥派生逻辑不变。
+- **验证**：最终 BOOT 0 Error / 0 Warning，启动日志无密钥痕迹。
+
+---
+
+## 13. 日志跟踪规范（2026-08-07 起）
+
+> 目的：让每一次问题、修复、实机验证都有据可查，随时可复盘、可追溯。
+
+- **记录时机**：发现问题 / 定位根因 / 完成修复 / 实机验证 / 里程碑达成的
+  **每一个节点**都追加一条记录，不攒、不补写。
+- **条目模板**（保持与上文一致的"现象 / 根因 / 调试 / 修复 / 验证"结构）：
+  | 字段 | 说明 |
+  | --- | --- |
+  | 现象 | 可复现的现象与关键日志摘录 |
+  | 根因 | 一层到底的原因，含证据（寄存器值 / 协议帧 / 时序） |
+  | 调试方法 | 可复用的排查手段（快照、探测、交叉验证等） |
+  | 修复 | 改动文件与要点 |
+  | 验证 | 实机/构建证据，0 Error 0 Warning 等 |
+- **工作流约定**：改代码 → Keil 编译 → DAP 烧录 → 实机验证 → **同步写日志**；
+  仅当重大验证全部通过后才 git 提交（用户既定纪律）。
+- **编号规则**：按 `章节.小节` 递增（如 12.16、13.1），不重排旧编号。
+
+### 12.16 P2 · 固件元数据扩展 + 防重放（chip_id / build_no）
+- **设计**：`ota_header_t` 的 `reserved[8]` 语义化为 `chip_id[4] + build_no[4]`
+  （32 字节布局不变、签名覆盖范围不变，BOOT 与 HOST 打包同步）。
+- **BOOT**：`security_verify_and_decrypt` 新增两道防线——
+  芯片型号匹配（`header.chip_id != (DBGMCU->IDCODE & 0xFFF)` → 拒绝，防跨芯片烧录）；
+  防重放（`header.build_no <= 参数区 last_build_no` → 拒绝，防同版本重放）。
+  参数区 `boot_param_t` 增加 `last_build_no`（CRC 用 offsetof 自动纳入，BOOT/APP 同步），
+  切换成功写 PENDING 时一并持久化。
+- **HOST**：`cryptor.py` / `ymodem_sender.py` 包头改 `struct.pack('<III12sII', ...)`；
+  新增 `version_lib.py` 版本库（build_no 单调分配 + 固件登记）。
+- **实机验证**：
+  - 正常链路 v17 build=2：`Current APP version: 15, last build: 0` →
+    `Security verification passed` → 切换 → `OTA Agent ready (last build 2)`；
+  - 防重放：重放同 build 包 → `[SEC] Replay denied! build=2 last=2` → 拒绝并安全回退；
+  - 芯片校验：`chip=0x999` 包 → `[SEC] Chip mismatch! pkg=0x0999 dev=0x0413` → 拒绝；
+  - YMODEM 路径兼容新包头（v19 升级成功，62 帧全确认）。
+
+### 12.17 UPGRADE 状态归一化修复（防"卡死在升级模式"）
+- **问题**：OTA 校验失败回退 YMODEM 后，参数区 `boot_state` 残留 UPGRADE(4)，
+  下次复位会再次进入升级模式；叠加 YMODEM 模式阻塞 SWD，板子容易被"锁"住。
+- **修复**：BOOT 的 BKP 升级标志分支进入升级模式前先写
+  `boot_state=NORMAL, boot_count=0` 并保存——无论本次升级成败，复位后都回 APP。
+- **验证**：`[PARAM] save OK (state=1 count=0)` → 校验拒绝 → 复位自动回 APP 正常运行。
+
+### 12.18 已知现象：BOOT YMODEM 模式阻塞 SWD 连接（三次复现）
+- **现象**：板子处于 BOOT 升级模式（YMODEM 等待握手）时，Keil DAP 报
+  `Target DLL has been cancelled`；HID 直连探测 `DAP_Transfer` 读 DPIDR 返回
+  0 次传输完成（目标不应答）。复位回 APP 后 DAP 立即恢复（第三次复现确认非巧合）。
+- **影响**：不影响 OTA 升级功能；烧录前需避开 YMODEM 模式（先复位，或用 BOOT0+UART 恢复）。
+- **待查**：疑与升级模式下 Flash/SWD 交互有关（工程内已有"擦 flash 阻塞 SWD"注释），
+  留作专项排查项。
+
+### 12.19 上位机增强：版本库 / 阶段可视化 / 批量升级 / 彩色日志
+- `version_lib.py`：固件版本库（chip_id 配置、build_no 单调分配、条目登记，JSON 持久化）；
+- `ota_worker.py`：新增 `stage_signal`（IDLE→DOWNLOADING→VERIFYING→COMMITTED→RUNNING），
+  打包自动从版本库取 build_no；
+- `main_window.py`：升级阶段徽章、版本库下拉（选择自动填充固件/版本）、
+  批量端口并发升级（每端口独立 worker）、日志按级别着色；
+- **验证**：5 个 HOST 模块 ast 语法检查全绿；版本库分配/登记实测通过。

@@ -11,10 +11,11 @@
 #pragma pack(1)
 typedef struct {
     uint32_t magic;           // 0x4F5441FE
-    uint32_t version;
+    uint32_t version;         // 功能版本号（防回滚）
     uint32_t firmware_size;   // 原始固件大小
     uint8_t  aes_iv[12];      // AES-CTR 初始化向量
-    uint8_t  reserved[8];     // 保留
+    uint32_t chip_id;         // 目标芯片 IDCODE 低 12 位（防跨芯片烧录）
+    uint32_t build_no;        // 单调递增构建号（防重放）
 } ota_header_t;
 #pragma pack()
 
@@ -28,7 +29,8 @@ bool aes_ctr_decrypt_to_flash(uint32_t src_addr, uint32_t len,
 /* 固定 AES 密钥（测试用，后续改为 UID 派生） */
 extern const uint8_t AES_KEY[32];
 /* 安全处理入口 */
-bool security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size, uint32_t current_version);
+bool security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
+                                 uint32_t current_version, uint32_t last_build_no);
 /**
  * @brief  使用芯片 UID 派生 256 位 AES 密钥
  * @note   与上位机使用相同的盐值

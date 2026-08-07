@@ -104,9 +104,19 @@ static void boot_enter_upgrade_mode(void);
 /* 用 BACKUP 区恢复 RUN（回滚/自动修复），成功返回 true */
 static bool boot_restore_backup(void)
 {
-    if (!boot_check_app_valid(BACKUP_BASE_ADDR)) return false;
-    return flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1) &&
-           flash_copy_raw(APP_BASE_ADDR, BACKUP_BASE_ADDR, APP_SIZE);
+    uint32_t magic = *(volatile uint32_t *)(BACKUP_BASE_ADDR + APP_VALID_OFFSET);
+    uint32_t sp = *(volatile uint32_t *)BACKUP_BASE_ADDR;
+    uint32_t pc = *(volatile uint32_t *)(BACKUP_BASE_ADDR + 4);
+    if (!boot_check_app_valid(BACKUP_BASE_ADDR)) {
+        printf("[RB] BACKUP invalid: magic=0x%08X sp=0x%08X pc=0x%08X\r\n",
+               (unsigned)magic, (unsigned)sp, (unsigned)pc);
+        return false;
+    }
+    printf("[RB] BACKUP valid, restoring RUN...\r\n");
+    bool e = flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1);
+    bool c = flash_copy_raw(APP_BASE_ADDR, BACKUP_BASE_ADDR, APP_SIZE);
+    printf("[RB] erase=%d copy=%d\r\n", (int)e, (int)c);
+    return e && c;
 }
 
 /* 回滚：BACKUP -> RUN，更新回滚计数，超限进入 RECOVERY */
@@ -134,7 +144,90 @@ static void boot_rollback(void)
     boot_enter_upgrade_mode();
 }
 
-/* 升级模式：接收 → 验证 → 解密写 APP → 写魔数 → 复位（防回滚） */
+/* Apply the firmware package already staged in DOWNLOAD area:
+ * verify -> backup RUN -> erase -> decrypt -> magic/version -> PENDING -> reboot.
+ * Shared by runtime-OTA (pre-downloaded) and YMODEM receive paths.
+ * Returns true on success (never returns, reboots); false on validation failure.
+ * Flash-level failures halt (same safety semantics as before). */
+static bool boot_apply_download(void)
+{
+    boot_param_t param;
+    boot_param_load(&param);   /* 读取 last_build_no 供防重放校验 */
+
+    uint32_t current_version = 0;
+    if (boot_check_app_valid(APP_BASE_ADDR)) {
+        current_version = *(volatile uint32_t *)APP_VERSION_ADDR;
+    }
+    printf("Current APP version: %lu, last build: %lu\r\n",
+           (unsigned long)current_version, (unsigned long)param.last_build_no);
+
+    uint32_t app_size = 0;
+    if (!security_verify_and_decrypt(DOWNLOAD_BASE_ADDR, &app_size,
+                                     current_version, param.last_build_no)) {
+        printf("Security verification failed!\r\n");
+        return false;
+    }
+
+    /* 升级前备份当前 RUN 到 BACKUP（若当前固件有效） */
+    if (boot_check_app_valid(APP_BASE_ADDR)) {
+        printf("Backing up current APP to BACKUP area...\r\n");
+        if (!flash_erase(BACKUP_BASE_ADDR,
+                         BACKUP_BASE_ADDR + BACKUP_SIZE - 1) ||
+            !flash_copy_raw(BACKUP_BASE_ADDR, APP_BASE_ADDR, APP_SIZE)) {
+            printf("BACKUP failed! System halted.\r\n");
+            while (1) { IWDG->KR = 0xAAAA; }
+        }
+    }
+
+    printf("Erasing APP area...\r\n");
+    if (!flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1)) {
+        printf("APP erase failed! System halted.\r\n");
+        while (1) { IWDG->KR = 0xAAAA; }
+    }
+
+    ota_header_t hdr;
+    memcpy(&hdr, (void *)DOWNLOAD_BASE_ADDR, sizeof(hdr));
+    uint8_t iv16[16];
+    memcpy(iv16, hdr.aes_iv, 12);
+    memset(iv16 + 12, 0, 4);
+
+    uint8_t aes_key[32];
+    derive_aes_key(aes_key);        /* 设备 UID 派生 AES 密钥 */
+
+    if (!aes_ctr_decrypt_to_flash(DOWNLOAD_BASE_ADDR + sizeof(ota_header_t),
+                                  app_size, aes_key, iv16, APP_BASE_ADDR)) {
+        printf("APP write failed! System halted.\r\n");
+        while (1) { IWDG->KR = 0xAAAA; }
+    }
+
+    uint32_t sp = *(volatile uint32_t *)APP_BASE_ADDR;
+    uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
+    if (sp < 0x20000000 || sp > 0x20020000 ||
+        pc < APP_BASE_ADDR || pc > APP_BASE_ADDR + APP_SIZE) {
+        printf("APP vector invalid! SP=0x%08X PC=0x%08X\r\n", sp, pc);
+        return false;
+    }
+
+    printf("Security verification passed. Writing magic and version...\r\n");
+    uint32_t magic = APP_VALID_MAGIC;
+    flash_write(APP_VALID_ADDR, (uint8_t *)&magic, sizeof(magic));
+    flash_write(APP_VERSION_ADDR, (uint8_t *)&hdr.version, sizeof(hdr.version));
+
+    /* 置"待确认"参数：新固件首次启动计数，供回滚状态机使用；
+     * 同时记录构建号，构成防重放闭环。 */
+    param.boot_state = BOOT_STATE_PENDING;
+    param.boot_count = 1;
+    param.last_error = 0;
+    param.last_build_no = hdr.build_no;
+    boot_param_save(&param);
+
+    BKP_WRITE(0, BOOT_FLAG_NONE);
+    printf("Update successful! Rebooting to new APP...\r\n");
+    HAL_Delay(100);
+    NVIC_SystemReset();
+    return true;   /* unreachable */
+}
+
 static void boot_enter_upgrade_mode(void)
 {
     printf("Entering upgrade mode...\r\n");
@@ -148,6 +241,21 @@ static void boot_enter_upgrade_mode(void)
     char uid_str[32];
     sprintf(uid_str, "DEV_UID:%08X%08X%08X\r\n", uid[0], uid[1], uid[2]);
     HAL_UART_Transmit(&huart1, (uint8_t *)uid_str, strlen(uid_str), 1000);
+
+    /* Runtime OTA: if the APP already staged a package in DOWNLOAD via HOSTLINK,
+     * apply it directly (business-uninterrupted upgrade). Fall back to YMODEM only
+     * when no valid pre-downloaded package exists. */
+    ota_header_t probe;
+    memcpy(&probe, (void *)DOWNLOAD_BASE_ADDR, sizeof(probe));
+    if (probe.magic == 0x4F5441FE &&
+        probe.firmware_size > 0 &&
+        probe.firmware_size <= DOWNLOAD_SIZE - sizeof(ota_header_t) - OTA_SIGN_SIZE) {
+        printf("Pre-downloaded package found, applying directly...\r\n");
+        if (boot_apply_download()) {
+            return;
+        }
+        printf("Pre-downloaded package invalid, falling back to YMODEM.\r\n");
+    }
 
     /* 下载区只擦除一次：避免重试循环中反复擦 flash，阻塞 SWD 调试连接 */
     printf("Erasing Download area...\r\n");
@@ -166,78 +274,11 @@ static void boot_enter_upgrade_mode(void)
         }
         printf("OTA success. File: %s, Size: %lu\r\n", ctx.file_name, ctx.received_size);
 
-        uint32_t current_version = 0;
-        if (boot_check_app_valid(APP_BASE_ADDR)) {
-            current_version = *(volatile uint32_t *)APP_VERSION_ADDR;
-        }
-        printf("Current APP version: %lu\r\n", current_version);
-
-        uint32_t app_size = 0;
-        if (!security_verify_and_decrypt(DOWNLOAD_BASE_ADDR, &app_size, current_version)) {
-            printf("Security verification failed! Waiting for valid firmware...\r\n");
+        if (!boot_apply_download()) {
+            printf("Package invalid, waiting for valid firmware...\r\n");
             IWDG->KR = 0xAAAA;
             continue;
         }
-
-        /* 升级前备份当前 RUN 到 BACKUP（若当前固件有效） */
-        if (boot_check_app_valid(APP_BASE_ADDR)) {
-            printf("Backing up current APP to BACKUP area...\r\n");
-            if (!flash_erase(BACKUP_BASE_ADDR,
-                             BACKUP_BASE_ADDR + BACKUP_SIZE - 1) ||
-                !flash_copy_raw(BACKUP_BASE_ADDR, APP_BASE_ADDR, APP_SIZE)) {
-                printf("BACKUP failed! System halted.\r\n");
-                while (1) { IWDG->KR = 0xAAAA; }
-            }
-        }
-
-        printf("Erasing APP area...\r\n");
-        if (!flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1)) {
-            printf("APP erase failed! System halted.\r\n");
-            while (1) { IWDG->KR = 0xAAAA; }
-        }
-
-        ota_header_t hdr;
-        memcpy(&hdr, (void *)DOWNLOAD_BASE_ADDR, sizeof(hdr));
-        uint8_t iv16[16];
-        memcpy(iv16, hdr.aes_iv, 12);
-        memset(iv16 + 12, 0, 4);
-
-        uint8_t aes_key[32];
-        derive_aes_key(aes_key);        /* 设备 UID 派生 AES 密钥 */
-
-        if (!aes_ctr_decrypt_to_flash(DOWNLOAD_BASE_ADDR + sizeof(ota_header_t),
-                                      app_size, aes_key, iv16, APP_BASE_ADDR)) {
-            printf("APP write failed! System halted.\r\n");
-            while (1) { IWDG->KR = 0xAAAA; }
-        }
-
-        uint32_t sp = *(volatile uint32_t *)APP_BASE_ADDR;
-        uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
-        if (sp < 0x20000000 || sp > 0x20020000 ||
-            pc < APP_BASE_ADDR || pc > APP_BASE_ADDR + APP_SIZE) {
-            printf("APP vector invalid! SP=0x%08X PC=0x%08X\r\n", sp, pc);
-            printf("Waiting for valid firmware...\r\n");
-            IWDG->KR = 0xAAAA;
-            continue;
-        }
-
-        printf("Security verification passed. Writing magic and version...\r\n");
-        uint32_t magic = APP_VALID_MAGIC;
-        flash_write(APP_VALID_ADDR, (uint8_t *)&magic, sizeof(magic));
-        flash_write(APP_VERSION_ADDR, (uint8_t *)&hdr.version, sizeof(hdr.version));
-
-        /* 置"待确认"参数：新固件首次启动计数，供回滚状态机使用 */
-        boot_param_t param;
-        boot_param_load(&param);
-        param.boot_state = BOOT_STATE_PENDING;
-        param.boot_count = 1;
-        param.last_error = 0;
-        boot_param_save(&param);
-
-        BKP_WRITE(0, BOOT_FLAG_NONE);
-        printf("Update successful! Rebooting to new APP...\r\n");
-        HAL_Delay(100);
-        NVIC_SystemReset();
     }
 }
 
@@ -258,6 +299,10 @@ void BootApp_Run(void)
     if (BKP_READ(0) == BOOT_FLAG_UPGRADE) {
         printf("Upgrade flag set. Entering upgrade mode.\r\n");
         BKP_WRITE(0, BOOT_FLAG_NONE);
+        /* 先归一化参数状态：无论本次升级成败，复位后都不再误入升级模式 */
+        param.boot_state = BOOT_STATE_NORMAL;
+        param.boot_count = 0;
+        boot_param_save(&param);
         boot_enter_upgrade_mode();
         return;
     }

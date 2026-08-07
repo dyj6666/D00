@@ -1,4 +1,5 @@
 #include "flash_if.h"
+#include <stdio.h>
 #include "stm32f4xx_hal.h"   // 已经包含
 
 /* 放在 SRAM 中执行的喂狗函数，确保 Flash 擦除期间可用 */
@@ -147,6 +148,13 @@ bool flash_copy_raw(uint32_t dest, uint32_t src, uint32_t len) {
     FLASH->KEYR = 0x45670123;
     FLASH->KEYR = 0xCDEF89AB;
 
+    /* Select x32 word programming (PSIZE=0b10). After reset PSIZE=00 means
+     * x8 byte programming; writing 32-bit words without this triggers PGPERR. */
+    FLASH->CR &= ~FLASH_CR_PSIZE;
+    FLASH->CR |= FLASH_PSIZE_WORD;
+    /* Clear any sector-number residue left by a previous sector erase. */
+    FLASH->CR &= ~FLASH_CR_SNB;
+
     uint32_t i = 0;
     while (i < len) {
         uint32_t word;
@@ -171,9 +179,16 @@ bool flash_copy_raw(uint32_t dest, uint32_t src, uint32_t len) {
         while (FLASH->SR & FLASH_SR_BSY);
 
         if (FLASH->SR & (FLASH_SR_PGSERR | FLASH_SR_PGPERR | FLASH_SR_PGAERR | FLASH_SR_WRPERR)) {
+            uint32_t fail_addr = dest + i;
+            uint32_t fail_sr   = FLASH->SR;
+            uint32_t fail_cr   = FLASH->CR;
+            uint32_t fail_word = word;
             FLASH->CR &= ~FLASH_CR_PG;
             FLASH->CR |= FLASH_CR_LOCK;
             __enable_irq();
+            printf("[COPY] FAIL addr=0x%08X word=0x%08X SR=0x%08X CR=0x%08X\r\n",
+                   (unsigned)fail_addr, (unsigned)fail_word,
+                   (unsigned)fail_sr, (unsigned)fail_cr);
             return false;
         }
 

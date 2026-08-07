@@ -10,6 +10,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QFont
 import serial.tools.list_ports
 from core.ota_worker import OtaWorker
+from core.version_lib import load_lib
 from ui.uid_capture_thread import UidCaptureThread
 from utils.config import Config
 
@@ -37,6 +38,7 @@ class MainWindow(QMainWindow):
                 self.setStyleSheet(f.read())
 
         self.worker = None
+        self.lib_data = None
         self.uid_thread = None
         self.serial_instance = None
         self.serial_opened = False
@@ -87,6 +89,19 @@ class MainWindow(QMainWindow):
         file_group = QGroupBox("固件与安全配置")
         file_layout = QVBoxLayout()
 
+
+        row0 = QHBoxLayout()
+        row0.addWidget(QLabel("版本库:"))
+        self.combo_lib = QComboBox()
+        self.combo_lib.setMinimumWidth(280)
+        self.combo_lib.currentIndexChanged.connect(self._on_lib_selected)
+        btn_lib_refresh = QPushButton("刷新")
+        btn_lib_refresh.clicked.connect(self._reload_lib)
+        row0.addWidget(self.combo_lib)
+        row0.addWidget(btn_lib_refresh)
+        row0.addStretch()
+        file_layout.addLayout(row0)
+        self._reload_lib()
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("固件文件:"))
         self.edit_file = QLineEdit()
@@ -147,12 +162,28 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_stop)
         main_layout.addLayout(btn_layout)
+        batch_row = QHBoxLayout()
+        batch_row.addWidget(QLabel("批量端口(逗号分隔):"))
+        self.edit_batch_ports = QLineEdit()
+        self.edit_batch_ports.setPlaceholderText("COM13,COM16,...")
+        batch_row.addWidget(self.edit_batch_ports)
+        self.btn_batch = QPushButton("批量升级")
+        self.btn_batch.clicked.connect(self._start_batch)
+        batch_row.addWidget(self.btn_batch)
+        batch_row.addStretch()
+        main_layout.addLayout(batch_row)
+
 
         self.lbl_mode_hint = QLabel()
         self.lbl_mode_hint.setStyleSheet("color: #2F4F4F;")
         main_layout.addWidget(self.lbl_mode_hint)
         self._on_mode_changed(0)
 
+
+        self.lbl_stage = QLabel()
+        self.lbl_stage.setTextFormat(Qt.RichText)
+        main_layout.addWidget(self.lbl_stage)
+        self._set_stage("IDLE")
         # ---- 进度条 ----
         self.progress = QProgressBar()
         self.progress.setFormat("%p%")
@@ -280,6 +311,7 @@ class MainWindow(QMainWindow):
         self.worker.log_signal.connect(self._append_log)
         self.worker.progress_signal.connect(self.progress.setValue)
         self.worker.finished_signal.connect(self._on_finished)
+        self.worker.stage_signal.connect(self._set_stage)
         self.worker.start()
 
     def _on_mode_changed(self, index):
@@ -312,7 +344,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "失败", "升级失败，请查看日志")
 
     def _append_log(self, message, color=COLOR_DEFAULT):
-        self.log_edit.append(f'<span style="color:#000000;">{message}</span>')
+        self.log_edit.append(f'<span style="color:{color};">{message}</span>')
 
     def _toggle_key_visibility(self, state):
         if state == Qt.Checked:
@@ -320,7 +352,74 @@ class MainWindow(QMainWindow):
         else:
             self.edit_key.setEchoMode(QLineEdit.Password)
 
+
+    # ---------- 升级阶段徽章 ----------
+    def _set_stage(self, stage):
+        colors = {
+            "IDLE": "#808080",
+            "DOWNLOADING": "#2F6FD0",
+            "VERIFYING": "#B8860B",
+            "COMMITTED": "#228B22",
+            "RUNNING": "#228B22",
+        }
+        c = colors.get(stage, "#808080")
+        self.lbl_stage.setText(f'<span style="color:{c};font-weight:bold;">● {stage}</span>')
+
+    # ---------- 版本库 ----------
+    def _reload_lib(self):
+        self.lib_data = load_lib()
+        self.combo_lib.blockSignals(True)
+        self.combo_lib.clear()
+        self.combo_lib.addItem("— 手动选择 —")
+        for e in self.lib_data.get("entries", []):
+            label = f"v{e.get('version','?')} (build {e.get('build','?')}) {e.get('note','')}"
+            self.combo_lib.addItem(label, e)
+        self.combo_lib.blockSignals(False)
+
+    def _on_lib_selected(self, idx):
+        if idx <= 0:
+            return
+        e = self.combo_lib.itemData(idx)
+        if e:
+            self.edit_file.setText(e.get("file", ""))
+            self.edit_version.setValue(int(e.get("version", 1)))
+
+    # ---------- 批量升级（HOSTLINK 多端口并发） ----------
+    def _start_batch(self):
+        ports = [p.strip() for p in self.edit_batch_ports.text().split(",") if p.strip()]
+        if not ports:
+            QMessageBox.warning(self, "提示", "请填写批量端口（逗号分隔）")
+            return
+        file_path = self.edit_file.text()
+        version = self.edit_version.value()
+        uid = self.edit_uid.text()
+        key = self.edit_key.text()
+        if not all([file_path, uid, key]):
+            QMessageBox.warning(self, "参数缺失", "请填写所有必要参数")
+            return
+        baud = int(self.combo_baud.currentText())
+        self.progress.setValue(0)
+        for port in ports:
+            try:
+                ser = serial.Serial(port, baud, timeout=0.5)
+            except Exception as ex:
+                self._append_log(f"[{port}] 打开失败: {ex}", COLOR_ERROR)
+                continue
+            w = OtaWorker(serial_instance=ser, file_path=file_path, version=version,
+                          uid_hex=uid, private_key_hex=key, mode="hostlink")
+            w.log_signal.connect(lambda m, c, p=port: self._append_log(f"[{p}] {m}", c))
+            w.progress_signal.connect(self.progress.setValue)
+            w.stage_signal.connect(self._set_stage)
+            w.finished_signal.connect(lambda ok, p=port: self._batch_done(ok, p))
+            w.start()
+            self._append_log(f"[{port}] 批量升级已启动", COLOR_INFO)
+
+    def _batch_done(self, ok, port):
+        self._append_log(f"[{port}] 升级{'成功' if ok else '失败'}",
+                         COLOR_OK if ok else COLOR_ERROR)
+
     def closeEvent(self, event):
+
         if self.serial_instance and self.serial_instance.is_open:
             self.serial_instance.close()
         event.accept()
