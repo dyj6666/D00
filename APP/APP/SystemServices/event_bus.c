@@ -145,3 +145,8 @@ uint32_t EventBus_GetPoolFreeCount(void)
 {
     return (uint32_t)uxQueueMessagesWaiting(free_queue);
 }
+
+uint32_t EventBus_GetQueueCount(void)
+{
+    return (uint32_t)uxQueueMessagesWaiting(msg_queue);
+}

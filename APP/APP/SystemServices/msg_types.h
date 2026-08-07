@@ -11,6 +11,7 @@ typedef enum {
     MSG_CMD_LED,
     MSG_CMD_OTA_START,
     MSG_CMD_SYSMON,
+    MSG_EB_STRESS,
     /* 可继续扩展... */
     MSG_COUNT
 } msg_type_t;

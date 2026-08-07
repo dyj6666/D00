@@ -42,6 +42,7 @@ int  EventBus_Subscribe(uint16_t type, msg_handler_t handler);
 void EventBusTaskFunction(void);
 uint32_t EventBus_GetLostCount(void);
 uint32_t EventBus_GetPoolFreeCount(void);
+uint32_t EventBus_GetQueueCount(void);
 
 /* ---------- 便捷发布宏 ---------- */
 #define MSG_SEND_SIMPLE(src_id, msg_type) do { \

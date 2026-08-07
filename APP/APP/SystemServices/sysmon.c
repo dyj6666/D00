@@ -12,13 +12,17 @@
 
 #include <string.h>
 
-/* ================== 喂狗定时器 ================== */
-static TimerHandle_t feed_timer;
-
-static void feed_callback(TimerHandle_t xTimer)
+/* ================== 喂狗（SysTick 中断驱动） ==================
+ * 工业级原则：硬件看门狗绝不可依赖低优先级任务——事件风暴/高优先级任务
+ * 长时间占用 CPU 会饿死 Tmr Svc，导致 IWDG 误复位。改为 SysTick 钩子
+ * 在中断上下文喂狗，任何任务调度风暴都不影响喂狗。 */
+void vApplicationTickHook(void)
 {
-    (void)xTimer;
-    BSP_Watchdog_Refresh();
+    static uint32_t tick_cnt = 0;
+    if (++tick_cnt >= WDOG_FEED_PERIOD_MS) {   /* 1kHz tick => 周期=WDOG_FEED_PERIOD_MS ms */
+        tick_cnt = 0;
+        BSP_Watchdog_Refresh();
+    }
 }
 
 /* ================== 监控项定义 ================== */
@@ -128,7 +132,8 @@ static void print_heap_info(void)
 
 static void print_watchdog_status(void)
 {
-    LOG_Printf("=== WATCHDOG ===\r\nIWDG active, feed period: %d ms\r\n", WDOG_FEED_PERIOD_MS);
+    LOG_Printf("=== WATCHDOG ===\r\nIWDG active, feed via SysTick IRQ every %d ms\r\n",
+               WDOG_FEED_PERIOD_MS);
 #if APP_DEBUG_MODE
     LOG_Printf("  (debug mode: watchdog disabled)\r\n");
 #endif
@@ -187,14 +192,7 @@ void SysMon_Init(void)
     /* 启动任务级看门狗（IWDG 之外的软件层防线） */
     WDOG_Init();
 
-    /* 启动喂狗定时器 */
-    feed_timer = xTimerCreate("wdg_feed",
-                              pdMS_TO_TICKS(WDOG_FEED_PERIOD_MS),
-                              pdTRUE, NULL, feed_callback);
-    if (feed_timer) {
-        xTimerStart(feed_timer, 0);
-        LOG_Printf("SysMon: IWDG feeding started.\r\n");
-    }
+    LOG_Printf("SysMon: IWDG feeding started (SysTick IRQ).\r\n");
 #endif
 
     // 2. 订阅 sysmon 命令事件（使用新消息类型）

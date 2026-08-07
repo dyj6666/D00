@@ -50,6 +50,7 @@ static void cmd_sg_i2c_start(const char *args);
 static void cmd_sg_i2c_stop(const char *args);
 static void cmd_sg_i2c_complex(const char *args);
 static void cmd_ota_rbtest(const char *args);
+static void cmd_eb_stress(const char *args);
 
 static const cmd_entry_t cmd_table[] = {
     {"help",         cmd_help},
@@ -80,6 +81,7 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_i2c_stop",   cmd_sg_i2c_stop},
     {"sg_i2c_complex", cmd_sg_i2c_complex},
     {"ota_rbtest",     cmd_ota_rbtest},
+    {"eb_stress",      cmd_eb_stress},
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
@@ -501,4 +503,107 @@ static void cmd_ota_rbtest(const char *args)
     (void)args;
     LOG_Printf("OTA rollback test: arming...\r\n");
     Ota_ForceRollbackTest();
+}
+
+/* ================== 事件总线极限负载测试 ==================
+ * 用法：
+ *   eb_stress <count> [payload] [burst|steady]
+ *   - burst ：挂起 eventBusTask 后连发，测纯发布速率与缓冲/池上限；
+ *   - steady：不挂起连发，测系统稳态吞吐（消费者实时消化）与丢包拐点。
+ * payload 为每条消息字节数（<= EVENT_BUS_MSG_MAX_PAYLOAD）。 */
+extern TaskHandle_t eventBusTaskHandle;
+
+static volatile uint32_t g_eb_processed = 0;
+static uint8_t           g_eb_subscribed = 0;
+
+static void eb_stress_handler(const message_t *msg)
+{
+    (void)msg;
+    g_eb_processed++;
+}
+
+static void cmd_eb_stress(const char *args)
+{
+    uint32_t count = 10000;
+    uint16_t payload = 0;
+    char mode[16] = "burst";
+    if (args && *args) {
+        unsigned long c = 0;
+        unsigned int p = 0;
+        int n = sscanf(args, "%lu %u %15s", &c, &p, mode);
+        if (n >= 1) count = (uint32_t)c;
+        if (n >= 2) payload = (uint16_t)p;
+    }
+    if (count == 0) count = 1;
+    if (payload > EVENT_BUS_MSG_MAX_PAYLOAD) payload = EVENT_BUS_MSG_MAX_PAYLOAD;
+    int steady = (strcmp(mode, "steady") == 0);
+
+    if (!g_eb_subscribed) {
+        EventBus_Subscribe(MSG_EB_STRESS, eb_stress_handler);
+        g_eb_subscribed = 1;
+    }
+
+    /* DWT 周期计数（168MHz） */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+
+    uint32_t lost0 = EventBus_GetLostCount();
+    uint32_t proc0 = g_eb_processed;
+
+    if (!steady) {
+        vTaskSuspend(eventBusTaskHandle);
+    }
+    DWT->CYCCNT = 0;
+    uint32_t pub_ok = 0, pub_lost = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        message_t *msg = NULL;
+        if (EventBus_AllocMsg(MODULE_SHELL, MSG_EB_STRESS,
+                              payload, &msg) == 0) {
+            if (payload) memset(msg->payload, 0xA5, payload);
+            if (EventBus_Publish(msg) == 0) {
+                pub_ok++;
+            } else {
+                pub_lost++;
+            }
+        } else {
+            pub_lost++;
+        }
+    }
+    uint32_t pub_cycles = DWT->CYCCNT;
+    if (!steady) {
+        vTaskResume(eventBusTaskHandle);
+    }
+
+    /* 等待消费者消化完成（最多 5s） */
+    uint32_t wait_ms = 0;
+    while (g_eb_processed - proc0 < pub_ok && wait_ms < 5000) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+        wait_ms += 2;
+    }
+    uint32_t proc_done = g_eb_processed - proc0;
+    uint32_t lost_delta = EventBus_GetLostCount() - lost0;
+
+    /* 速率（整数计算，@168MHz） */
+    uint32_t cpmsg = pub_cycles / count;              /* cycles/msg（含失败路径） */
+    uint32_t pub_rate = cpmsg ? (168000000u / cpmsg) : 0;   /* 发布 msg/s */
+    uint32_t total_us = pub_cycles / 168u + wait_ms * 1000u; /* 总耗时（µs） */
+    uint64_t sys_rate64 = total_us ? ((uint64_t)proc_done * 1000000u / total_us) : 0;
+    uint32_t sys_rate = (uint32_t)sys_rate64;
+
+    LOG_Printf("EB STRESS: count=%lu payload=%u mode=%s\r\n",
+               (unsigned long)count, (unsigned)payload, mode);
+    LOG_Printf("  published OK: %lu, lost: %lu\r\n",
+               (unsigned long)pub_ok, (unsigned long)pub_lost);
+    LOG_Printf("  publish: %lu cycles (%lu cpmsg, %lu msg/s)\r\n",
+               (unsigned long)pub_cycles, (unsigned long)cpmsg,
+               (unsigned long)pub_rate);
+    LOG_Printf("  processed: %lu / %lu after %lu ms\r\n",
+               (unsigned long)proc_done, (unsigned long)pub_ok,
+               (unsigned long)wait_ms);
+    LOG_Printf("  system throughput: %lu msg/s (%lu us)\r\n",
+               (unsigned long)sys_rate, (unsigned long)total_us);
+    LOG_Printf("  total lost delta: %lu, pool free: %lu, queue: %lu\r\n",
+               (unsigned long)lost_delta,
+               (unsigned long)EventBus_GetPoolFreeCount(),
+               (unsigned long)EventBus_GetQueueCount());
 }

@@ -761,3 +761,25 @@ auto-stop）全部按设计工作。
   （DL_CMD 137/2048、DL_TX 151/1024、SG 91/512、eventBus 262/1536）。
 - **结论**：事件驱动 + DMA 卸载架构合理，真实业务满载 CPU 仅 ~9%，余量极大；
   剩余峰值开销为 HOSTLINK 协议帧解析（32 位 MCU 流式处理必要成本），无可再压。
+
+### 12.36 事件总线极限负载测试 + 喂狗中断化加固（重大根因）
+- **测试工具**：新增 `eb_stress <count> [payload] [burst|steady]` shell 命令
+  （`MSG_EB_STRESS` 消息 + 订阅端计数 + DWT 168MHz 周期计时）；
+  burst=挂起 eventBusTask 测纯发布，steady=实时消化测系统吞吐。
+- **极限数据（v80/v81 实测）**：
+  | 指标 | 数值 | 说明 |
+  | --- | --- | --- |
+  | 突发发布速率 | ~76 万次/s（221 cycles/次） | 挂起消费者，纯 AllocMsg+Publish |
+  | 稳态系统吞吐 | 40.6k msg/s（payload=0）/ 35.0k（payload=128） | 发布+消费联合，持续 50 万条零丢失 |
+  | 并发在途上限 | 32 条 | 静态池大小=架构约束，队列 64 为冗余缓冲 |
+  | payload 影响 | 0/64/128 字节 cpmsg=222/223/224 | 验证"传指针"设计，复制不在总线路径 |
+  | 过载行为 | 按设计丢弃（回收+计数），发布者不阻塞、不崩溃 | Lost 计数可查 |
+- **重大缺陷发现**：硬件喂狗依赖**低优先级 Tmr Svc 软件定时器**——`eb_stress 200000 steady`
+  （~5s 连续事件风暴）饿死 Tmr Svc → **IWDG 复位**（sysmon RESET REASON=Independent watchdog reset）。
+- **修复（工业级原则）**：喂狗改为 **SysTick 中断钩子**（`configUSE_TICK_HOOK=1` +
+  `vApplicationTickHook` 每 1000 tick 喂一次），任何任务调度风暴都不影响喂狗。
+- **验证**：修复后 `eb_stress 500000 steady`（12.3s 连续风暴）**500000/500000 零丢失、零复位**；
+  v80/v81 OTA 全链路成功。
+- **架构结论**：事件总线"静态池+指针队列+最高优先级分发任务"设计合理，吞吐受
+  eventBusTask 消化速率约束（40k msg/s 量级），真实业务（<1k msg/s）余量 ≥40 倍；
+  池大小 32 为内存与并发上限的平衡点，按需可调。
