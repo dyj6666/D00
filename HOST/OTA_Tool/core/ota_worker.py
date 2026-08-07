@@ -101,9 +101,19 @@ class OtaWorker(QThread):
         self.log_signal.emit("BEGIN OK，下载区已就绪", "green")
         self.stage_signal.emit("DOWNLOADING")
 
-        # 3) DATA 分块（逐块确认）
+        # 3) 断点续传：查询 APP 已接收进度，从断点继续
+        start_off = 0
+        r = cmd(build_ota_status(), 0x0B)
+        if r is not None:
+            st, rx, total = r[5], struct.unpack("<I", r[6:10])[0], \
+                struct.unpack("<I", r[10:14])[0]
+            if st == 1 and 0 < rx < len(pkg):
+                start_off = rx
+                self.log_signal.emit(f"检测到断点，从 {rx} 字节续传", "yellow")
+
+        # 4) DATA 分块（逐块确认）
         chunk = OTA_CHUNK_MAX
-        for off in range(0, len(pkg), chunk):
+        for off in range(start_off, len(pkg), chunk):
             if self._stop_flag:
                 self.log_signal.emit("已停止", "orange")
                 self.finished_signal.emit(False)
@@ -125,14 +135,14 @@ class OtaWorker(QThread):
             if off % 2400 == 0:
                 self.log_signal.emit(f"  已下载 {rx}/{len(pkg)} 字节", "gray")
 
-        # 4) STATUS 确认
+        # 5) STATUS 确认
         r = cmd(build_ota_status(), 0x0B)
         if r:
             st, rx, total = r[5], struct.unpack("<I", r[6:10])[0], \
                 struct.unpack("<I", r[10:14])[0]
             self.log_signal.emit(f"STATUS: state={st} {rx}/{total}", "cyan")
 
-        # 5) END 触发复位切换
+        # 6) END 触发复位切换
         self.log_signal.emit("发送 END，触发 BOOT 切换...", "cyan")
         r = cmd(build_ota_end(), 0x0A)
         if r is None or r[5] != 0:

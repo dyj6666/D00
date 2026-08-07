@@ -134,7 +134,7 @@ class MainWindow(QMainWindow):
         row3.addWidget(QLabel("私钥(Hex):"))
         self.edit_key = QLineEdit()
         self.edit_key.setEchoMode(QLineEdit.Password)
-        self.edit_key.setPlaceholderText("64位十六进制私钥")
+        self.edit_key.setPlaceholderText("64位十六进制私钥（或环境变量 OTA_PRIVKEY）")
         self.chk_show_key = QCheckBox("显示私钥")
         self.chk_show_key.stateChanged.connect(self._toggle_key_visibility)
         row3.addWidget(self.edit_key)
@@ -232,8 +232,10 @@ class MainWindow(QMainWindow):
         self.edit_file.setText(self.config.get("last_file", ""))
         self.edit_version.setValue(int(self.config.get("last_version", 1)))
         self.edit_uid.setText(self.config.get("last_uid", ""))
-        self.edit_key.setText(self.config.get("last_key", ""))
-        # 私钥不自动填充
+        # 安全：私钥不落盘；若设置了环境变量 OTA_PRIVKEY 则自动注入
+        env_key = os.environ.get("OTA_PRIVKEY", "").strip()
+        if env_key:
+            self.edit_key.setText(env_key)
 
     def _save_config(self):
         self.config.set("last_port", self.combo_port.currentText())
@@ -241,7 +243,7 @@ class MainWindow(QMainWindow):
         self.config.set("last_file", self.edit_file.text())
         self.config.set("last_version", str(self.edit_version.value()))
         self.config.set("last_uid", self.edit_uid.text())
-        self.config.set("last_key", self.edit_key.text())
+        # 安全：私钥绝不写入配置文件
 
     # ---------- 串口控制 ----------
     def _toggle_serial(self):

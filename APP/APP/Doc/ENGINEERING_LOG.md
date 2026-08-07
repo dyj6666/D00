@@ -613,6 +613,37 @@ auto-stop）全部按设计工作。
 - **阶段流程条**：IDLE→DOWNLOADING→VERIFYING→COMMITTED→RUNNING 五段，
   已完成段绿色、当前段蓝色、未到段浅灰，直观展示升级推进。
 - **视觉**：主按钮"开始升级"绿色加粗强化、批量按钮紫色、输入框 hover 描边、
-  复选框圆角、日志自动滚动到底部。
+ 复选框圆角、日志自动滚动到底部。
 - **验证**：布局程序化检查（GroupBox/阶段条/控件全就位）、PyQt 实际渲染截图
-  （待命态 + 升级态）正常生成；ast 语法全绿。
+ （待命态 + 升级态）正常生成；ast 语法全绿。
+
+### 12.21 启动早期擦参数扇区 BSY 卡死（重大根因，多轮定位）
+- **现象**：HOSTLINK END 升级时 BOOT 稳定卡死/复位——`[PARAM] pre-erase` 后
+  Flash BSY 永久置位（IWDG 禁用时 >70s 不完成）。而 ota 命令触发（参数区 0xFF）、
+  CubeProgrammer 写入（系统 bootloader）、升级模式内擦除全部正常。
+- **定位过程**：排除内容/缓存/中断/槽位组合（多轮对照实验）后，锁定
+  **BKP 分支的 `boot_param_save`**（12.17 为归一化状态新增）：移除后 END 升级立即恢复；
+  CubeProgrammer 写 state=4 走 param 分支（无 BKP_WRITE）正常。机制疑与
+  启动早期（BKP_WRITE 后立即）Flash 操作时序相关，留作专项排查。
+- **修复**：BKP 分支不再提前保存参数；状态归一化移到升级模式内
+  （探测失败跳 APP 前执行 `boot_param_save`，此时延迟后擦除正常）。
+- **验证**：END 升级 v38/v43/v58 全绿；防重放拒绝 → 归一化（state=1）→ 跳 APP → 复位不卡。
+
+### 12.22 跨复位断点续传（下载一半 → 断电/复位 → 精确续传）
+- **设计**：DOWNLOAD 区尾部 16KB 会话槽区（512 槽 × 32B），每块精确记录 received
+  （恢复点 = 实际已写位置，避免重写已写区域）；BEGIN 检测同版本会话则续传不擦除；
+  HOST 升级工具 BEGIN 后查询 STATUS 从断点继续。
+- **三个隐蔽 Bug（逐一定位）**：
+  1. 槽粒度过粗（received/3840）→ 同一槽反复写被 AND 破坏（实测槽区 received 值混乱）；
+     改为每块写精确进度；
+  2. `ota_flash_write` 失败路径泄漏 `__disable_irq()` → SysMon 无法喂狗 → IWDG 复位；
+     所有失败路径补 `__enable_irq()`；
+  3. 恢复路径不擦除，Flash 控制器残留状态导致写 0xFF 区域编程 BSY 卡死（HAL_TIMEOUT）；
+     恢复时先清错误标志 + Unlock/Lock 重置控制器。
+- **验证**：下载 32160/64192 → reset → BEGIN 恢复 rx=32160 → 续传至完成 → END →
+  BOOT 校验应用 → 升级成功 + 启动确认闭环。
+
+### 12.23 可靠性增强与安全清理
+- BOOT IWDG 64 分频 ≈8.2s（原 4s），消除 320KB 擦除+复制超时风险；
+- 签名私钥移出 `config.json` 明文，GUI 改由环境变量 `OTA_PRIVKEY` 注入；
+- APP `ota_flash_write` 全程关中断（防多任务下 HAL 编程序列被中断破坏）。

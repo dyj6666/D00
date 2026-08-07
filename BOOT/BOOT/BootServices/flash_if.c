@@ -55,9 +55,15 @@ bool flash_erase(uint32_t start_addr, uint32_t end_addr) {
         FLASH->CR |= FLASH_CR_SER;
         FLASH->CR |= FLASH_CR_STRT;
 
-        /* 等待完成，并在 RAM 中喂狗 */
+        /* 等待完成，并在 RAM 中喂狗（带超时诊断，防 BSY 卡死） */
+        uint32_t guard = 0;
         while (FLASH->SR & FLASH_SR_BSY) {
             ram_feed_dog();   /* 此函数必须在 RAM 中 */
+            if (++guard > 30000000u) {   /* ~0.18s @168MHz */
+                printf("[ERASE] BSY stuck! SR=0x%08X CR=0x%08X\r\n",
+                       (unsigned)FLASH->SR, (unsigned)FLASH->CR);
+                break;
+            }
         }
 
         /* 关闭 SER 使能 */

@@ -9,7 +9,12 @@
 /* ------------------ OTA（与 BOOT/boot_config.h 分区严格一致） ---------- */
 #define OTA_DOWNLOAD_ADDR       0x080C0000UL   /* 下载暂存区 128KB */
 #define OTA_DOWNLOAD_SIZE       (128 * 1024)
-#define OTA_DOWNLOAD_SAFE       (OTA_DOWNLOAD_SIZE - 4 * 1024)  /* 安全上限 */
+#define OTA_DOWNLOAD_SAFE       (OTA_DOWNLOAD_SIZE - 16 * 1024) /* 安全上限（留 16KB 会话槽区） */
+
+/* OTA 断点续传会话槽区（DOWNLOAD 区尾部 512B，16 槽 × 32B） */
+#define OTA_SESSION_BASE        (OTA_DOWNLOAD_ADDR + OTA_DOWNLOAD_SIZE - 16 * 1024)
+#define OTA_SESSION_SLOTS       512
+#define OTA_SESSION_MAGIC       0x4F54414DUL   /* 'OTAM' */
 
 #define OTA_PARAM_ADDR          0x080E0000UL   /* 参数区 */
 #define OTA_PARAM_SLOT_OFFSET   1024

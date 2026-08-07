@@ -31,6 +31,7 @@ static void boot_watchdog_start(void)
     if (HAL_IWDG_Init(&hiwdg) != HAL_OK) {
         HAL_IWDG_Refresh(&hiwdg);
     }
+    IWDG->KR = 0xAAAA;   /* 无论如何先喂狗，保证诊断期间不超时 */
 }
 
 /* 日志串口（USART2, 115200-8-N-1）——printf 重定向见 usart.c */
@@ -254,7 +255,20 @@ static void boot_enter_upgrade_mode(void)
         if (boot_apply_download()) {
             return;
         }
-        printf("Pre-downloaded package invalid, falling back to YMODEM.\r\n");
+        /* 半成品/损坏/防重放拒绝：跳回 APP（支持断点续传或重新下载），
+         * 而不是回退 YMODEM 把设备卡在升级模式。
+         * 跳 APP 前归一化参数状态：此时已进入升级模式（延迟后擦除正常），
+         * 避免启动早期擦参数扇区（已知会导致 Flash BSY 卡死）。 */
+        printf("Pre-downloaded package invalid; booting APP for re-download...\r\n");
+        if (boot_check_app_valid(APP_BASE_ADDR)) {
+            boot_param_t np;
+            boot_param_load(&np);
+            np.boot_state = BOOT_STATE_NORMAL;
+            np.boot_count = 0;
+            boot_param_save(&np);
+            boot_jump_to_app(APP_BASE_ADDR);
+            return;
+        }
     }
 
     /* 下载区只擦除一次：避免重试循环中反复擦 flash，阻塞 SWD 调试连接 */
@@ -299,10 +313,6 @@ void BootApp_Run(void)
     if (BKP_READ(0) == BOOT_FLAG_UPGRADE) {
         printf("Upgrade flag set. Entering upgrade mode.\r\n");
         BKP_WRITE(0, BOOT_FLAG_NONE);
-        /* 先归一化参数状态：无论本次升级成败，复位后都不再误入升级模式 */
-        param.boot_state = BOOT_STATE_NORMAL;
-        param.boot_count = 0;
-        boot_param_save(&param);
         boot_enter_upgrade_mode();
         return;
     }

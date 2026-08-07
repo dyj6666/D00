@@ -5,10 +5,45 @@
  */
 #include "boot_param.h"
 #include "flash_if.h"
+#include "stm32f4xx_hal_flash_ex.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <stddef.h>
+
+/* 参数扇区擦除：HAL 实现（设置 VoltageRange），与 APP 侧一致。
+ * 注意：不在 BOOT 启动早期调用（早期擦除参数扇区实测会 Flash BSY 卡死），
+ * 统一在进入升级模式后（延迟执行）或 param 分支使用。 */
+static bool hal_erase_sector(uint32_t addr)
+{
+    uint32_t sector = FLASH_SECTOR_0;
+    if (addr >= 0x08004000u) sector = FLASH_SECTOR_1;
+    if (addr >= 0x08008000u) sector = FLASH_SECTOR_2;
+    if (addr >= 0x0800C000u) sector = FLASH_SECTOR_3;
+    if (addr >= 0x08010000u) sector = FLASH_SECTOR_4;
+    if (addr >= 0x08020000u) sector = FLASH_SECTOR_5;
+    if (addr >= 0x08040000u) sector = FLASH_SECTOR_6;
+    if (addr >= 0x08060000u) sector = FLASH_SECTOR_7;
+    if (addr >= 0x08080000u) sector = FLASH_SECTOR_8;
+    if (addr >= 0x080A0000u) sector = FLASH_SECTOR_9;
+    if (addr >= 0x080C0000u) sector = FLASH_SECTOR_10;
+    if (addr >= 0x080E0000u) sector = FLASH_SECTOR_11;
+
+    HAL_FLASH_Unlock();
+    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_PGSERR | FLASH_FLAG_PGPERR |
+                           FLASH_FLAG_PGAERR | FLASH_FLAG_WRPERR |
+                           FLASH_FLAG_OPERR);
+    FLASH_EraseInitTypeDef er = {
+        .TypeErase = FLASH_TYPEERASE_SECTORS,
+        .Sector = sector,
+        .NbSectors = 1,
+        .VoltageRange = FLASH_VOLTAGE_RANGE_3,
+    };
+    uint32_t err = 0;
+    HAL_StatusTypeDef st = HAL_FLASHEx_Erase(&er, &err);
+    HAL_FLASH_Lock();
+    return (st == HAL_OK);
+}
 
 uint32_t boot_param_crc(const boot_param_t *p)
 {
@@ -72,7 +107,7 @@ bool boot_param_save(const boot_param_t *in)
     p.crc32 = boot_param_crc(&p);
 
     /* 整扇区擦除（扇区11），再写两份 */
-    if (!flash_erase(PARAM_BASE_ADDR, PARAM_BASE_ADDR + PARAM_SIZE - 1)) {
+    if (!hal_erase_sector(PARAM_BASE_ADDR)) {
         printf("[PARAM] erase FAIL\r\n");
         return false;
     }

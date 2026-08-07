@@ -31,10 +31,74 @@ typedef struct {
 } ota_param_t;
 #pragma pack()
 
+/* ---------------- 断点续传会话（DOWNLOAD 区尾部槽区） ---------------- */
+#pragma pack(1)
+typedef struct {
+    uint32_t magic;       /* OTA_SESSION_MAGIC */
+    uint32_t version;
+    uint32_t total;
+    uint32_t received;
+    uint32_t crc32;       /* 覆盖 magic..received */
+} ota_session_t;          /* 20B，槽间距 32B */
+#pragma pack()
+
+static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len);
+
 /* ---------------- 内部状态 ---------------- */
 static volatile uint8_t  ota_state = OTA_ST_IDLE;
 static uint32_t ota_total = 0;        /* 固件总大小 */
 static uint32_t ota_received = 0;     /* 已收字节 */
+static uint32_t ota_begin_version = 0; /* 本次会话版本（会话槽持久化用） */
+
+static uint32_t ota_session_crc(const ota_session_t *s)
+{
+    const uint8_t *d = (const uint8_t *)s;
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < offsetof(ota_session_t, crc32); i++) {
+        crc ^= d[i];
+        for (int b = 0; b < 8; b++) {
+            crc = (crc & 1u) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
+        }
+    }
+    return crc;
+}
+
+static void ota_session_save(uint32_t slot, uint32_t version,
+                             uint32_t total, uint32_t received)
+{
+    if (slot >= OTA_SESSION_SLOTS) return;
+    ota_session_t s;
+    s.magic = OTA_SESSION_MAGIC;
+    s.version = version;
+    s.total = total;
+    s.received = received;
+    s.crc32 = ota_session_crc(&s);
+    bool ok = ota_flash_write(OTA_SESSION_BASE + slot * 32,
+                              (const uint8_t *)&s, sizeof(s));
+    if (!ok) {
+        LOG_Printf("OTA: sess save FAIL slot=%lu addr=0x%08X\r\n",
+                   (unsigned long)slot,
+                   (unsigned long)(OTA_SESSION_BASE + slot * 32));
+    }
+}
+
+/* 扫描槽区，返回最新（槽号最大）的有效会话 */
+static bool ota_session_latest(ota_session_t *out)
+{
+    ota_session_t best;
+    memset(&best, 0, sizeof(best));
+    for (uint32_t i = 0; i < OTA_SESSION_SLOTS; i++) {
+        ota_session_t s;
+        memcpy(&s, (const void *)(OTA_SESSION_BASE + i * 32), sizeof(s));
+        if (s.magic != OTA_SESSION_MAGIC) continue;
+        if (s.crc32 != ota_session_crc(&s)) continue;
+        if (s.received > s.total) continue;
+        best = s;
+    }
+    *out = best;
+    return (best.magic == OTA_SESSION_MAGIC && best.received > 0 &&
+            best.received < best.total);
+}
 
 /* shell "ota" 命令：写 BKP 升级标志并复位，触发 BOOT 升级模式 */
 static void handle_ota_start_msg(const message_t *msg)
@@ -89,6 +153,7 @@ static bool ota_flash_erase(uint32_t addr, uint32_t len)
 static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
 {
     if (len == 0) return true;
+    __disable_irq();   /* Flash 编程序列必须原子执行，防中断打断 */
     HAL_FLASH_Unlock();
 
     /* 前导非对齐字节 */
@@ -98,6 +163,7 @@ static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
         ((uint8_t *)&val)[addr & 0x03] = *data;
         if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, wa, val) != HAL_OK) {
             HAL_FLASH_Lock();
+            __enable_irq();
             return false;
         }
         addr++; data++; len--;
@@ -105,8 +171,10 @@ static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
     while (len >= 4) {
         uint32_t word;
         memcpy(&word, data, 4);
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, word) != HAL_OK) {
+        HAL_StatusTypeDef hs = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, word);
+        if (hs != HAL_OK) {
             HAL_FLASH_Lock();
+            __enable_irq();
             return false;
         }
         addr += 4; data += 4; len -= 4;
@@ -118,11 +186,13 @@ static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
         ((uint8_t *)&val)[addr & 0x03] = *data;
         if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, wa, val) != HAL_OK) {
             HAL_FLASH_Lock();
+            __enable_irq();
             return false;
         }
         addr++; data++; len--;
     }
     HAL_FLASH_Lock();
+    __enable_irq();
     return true;
 }
 
@@ -186,8 +256,30 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
                    (unsigned long)version, (unsigned long)cur);
         return 4;
     }
-    LOG_Printf("OTA: begin v%lu size=%lu, erasing download area...\r\n",
+    ota_begin_version = version;
+    LOG_Printf("OTA: begin v%lu size=%lu\r\n",
                (unsigned long)version, (unsigned long)size);
+
+    /* 断点续传：存在有效会话且版本/大小匹配 → 不擦下载区，从断点继续 */
+    ota_session_t sess;
+    bool sess_ok = ota_session_latest(&sess);
+    if (sess_ok &&
+        sess.version == version && sess.total == size) {
+        LOG_Printf("OTA: resume session from %lu/%lu\r\n",
+                   (unsigned long)sess.received, (unsigned long)sess.total);
+        /* 恢复路径不擦下载区：重置 Flash 控制器状态，避免残留导致编程 BSY 卡死 */
+        __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_PGSERR | FLASH_FLAG_PGPERR |
+                               FLASH_FLAG_PGAERR | FLASH_FLAG_WRPERR |
+                               FLASH_FLAG_OPERR);
+        HAL_FLASH_Unlock();
+        HAL_FLASH_Lock();
+        ota_total = size;
+        ota_received = sess.received;
+        ota_state = OTA_ST_RECEIVING;
+        return 0;
+    }
+
+    LOG_Printf("OTA: erasing download area...\r\n");
     if (!ota_flash_erase(OTA_DOWNLOAD_ADDR, 0)) {
         LOG_Printf("OTA: download erase FAILED\r\n");
         return 3;
@@ -195,6 +287,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     ota_total = size;
     ota_received = 0;
     ota_state = OTA_ST_RECEIVING;
+    ota_session_save(0, version, size, 0);
     LOG_Printf("OTA: download area ready, awaiting data\r\n");
     return 0;
 }
@@ -211,12 +304,20 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
         return 2;
     }
     if (!ota_flash_write(OTA_DOWNLOAD_ADDR + offset, data, len)) {
-        LOG_Printf("OTA: flash write FAILED at %lu\r\n",
-                   (unsigned long)offset);
+        uint32_t probe = *(volatile uint32_t *)(OTA_DOWNLOAD_ADDR + offset);
+        LOG_Printf("OTA: flash write FAILED at %lu probe=0x%08X SR=0x%08X\r\n",
+                   (unsigned long)offset, (unsigned)probe,
+                   (unsigned)(FLASH->SR));
         ota_state = OTA_ST_IDLE;
         return 3;
     }
     ota_received += len;
+    /* 每块持久化一次精确进度（512 槽足够覆盖 112KB 固件）：
+     * 恢复点 = 实际已写位置，避免重写已写区域导致 Flash 编程失败 */
+    uint32_t slot = ota_received / OTA_CHUNK_MAX;
+    if (slot < OTA_SESSION_SLOTS) {
+        ota_session_save(slot, ota_begin_version, ota_total, ota_received);
+    }
     return 0;
 }
 
@@ -234,6 +335,8 @@ uint8_t Ota_End(void)
     ota_state = OTA_ST_DONE;
     LOG_Printf("OTA: download complete (%lu B), rebooting to BOOT...\r\n",
                (unsigned long)ota_total);
+    ota_session_save(OTA_SESSION_SLOTS - 1, ota_begin_version,
+                     ota_total, ota_total);
 
     /* 触发 BOOT 升级模式（双保险）：
      * 1) 参数区写 UPGRADE 状态 —— BOOT 检测后进入升级模式接收固件

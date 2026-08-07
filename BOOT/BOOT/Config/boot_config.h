@@ -63,8 +63,8 @@ typedef struct {
 #pragma pack()
 
 /* =================== IWDG =================== */
-#define IWDG_PRESCALER          IWDG_PRESCALER_32   /* 1.024kHz */
-#define IWDG_RELOAD             4095                /* ~4s */
+#define IWDG_PRESCALER          IWDG_PRESCALER_64   /* 500Hz (LSI/64) */
+#define IWDG_RELOAD             4095                /* ~8.2s：覆盖 320KB 擦除+复制 */
 
 /* =================== 通信超时 =================== */
 #define UART_TIMEOUT            1000
