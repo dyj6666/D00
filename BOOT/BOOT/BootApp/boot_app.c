@@ -123,7 +123,9 @@ static void boot_rollback(void)
             param.boot_state = BOOT_STATE_RECOVERY;
             printf("Rollback limit reached, entering recovery mode.\r\n");
         }
-        boot_param_save(&param);
+        if (!boot_param_save(&param)) {
+            printf("[BOOT] param save FAILED\r\n");
+        }
         printf("Rollback OK, jumping to APP...\r\n");
         boot_jump_to_app(APP_BASE_ADDR);
         return;
@@ -147,13 +149,14 @@ static void boot_enter_upgrade_mode(void)
     sprintf(uid_str, "DEV_UID:%08X%08X%08X\r\n", uid[0], uid[1], uid[2]);
     HAL_UART_Transmit(&huart1, (uint8_t *)uid_str, strlen(uid_str), 1000);
 
-    while (1) {
-        printf("Erasing Download area...\r\n");
-        if (!flash_erase(DOWNLOAD_BASE_ADDR, DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE - 1)) {
-            printf("Download erase failed! System halted.\r\n");
-            while (1) { IWDG->KR = 0xAAAA; }
-        }
+    /* 下载区只擦除一次：避免重试循环中反复擦 flash，阻塞 SWD 调试连接 */
+    printf("Erasing Download area...\r\n");
+    if (!flash_erase(DOWNLOAD_BASE_ADDR, DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE - 1)) {
+        printf("Download erase failed! System halted.\r\n");
+        while (1) { IWDG->KR = 0xAAAA; }
+    }
 
+    while (1) {
         ymodem_ctx_t ctx;
         ymodem_status_t status = ymodem_receive(&ctx, DOWNLOAD_BASE_ADDR);
         if (status != YMODEM_OK) {
@@ -258,7 +261,17 @@ void BootApp_Run(void)
         return;
     }
 
-    /* 2) 待确认：新固件启动计数，超限回滚 */
+    /* 2) 参数区升级请求（APP 运行时 OTA 完成下载后写入） */
+    if (param.boot_state == BOOT_STATE_UPGRADE) {
+        printf("Param upgrade request. Entering upgrade mode.\r\n");
+        param.boot_state = BOOT_STATE_NORMAL;
+        param.boot_count = 0;
+        boot_param_save(&param);
+        boot_enter_upgrade_mode();
+        return;
+    }
+
+    /* 3) 待确认：新固件启动计数，超限回滚 */
     if (param.boot_state == BOOT_STATE_PENDING) {
         if (param.boot_count >= MAX_BOOT_TRIES) {
             printf("New APP failed %lu tries, rolling back...\r\n",
@@ -279,14 +292,14 @@ void BootApp_Run(void)
         return;
     }
 
-    /* 3) 恢复模式：回滚超限，等待上位机强制重刷 */
+    /* 4) 恢复模式：回滚超限，等待上位机强制重刷 */
     if (param.boot_state == BOOT_STATE_RECOVERY) {
         printf("Recovery mode (rollbacks exceeded). Waiting for firmware...\r\n");
         boot_enter_upgrade_mode();
         return;
     }
 
-    /* 4) 正常模式：RUN 有效则跳转；无效则 BACKUP 自动修复；再无则升级 */
+    /* 5) 正常模式：RUN 有效则跳转；无效则 BACKUP 自动修复；再无则升级 */
     if (boot_check_app_valid(APP_BASE_ADDR)) {
         printf("APP valid, jumping to APP...\r\n");
         boot_jump_to_app(APP_BASE_ADDR);

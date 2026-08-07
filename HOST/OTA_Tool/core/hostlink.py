@@ -15,7 +15,7 @@ CMD_OTA_DATA = 0x09
 CMD_OTA_END = 0x0A
 CMD_OTA_STATUS = 0x0B
 
-OTA_CHUNK_MAX = 120
+OTA_CHUNK_MAX = 240
 
 
 def crc16(data: bytes) -> int:

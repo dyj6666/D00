@@ -10,10 +10,12 @@
 
 uint32_t boot_param_crc(const boot_param_t *p)
 {
-    /* CRC-32 (IEEE)：轻量软件实现，避免引入大表 */
+    /* CRC-32 (IEEE)：轻量软件实现。必须按结构体实际大小计算，
+     * 此前误用 PARAM_COPY_SIZE(32) 导致读到结构体后 8 字节越界垃圾，
+     * 使参数区 CRC 校验永远失败、PENDING 状态无法持久化。 */
     const uint8_t *data = (const uint8_t *)p;
     uint32_t crc = 0xFFFFFFFFu;
-    for (uint32_t i = 0; i < PARAM_COPY_SIZE; i++) {
+    for (uint32_t i = 0; i < sizeof(boot_param_t); i++) {
         crc ^= data[i];
         for (int b = 0; b < 8; b++) {
             uint32_t m = (crc & 1u) ? 0xEDB88320u : 0u;
@@ -29,7 +31,8 @@ static bool param_valid(const boot_param_t *p)
     if (p->crc32 != boot_param_crc(p)) return false;
     if (p->boot_state != BOOT_STATE_NORMAL &&
         p->boot_state != BOOT_STATE_PENDING &&
-        p->boot_state != BOOT_STATE_RECOVERY) return false;
+        p->boot_state != BOOT_STATE_RECOVERY &&
+        p->boot_state != BOOT_STATE_UPGRADE) return false;
     return true;
 }
 
@@ -68,14 +71,19 @@ bool boot_param_save(const boot_param_t *in)
 
     /* 整扇区擦除（扇区11），再写两份 */
     if (!flash_erase(PARAM_BASE_ADDR, PARAM_BASE_ADDR + PARAM_SIZE - 1)) {
+        printf("[PARAM] erase FAIL\r\n");
         return false;
     }
     if (!flash_write(PARAM_BASE_ADDR, (const uint8_t *)&p, sizeof(p))) {
+        printf("[PARAM] write slot0 FAIL\r\n");
         return false;
     }
     if (!flash_write(PARAM_BASE_ADDR + PARAM_SLOT_OFFSET,
                      (const uint8_t *)&p, sizeof(p))) {
+        printf("[PARAM] write slot1 FAIL\r\n");
         return false;
     }
+    printf("[PARAM] save OK (state=%lu count=%lu)\r\n",
+           (unsigned long)p.boot_state, (unsigned long)p.boot_count);
     return true;
 }

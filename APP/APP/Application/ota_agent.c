@@ -14,6 +14,7 @@
 #include "bsp.h"
 #include "event_bus.h"
 #include "logger.h"
+#include "msg_types.h"
 #include "stm32f4xx_hal.h"
 
 /* ---------------- 参数区（与 BOOT/boot_param.c 结构一致） ---------------- */
@@ -32,6 +33,18 @@ typedef struct {
 static volatile uint8_t  ota_state = OTA_ST_IDLE;
 static uint32_t ota_total = 0;        /* 固件总大小 */
 static uint32_t ota_received = 0;     /* 已收字节 */
+
+/* shell "ota" 命令：写 BKP 升级标志并复位，触发 BOOT 升级模式 */
+static void handle_ota_start_msg(const message_t *msg)
+{
+    if (msg == NULL || msg->hdr.type != MSG_CMD_OTA_START) {
+        return;
+    }
+    LOG_Printf("OTA: entering BOOT upgrade mode...\r\n");
+    BSP_RTC_WriteBackupReg(0, BOOT_FLAG_UPGRADE);
+    BSP_DelayMs(100);
+    BSP_SystemReset();
+}
 
 /* ---------------- Flash 操作（HAL） ---------------- */
 static bool ota_flash_erase(uint32_t addr, uint32_t len)
@@ -210,8 +223,8 @@ uint8_t Ota_End(void)
                (unsigned long)ota_total);
 
     /* 触发 BOOT 升级模式（双保险）：
-     * 1) 参数区置 PENDING + boot_count=MAX —— BOOT 的 PENDING 超限路径
-     *    会经回滚（BACKUP 无效）进入升级模式接收固件；
+     * 1) 参数区写 UPGRADE 状态 —— BOOT 检测后进入升级模式接收固件
+     *   （独立状态，不会误判为回滚）；
      * 2) BKP 标志（HAL 索引已修正）作为直接触发。 */
     ota_param_t param;
     memcpy(&param, (const void *)OTA_PARAM_ADDR, sizeof(param));
@@ -219,8 +232,8 @@ uint8_t Ota_End(void)
         memset(&param, 0, sizeof(param));
         param.magic = OTA_PARAM_MAGIC;
     }
-    param.boot_state = OTA_STATE_PENDING;
-    param.boot_count = 3;                 /* 与 BOOT MAX_BOOT_TRIES 一致 */
+    param.boot_state = OTA_STATE_UPGRADE;
+    param.boot_count = 0;
     param.last_error = 0;
     param.crc32 = ota_param_crc(&param);
     ota_flash_erase(OTA_PARAM_ADDR, 0);
@@ -244,6 +257,7 @@ uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total)
 
 void OtaAgent_Init(void)
 {
+    EventBus_Subscribe(MSG_CMD_OTA_START, handle_ota_start_msg);
     ota_confirm_startup();
     LOG_Printf("OTA Agent ready (download@0x%08X).\r\n",
                (unsigned)OTA_DOWNLOAD_ADDR);

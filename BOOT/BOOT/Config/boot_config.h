@@ -40,6 +40,7 @@
 #define BOOT_STATE_NORMAL       0x00000001UL   /* 正常运行 */
 #define BOOT_STATE_PENDING      0x00000002UL   /* 新固件待确认（启动计数中） */
 #define BOOT_STATE_RECOVERY     0x00000003UL   /* 回滚超限，等待上位机 */
+#define BOOT_STATE_UPGRADE      0x00000004UL   /* APP 请求升级：进入升级模式 */
 
 #define MAX_BOOT_TRIES          3              /* 新固件最多启动尝试次数 */
 #define MAX_ROLLBACK_COUNT      5              /* 连续回滚超过该次数进入 RECOVERY */

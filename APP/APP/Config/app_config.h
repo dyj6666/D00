@@ -18,9 +18,10 @@
 #define OTA_STATE_NORMAL        0x00000001UL
 #define OTA_STATE_PENDING       0x00000002UL
 #define OTA_STATE_RECOVERY      0x00000003UL
+#define OTA_STATE_UPGRADE       0x00000004UL
 
 /* OTA 协议：单包最大数据块 */
-#define OTA_CHUNK_MAX           120
+#define OTA_CHUNK_MAX           240
 
 // 日志系统
 #define LOG_TX_STREAM_SIZE      2048

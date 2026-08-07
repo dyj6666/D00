@@ -10,8 +10,8 @@ import struct
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from .hostlink import (FrameParser, build_ota_begin, build_ota_data,
-                       build_ota_end, build_ota_status)
+from .hostlink import (FrameParser, OTA_CHUNK_MAX, build_ota_begin,
+                       build_ota_data, build_ota_end, build_ota_status)
 from .ymodem_sender import YmodemSender, encrypt_and_sign, derive_aes_key_from_uid
 
 
@@ -89,8 +89,8 @@ class OtaWorker(QThread):
             return
         self.log_signal.emit("BEGIN OK，下载区已就绪", "green")
 
-        # 3) DATA 分块（120B/块，逐块确认）
-        chunk = 120
+        # 3) DATA 分块（逐块确认）
+        chunk = OTA_CHUNK_MAX
         for off in range(0, len(pkg), chunk):
             if self._stop_flag:
                 self.log_signal.emit("已停止", "orange")
