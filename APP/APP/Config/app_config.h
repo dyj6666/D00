@@ -55,8 +55,9 @@
 
 /* ------------------ 上位机通信 (DataLink) ------------------ */
 #define HOSTLINK_RX_DMA_BUF_SIZE    256     // DMA 接收缓冲
-#define HOSTLINK_TX_STREAM_SIZE     512     // 发送流缓冲
-#define HOSTLINK_TX_DMA_CHUNK       128     // 每次 DMA 发送块大小
+#define HOSTLINK_TX_QUEUE_LEN       8       // TX 整帧队列深度（保帧边界，防大块截断）
+#define HOSTLINK_TX_FRAME_MAX       256     // 单帧最大字节（含 CRC）
+#define HOSTLINK_TX_DMA_CHUNK       256     // DMA 发送缓冲大小
 #define HOSTLINK_CMD_QUEUE_LEN      16      // 命令队列深度（突发帧不丢）
 #define HOSTLINK_MAX_VARS           64      // 最大注册变量数
 #define HOSTLINK_MAX_SUBSCRIBE      16      // 最大订阅变量数

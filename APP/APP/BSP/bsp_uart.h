@@ -34,10 +34,17 @@ void BSP_UART_RxStop(bsp_uart_id_t id);
 /* DMA 发送。返回 0 成功；-1 表示上次发送未完成。 */
 int BSP_UART_TransmitDMA(bsp_uart_id_t id, const uint8_t *data, uint16_t len);
 
+/* 同步中止当前 TX 并复位忙标志（TX 状态自愈用）。 */
+int BSP_UART_AbortTransmit(bsp_uart_id_t id);
+
 /* 供串口中断处理调用（已包含 HAL_UART_IRQHandler + IDLE 处理） */
 void BSP_UART_IRQHandler(bsp_uart_id_t id);
 
 /* 仅处理 IDLE 事件：用于 CubeMX 生成代码已调用 HAL_UART_IRQHandler 的场景 */
 void BSP_UART_IdleISR(bsp_uart_id_t id);
+
+/* 弱钩子：BSP 通道外的 UART（如信号发生器 USART6）TX 完成通知。
+ * 默认空实现，上层模块可重写以扩展非 BSP 通道。 */
+void BSP_UART_OnTxComplete(void);
 
 #endif

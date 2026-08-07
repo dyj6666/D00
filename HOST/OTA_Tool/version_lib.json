@@ -1,13 +1,20 @@
-{
-  "chip_id": "0x413",
-  "next_build": 56,
-  "entries": [
-    {
-      "version": 69,
-      "build": 53,
-      "file": "D:\\GIT-SPACE\\D00\\APP\\APP\\MDK-ARM\\Output\\APP.bin",
-      "note": "v69 production",
-      "date": "2026-08-08"
-    }
-  ]
+﻿{
+    "chip_id":  "0x413",
+    "next_build":  62,
+    "entries":  [
+                    {
+                        "version":  69,
+                        "build":  53,
+                        "file":  "D:\\GIT-SPACE\\D00\\APP\\APP\\MDK-ARM\\Output\\APP.bin",
+                        "note":  "v69 production",
+                        "date":  "2026-08-08"
+                    },
+                    {
+                        "version":  78,
+                        "build":  61,
+                        "file":  "D:\\\\GIT-SPACE\\\\D00\\\\APP\\\\APP\\\\MDK-ARM\\\\Output\\\\APP.bin",
+                        "note":  "v78 CPU极致优化",
+                        "date":  "2026-08-08"
+                    }
+                ]
 }

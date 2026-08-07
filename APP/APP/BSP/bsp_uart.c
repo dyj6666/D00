@@ -7,6 +7,7 @@ typedef struct {
     UART_HandleTypeDef *huart;
     uint8_t  rx_started;
     uint8_t  tx_busy;
+    uint8_t  rx_deferred;
     uint8_t *rx_buf;
     uint16_t rx_len;
     bsp_uart_rx_cb_t rx_cb;
@@ -33,6 +34,7 @@ void BSP_UART_Init(bsp_uart_id_t id)
     if (id >= BSP_UART_COUNT || g_uart[id].huart == NULL) return;
     g_uart[id].rx_started = 0;
     g_uart[id].tx_busy = 0;
+    g_uart[id].rx_deferred = 0;
     g_uart[id].rx_buf = NULL;
     g_uart[id].rx_len = 0;
 }
@@ -83,18 +85,20 @@ int BSP_UART_TransmitDMA(bsp_uart_id_t id, const uint8_t *data, uint16_t len)
     return 0;
 }
 
-void BSP_UART_IdleISR(bsp_uart_id_t id)
+/* 中止当前 TX（同步），并复位忙标志。用于 TX 状态自愈。 */
+int BSP_UART_AbortTransmit(bsp_uart_id_t id)
 {
-    bsp_uart_chan_t *ch;
+    if (id >= BSP_UART_COUNT) return -1;
+    g_uart[id].tx_busy = 0;
+    if (HAL_UART_AbortTransmit(g_uart[id].huart) != HAL_OK) return -1;
+    return 0;
+}
+
+static void bsp_uart_process_rx(bsp_uart_id_t id)
+{
+    bsp_uart_chan_t *ch = &g_uart[id];
     uint16_t count;
 
-    if (id >= BSP_UART_COUNT) return;
-    ch = &g_uart[id];
-
-    if (!__HAL_UART_GET_FLAG(ch->huart, UART_FLAG_IDLE)) return;
-    __HAL_UART_CLEAR_IDLEFLAG(ch->huart);
-
-    /* 计算本次空闲前收到的字节数，通知上层后重启 DMA */
     HAL_UART_DMAStop(ch->huart);
     count = (uint16_t)(ch->rx_len - __HAL_DMA_GET_COUNTER(ch->huart->hdmarx));
     if (ch->rx_cb && count > 0) {
@@ -105,6 +109,24 @@ void BSP_UART_IdleISR(bsp_uart_id_t id)
     }
 }
 
+void BSP_UART_IdleISR(bsp_uart_id_t id)
+{
+    bsp_uart_chan_t *ch;
+
+    if (id >= BSP_UART_COUNT) return;
+    ch = &g_uart[id];
+    if (!__HAL_UART_GET_FLAG(ch->huart, UART_FLAG_IDLE)) return;
+    __HAL_UART_CLEAR_IDLEFLAG(ch->huart);
+
+    /* TX 进行中：推迟 RX 处理到 TX 完成回调，避免 HAL_UART_DMAStop
+     * 误中止进行中的 TX DMA（中止后无完成回调，TXTask 将永久挂起）。 */
+    if (ch->tx_busy) {
+        ch->rx_deferred = 1;
+        return;
+    }
+    bsp_uart_process_rx(id);
+}
+
 void BSP_UART_IRQHandler(bsp_uart_id_t id)
 {
     if (id >= BSP_UART_COUNT) return;
@@ -112,13 +134,41 @@ void BSP_UART_IRQHandler(bsp_uart_id_t id)
     BSP_UART_IdleISR(id);
 }
 
+/* 默认空实现：上层模块（如信号发生器）可重写以扩展非 BSP 通道 */
+__weak void BSP_UART_OnTxComplete(void)
+{
+}
+
 /* 全局 TX 完成回调：路由到对应通道注册的回调 */
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
     bsp_uart_id_t id = bsp_uart_id_of(huart);
-    if (id == BSP_UART_COUNT) return;
+    if (id == BSP_UART_COUNT) {
+        BSP_UART_OnTxComplete();
+        return;
+    }
     g_uart[id].tx_busy = 0;
+    /* 先处理 TX 期间被推迟的 RX 空闲事件（此时 TX 已结束，DMAStop 安全） */
+    if (g_uart[id].rx_deferred) {
+        g_uart[id].rx_deferred = 0;
+        bsp_uart_process_rx(id);
+    }
     if (g_uart[id].tx_cb) {
         g_uart[id].tx_cb(id, g_uart[id].tx_ctx);
+    }
+}
+
+/* 全局 UART 错误回调：确保 TX 忙标志释放并唤醒等待任务，防止永久挂起 */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    bsp_uart_id_t id = bsp_uart_id_of(huart);
+    if (id == BSP_UART_COUNT) return;
+    /* 仅当 TX 传输因错误被终止（HAL 已将 gState 复位为 READY）时才唤醒发送任务；
+     * RX 错误（过载/帧错误）不影响 TX，不得误清忙标志导致并发 DMA。 */
+    if (g_uart[id].tx_busy && huart->gState != HAL_UART_STATE_BUSY_TX) {
+        g_uart[id].tx_busy = 0;
+        if (g_uart[id].tx_cb) {
+            g_uart[id].tx_cb(id, g_uart[id].tx_ctx);
+        }
     }
 }

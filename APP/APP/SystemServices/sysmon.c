@@ -40,6 +40,8 @@ static void print_data_link_stats(void)
 {
     LOG_Printf("=== DATA LINK ===\r\n");
     LOG_Printf("  Cmd queue lost: %lu\r\n", DataLink_GetCmdLostCount());
+    LOG_Printf("  TX frames lost: %lu\r\n", DataLink_GetTxLostCount());
+    LOG_Printf("  TX errors:      %lu\r\n", DataLink_GetTxErrorCount());
 }
 
 static void print_task_list(void)

@@ -6,7 +6,6 @@
 #include "FreeRTOS.h"
 #include "protocol.h"
 #include "queue.h"
-#include "stream_buffer.h"
 #include "task.h"
 #include "var_manager.h"
 #include "la_sample.h"
@@ -19,7 +18,11 @@ static uint8_t rx_dma_buf[HOSTLINK_RX_DMA_BUF_SIZE] __attribute__((aligned(4)));
 static uint8_t tx_dma_chunk[HOSTLINK_TX_DMA_CHUNK] __attribute__((aligned(4)));
 
 /* ---------- 发送通路 ---------- */
-static StreamBufferHandle_t tx_stream;
+typedef struct {
+    uint16_t len;
+    uint8_t  data[HOSTLINK_TX_FRAME_MAX];
+} tx_frame_t;
+static QueueHandle_t tx_queue;              /* 整帧队列（保证帧边界，防截断） */
 static TaskHandle_t tx_task_handle = NULL;
 static TaskHandle_t cmd_handle = NULL;
 
@@ -30,6 +33,8 @@ typedef struct {
 } cmd_packet_t;
 static QueueHandle_t cmd_queue;
 static volatile uint32_t g_cmd_lost = 0;    /* 命令队列溢出计数 */
+static volatile uint32_t g_tx_lost = 0;     /* TX 流缓冲溢出计数 */
+static volatile uint32_t g_tx_err = 0;      /* TX DMA 异常/超时自愈计数 */
 
 /* ---------- 内部函数声明 ---------- */
 static void TXTask(void *arg);
@@ -54,8 +59,8 @@ void DataLink_Init(void)
         .priority = osPriorityLow,
     };
 
-    tx_stream = xStreamBufferCreate(HOSTLINK_TX_STREAM_SIZE, 1);
-    configASSERT(tx_stream);
+    tx_queue = xQueueCreate(HOSTLINK_TX_QUEUE_LEN, sizeof(tx_frame_t));
+    configASSERT(tx_queue);
     cmd_queue = xQueueCreate(HOSTLINK_CMD_QUEUE_LEN, sizeof(cmd_packet_t));
     configASSERT(cmd_queue);
 
@@ -78,13 +83,21 @@ void DataLink_Init(void)
 /* ================== 发送任务 ================== */
 static void TXTask(void *arg)
 {
-    size_t len;
+    tx_frame_t frame;
     (void)arg;
     for (;;) {
-        len = xStreamBufferReceive(tx_stream, tx_dma_chunk, sizeof(tx_dma_chunk), portMAX_DELAY);
-        if (len > 0) {
-            if (BSP_UART_TransmitDMA(BSP_UART_HOST, tx_dma_chunk, len) == 0) {
-                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);    /* 等待 DMA 完成 */
+        if (xQueueReceive(tx_queue, &frame, portMAX_DELAY) == pdTRUE) {
+            memcpy(tx_dma_chunk, frame.data, frame.len);
+            /* 等待 DMA 完成（带超时自愈：任何丢通知/中止/错误都不再永久挂起） */
+            if (BSP_UART_TransmitDMA(BSP_UART_HOST, tx_dma_chunk, frame.len) != 0) {
+                BSP_UART_AbortTransmit(BSP_UART_HOST);
+                g_tx_err++;
+                continue;
+            }
+            if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) == 0) {
+                BSP_UART_AbortTransmit(BSP_UART_HOST);
+                ulTaskNotifyTake(pdTRUE, 0);    /* 清除竞态下残留的通知 */
+                g_tx_err++;
             }
         }
     }
@@ -162,16 +175,28 @@ uint32_t DataLink_GetCmdLostCount(void)
 int DataLink_SendPacket(const uint8_t *data, uint16_t len)
 {
     if (data == NULL || len < PROTOCOL_HEADER_LEN) return -1;
-    if ((uint32_t)len + PROTOCOL_CRC_LEN > HOSTLINK_TX_DMA_CHUNK) return -1;
+    if ((uint32_t)len + PROTOCOL_CRC_LEN > HOSTLINK_TX_FRAME_MAX) return -1;
 
-    /* 局部缓冲，避免与 TXTask 对 tx_dma_chunk 的并发读写竞争 */
-    uint8_t pkt[HOSTLINK_TX_DMA_CHUNK + PROTOCOL_CRC_LEN];
-    memcpy(pkt, data, len);
-    uint16_t crc = CRC16_Calculate(pkt, len);
-    pkt[len] = (uint8_t)(crc & 0xFF);
-    pkt[len + 1] = (uint8_t)((crc >> 8) & 0xFF);
-    xStreamBufferSend(tx_stream, pkt, len + PROTOCOL_CRC_LEN, 0);
+    tx_frame_t frame;
+    memcpy(frame.data, data, len);
+    uint16_t crc = CRC16_Calculate(frame.data, len);
+    frame.data[len] = (uint8_t)(crc & 0xFF);
+    frame.data[len + 1] = (uint8_t)((crc >> 8) & 0xFF);
+    frame.len = len + PROTOCOL_CRC_LEN;
+    if (xQueueSend(tx_queue, &frame, 0) != pdTRUE) {
+        g_tx_lost++;
+    }
     return 0;
+}
+
+uint32_t DataLink_GetTxLostCount(void)
+{
+    return g_tx_lost;
+}
+
+uint32_t DataLink_GetTxErrorCount(void)
+{
+    return g_tx_err;
 }
 
 /* 组装完整帧（含 CRC）并发送。 */
@@ -182,6 +207,29 @@ int DataLink_SendFrame(uint8_t cmd, const uint8_t *payload, uint16_t payload_len
     int err = Protocol_BuildFrame(frame, sizeof(frame), cmd, payload, payload_len, &frame_len);
     if (err != PROTO_ERR_NONE) return -1;
     return DataLink_SendPacket(frame, frame_len - PROTOCOL_CRC_LEN);
+}
+
+/* 组装完整帧并以背压方式发送（队列满时阻塞等待，最多 timeout_ms）。
+ * 用于大块可靠导出（如 LA_DUMP）：与发送速率自匹配，绝不静默丢帧。 */
+int DataLink_SendFrameWait(uint8_t cmd, const uint8_t *payload,
+                           uint16_t payload_len, uint32_t timeout_ms)
+{
+    uint8_t frame[HOSTLINK_TX_DMA_CHUNK];
+    uint16_t frame_len = 0;
+    tx_frame_t tf;
+
+    if (Protocol_BuildFrame(frame, sizeof(frame), cmd, payload,
+                            payload_len, &frame_len) != PROTO_ERR_NONE) {
+        return -1;
+    }
+    if (frame_len > HOSTLINK_TX_FRAME_MAX) return -1;
+
+    memcpy(tf.data, frame, frame_len);
+    tf.len = frame_len;
+    if (xQueueSend(tx_queue, &tf, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return -1;
+    }
+    return 0;
 }
 
 /* ================== 命令处理 ================== */
@@ -295,15 +343,16 @@ static void handle_command(const uint8_t *data, uint16_t len)
             }
             if (count > buf_size - offset) count = buf_size - offset;
 
-            /* 每帧最多 28 个样本（payload 121 字节内），帧间限速防 TX 流缓冲溢出 */
-            uint8_t samples[28 * 4];
+            /* 每帧最多 60 个样本；背压式发送（队列满则阻塞），与 921600
+             * 波特率排空速度自匹配，不再固定延时、绝不静默丢帧 */
+            uint8_t samples[60 * 4];
             uint32_t sent = 0;
             while (sent < count) {
                 uint32_t n = count - sent;
-                if (n > 28) n = 28;
+                if (n > 60) n = 60;
                 LA_Sample_ReadDMABuffer((uint32_t *)samples, offset + sent, n);
 
-                uint8_t payload[4 + 2 + 28 * 4];
+                uint8_t payload[4 + 2 + 60 * 4];
                 payload[0] = offset & 0xFF;
                 payload[1] = (offset >> 8) & 0xFF;
                 payload[2] = (offset >> 16) & 0xFF;
@@ -311,9 +360,13 @@ static void handle_command(const uint8_t *data, uint16_t len)
                 payload[4] = (uint8_t)(n & 0xFF);
                 payload[5] = (uint8_t)((n >> 8) & 0xFF);
                 memcpy(&payload[6], samples, n * 4);
-                DataLink_SendFrame(CMD_LA_DUMP, payload, 6 + n * 4);
+                if (DataLink_SendFrameWait(CMD_LA_DUMP, payload,
+                                           6 + n * 4, 500) != 0) {
+                    /* TX 通道异常（队列满 500ms 仍无法排空）：中止导出 */
+                    send_error_response(f.cmd, PROTO_ERR_BUF_TOO_SMALL);
+                    break;
+                }
                 sent += n;
-                vTaskDelay(pdMS_TO_TICKS(2));   /* 匹配 921600 波特率排空速度 */
             }
             break;
         }

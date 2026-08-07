@@ -56,28 +56,28 @@
 osThreadId_t startupTaskHandle;
 const osThreadAttr_t startupTask_attributes = {
   .name = "startupTask",
-  .stack_size = 512 * 4,
+  .stack_size = 1024,
   .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for shellTask */
 osThreadId_t shellTaskHandle;
 const osThreadAttr_t shellTask_attributes = {
   .name = "shellTask",
-  .stack_size = 1024 * 4,
+  .stack_size = 1536,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for loggerTXTask */
 osThreadId_t loggerTXTaskHandle;
 const osThreadAttr_t loggerTXTask_attributes = {
   .name = "loggerTXTask",
-  .stack_size = 512 * 4,
+  .stack_size = 512,
   .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for eventBusTask */
 osThreadId_t eventBusTaskHandle;
 const osThreadAttr_t eventBusTask_attributes = {
   .name = "eventBusTask",
-  .stack_size = 1024 * 4,
+  .stack_size = 1536,
   .priority = (osPriority_t) osPriorityRealtime,
 };
 
@@ -122,9 +122,15 @@ unsigned long getRunTimeCounterValue(void)
 /* USER CODE BEGIN 4 */
 void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)
 {
-   /* Run time stack overflow checking is performed if
-   configCHECK_FOR_STACK_OVERFLOW is defined to 1 or 2. This hook function is
-   called if a stack overflow is detected. */
+   /* 栈溢出检测：轮询 USART2 打印任务名后停机（不依赖可能损坏的 RTOS/printf） */
+   extern UART_HandleTypeDef huart2;
+   const char *p = pcTaskName ? (const char *)pcTaskName : "?";
+   (void)xTask;
+   while (*p) {
+       while (!(huart2.Instance->SR & UART_FLAG_TXE)) {}
+       huart2.Instance->DR = (uint8_t)*p++;
+   }
+   for (;;) {}
 }
 /* USER CODE END 4 */
 

@@ -30,6 +30,7 @@
 #include "stm32f4xx_hal.h"
 #include "core_cm4.h"
 #include "la_sample.h"
+#include "signal_gen.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -460,6 +461,24 @@ void DMA2_Stream7_IRQHandler(void)
   /* USER CODE BEGIN DMA2_Stream7_IRQn 1 */
 
   /* USER CODE END DMA2_Stream7_IRQn 1 */
+}
+
+/**
+  * @brief This function handles DMA1 stream4 global interrupt.
+  *        (SPI2 TX DMA, signal generator)
+  */
+void DMA1_Stream4_IRQHandler(void)
+{
+  SG_Spi_DMA_IRQHandler();
+}
+
+/**
+  * @brief This function handles DMA2 stream6 global interrupt.
+  *        (USART6 TX DMA, signal generator)
+  */
+void DMA2_Stream6_IRQHandler(void)
+{
+  SG_Uart_DMA_IRQHandler();
 }
 
 /* USER CODE BEGIN 1 */

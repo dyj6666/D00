@@ -714,3 +714,50 @@ auto-stop）全部按设计工作。
   安全模型 / 测试验证记录 / 已知边界 / 复盘索引；
 - 本阶段 OTA 体系定稿：A/B+确认、回滚、运行时 OTA、断点续传、断电全生命周期、
   安全五重防护（签名/加密/芯片/防重放/防回滚）、密钥轮换、状态帧可视化全部闭环。
+
+### 12.33 LA_DUMP 大块传输卡死（根因 + 三合一根治）
+- **现象**：HOSTLINK `CMD_LA_DUMP` count≤512 正常（87KB/s），count≥4096 只收 ~42B 后卡死。
+- **根因（两层）**：
+  1. **生产者快于消费者**：每帧固定延时 2ms，但 921600 波特率下 253B 帧排空需 ~2.75ms，
+     生产者比消费者快约 37%；8 深队列持续导出必然灌满，超出帧静默丢弃，上位机永远等不齐样本数。
+  2. **RX IDLE 误杀 TX**：`HAL_UART_DMAStop`（空闲断帧用）会连同进行中的 TX DMA 一起中止，
+     且中止后不触发完成回调 → TX 任务永久挂起。
+- **修复（v76）**：
+  - `data_link.c`：LA_DUMP 改**背压式发送**（`DataLink_SendFrameWait` 队列满阻塞，与线速自匹配），
+    去掉固定延时，绝不静默丢帧；新增 TX 丢帧/错误计数，sysmon 可查。
+  - `bsp_uart.c`：**TX/RX 隔离**——IDLE 断帧遇 TX 进行中则推迟到 TX 完成回调处理；
+    新增 `HAL_UART_ErrorCallback`（仅 TX 错误才唤醒，防 RX 错误误清忙标志导致并发 DMA）；
+    新增 `BSP_UART_AbortTransmit` 自愈接口。
+  - `TXTask`：DMA 完成等待加 2000ms 超时 + 强制中止自愈，任何丢通知/中止/错误不再永久挂起。
+- **验证**：LA_DUMP 512/4096/8192/32768 全量通过（547 帧，86.4KB/s），
+  sysmon `TX frames lost: 0` / `TX errors: 0`。
+
+### 12.34 OTA 实机升级验证（LEGACY 密钥 + 防重放 build_no + CLI 工具）
+- **背景**：BOOT0 拨码太麻烦，改走**运行时 HOSTLINK OTA**（无需跳线/DAP）。
+- **密钥**：新生产私钥不落盘；开发验证用 git 历史中的 LEGACY 私钥
+  （与 BOOT 内嵌 `ECDSA_PUB_KEY_LEGACY` 完全匹配，双公钥兼容）。
+- **防重放教训**：首次 build 56/57 被 BOOT 拒绝——`[SEC] Replay denied! build=57 last=58`，
+  板上参数区 `last_build_no=58`（此前 OTA 测试已占用更高 build），version_lib 记录已失真；
+  必须**严格递增**（59/60/61），并抓 COM9 日志确认真实原因。
+- **新增工具**：`Script/ota_hostlink_cli.py`（无 GUI 依赖的 HOSTLINK OTA CLI）、
+  `Script/ota_capture_boot_log.py`（COM9 日志抓取 + 复现触发）。
+- **验证**：v76(build59)/v77(build60)/v78(build61) 三次 OTA 全链路成功，
+  BOOT 状态帧 VERIFY→BACKUP→ERASE→WRITE→COMMIT→DONE 全部 err=0。
+
+### 12.35 CPU 极限负载测试与信号发生器 DMA 化（极致优化）
+- **压力场景**：LA 6MHz DMA 采样 + USART6 921600 + SPI2 164kHz + HOSTLINK 全量导出同时运行。
+- **优化前**：SG_SPI 阻塞式 `HAL_SPI_Transmit`（390µs/帧）占 39% CPU，SG_UART 阻塞占 18%，
+  峰值 ~47%。
+- **优化（v77/v78）**：信号发生器 SPI2（DMA1_Stream4_CH0）与 USART6（DMA2_Stream6_CH5）
+  全部改 **DMA 传输 + 任务睡眠等待完成**；BSP 提供 `BSP_UART_OnTxComplete` 弱钩子
+  扩展非 BSP 通道（无参解耦，避免 HAL 头依赖）。
+- **最终数据**：
+  | 场景 | SG 任务 CPU | 峰值 CPU | 传输速率 | 丢帧/错误 |
+  | --- | --- | --- | --- | --- |
+  | LA6M+SPI2+HOSTLINK | 0% | ~9%（DL_CMD 帧解析） | 85.3KB/s | 0/0 |
+  | LA6M+USART6+HOSTLINK | 0% | ~9% | 85.4KB/s | 0/0 |
+  | 空闲基线 | - | 1% | - | - |
+- **内存**：堆富余 10.2KB（满载）/ 10.8KB（空闲）；栈高水位全部充裕
+  （DL_CMD 137/2048、DL_TX 151/1024、SG 91/512、eventBus 262/1536）。
+- **结论**：事件驱动 + DMA 卸载架构合理，真实业务满载 CPU 仅 ~9%，余量极大；
+  剩余峰值开销为 HOSTLINK 协议帧解析（32 位 MCU 流式处理必要成本），无可再压。

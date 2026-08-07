@@ -6,7 +6,7 @@
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_spi.h"
 
-#define SG_STACK_SIZE  1024
+#define SG_STACK_SIZE  512
 #define SG_FLAG_STOP   0x01
 
 typedef enum {
@@ -19,6 +19,8 @@ typedef enum {
 
 static UART_HandleTypeDef sg_huart6;
 static SPI_HandleTypeDef  sg_spi2;
+static DMA_HandleTypeDef  sg_hdma_spi2_tx;
+static DMA_HandleTypeDef  sg_hdma_usart6_tx;
 static osThreadId_t       sg_task_id = NULL;
 static volatile uint8_t   sg_running = 0;
 static volatile sg_mode_t sg_mode = SG_MODE_NONE;
@@ -26,6 +28,8 @@ static uint8_t            sg_data[SG_TEXT_MAX];
 static uint16_t           sg_len = 0;
 static uint16_t           sg_interval_ms = 5;
 static uint16_t           sg_i2c_addr = 0x50 << 1;
+static volatile uint8_t   sg_spi_done = 0;   /* SPI2 TX DMA 完成标志 */
+static volatile uint8_t   sg_uart_done = 0;  /* USART6 TX DMA 完成标志 */
 
 #define SG_SPI_CS_PORT   GPIOB
 #define SG_SPI_CS_PIN    GPIO_PIN_12
@@ -154,10 +158,21 @@ static void sg_tx_task(void *arg)
     (void)arg;
     for (;;) {
         if (sg_mode == SG_MODE_UART) {
-            HAL_UART_Transmit(&sg_huart6, sg_data, sg_len, HAL_MAX_DELAY);
+            sg_uart_done = 0;
+            if (HAL_UART_Transmit_DMA(&sg_huart6, sg_data, sg_len) == HAL_OK) {
+                while (!sg_uart_done) {
+                    osDelay(1);
+                }
+            }
         } else if (sg_mode == SG_MODE_SPI) {
             HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_RESET);
-            HAL_SPI_Transmit(&sg_spi2, sg_data, sg_len, HAL_MAX_DELAY);
+            sg_spi_done = 0;
+            if (HAL_SPI_Transmit_DMA(&sg_spi2, sg_data, sg_len) == HAL_OK) {
+                /* DMA 传输期间任务让出 CPU；完成回调置位后退出等待 */
+                while (!sg_spi_done) {
+                    osDelay(1);
+                }
+            }
             HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_SET);
         } else if (sg_mode == SG_MODE_I2C) {
             sg_i2c_tx_frame((uint8_t)(sg_i2c_addr >> 1), sg_data, sg_len);
@@ -211,6 +226,28 @@ static int sg_start_common(uint32_t baud, uint16_t interval_ms)
         __HAL_RCC_USART6_CLK_DISABLE();
         return -2;
     }
+
+    /* USART6_TX = DMA2_Stream6/Channel5：DMA 传输期间任务睡眠，CPU 近零占用 */
+    __HAL_RCC_DMA2_CLK_ENABLE();
+    memset(&sg_hdma_usart6_tx, 0, sizeof(sg_hdma_usart6_tx));
+    sg_hdma_usart6_tx.Instance = DMA2_Stream6;
+    sg_hdma_usart6_tx.Init.Channel = DMA_CHANNEL_5;
+    sg_hdma_usart6_tx.Init.Direction = DMA_MEMORY_TO_PERIPH;
+    sg_hdma_usart6_tx.Init.PeriphInc = DMA_PINC_DISABLE;
+    sg_hdma_usart6_tx.Init.MemInc = DMA_MINC_ENABLE;
+    sg_hdma_usart6_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    sg_hdma_usart6_tx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+    sg_hdma_usart6_tx.Init.Mode = DMA_NORMAL;
+    sg_hdma_usart6_tx.Init.Priority = DMA_PRIORITY_LOW;
+    sg_hdma_usart6_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    if (HAL_DMA_Init(&sg_hdma_usart6_tx) != HAL_OK) {
+        HAL_UART_DeInit(&sg_huart6);
+        __HAL_RCC_USART6_CLK_DISABLE();
+        return -2;
+    }
+    __HAL_LINKDMA(&sg_huart6, hdmatx, sg_hdma_usart6_tx);
+    HAL_NVIC_SetPriority(DMA2_Stream6_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(DMA2_Stream6_IRQn);
 
     sg_interval_ms = interval_ms;
     sg_running = 1;
@@ -314,6 +351,28 @@ static int sg_spi_start_bytes(const uint8_t *data, uint16_t len,
         return -2;
     }
 
+    /* SPI2_TX = DMA1_Stream4/Channel0：DMA 传输期间任务可睡眠，CPU 近零占用 */
+    __HAL_RCC_DMA1_CLK_ENABLE();
+    memset(&sg_hdma_spi2_tx, 0, sizeof(sg_hdma_spi2_tx));
+    sg_hdma_spi2_tx.Instance = DMA1_Stream4;
+    sg_hdma_spi2_tx.Init.Channel = DMA_CHANNEL_0;
+    sg_hdma_spi2_tx.Init.Direction = DMA_MEMORY_TO_PERIPH;
+    sg_hdma_spi2_tx.Init.PeriphInc = DMA_PINC_DISABLE;
+    sg_hdma_spi2_tx.Init.MemInc = DMA_MINC_ENABLE;
+    sg_hdma_spi2_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    sg_hdma_spi2_tx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+    sg_hdma_spi2_tx.Init.Mode = DMA_NORMAL;
+    sg_hdma_spi2_tx.Init.Priority = DMA_PRIORITY_LOW;
+    sg_hdma_spi2_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    if (HAL_DMA_Init(&sg_hdma_spi2_tx) != HAL_OK) {
+        HAL_SPI_DeInit(&sg_spi2);
+        __HAL_RCC_SPI2_CLK_DISABLE();
+        return -2;
+    }
+    __HAL_LINKDMA(&sg_spi2, hdmatx, sg_hdma_spi2_tx);
+    HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
+
     memcpy(sg_data, data, len);
     sg_len = len;
     sg_interval_ms = interval_ms;
@@ -357,6 +416,9 @@ void SG_SpiStop(void)
     if (!sg_running && sg_task_id == NULL) {
         return;
     }
+    /* 强制中止进行中的 SPI DMA 并置完成标志，防止任务卡在等待 */
+    sg_spi_done = 1;
+    HAL_SPI_DMAStop(&sg_spi2);
     if (sg_task_id != NULL) {
         osThreadFlagsSet(sg_task_id, SG_FLAG_STOP);
         sg_task_id = NULL;
@@ -446,6 +508,8 @@ void SG_UartStop(void)
     if (!sg_running && sg_task_id == NULL) {
         return;
     }
+    sg_uart_done = 1;
+    HAL_UART_DMAStop(&sg_huart6);
     if (sg_task_id != NULL) {
         osThreadFlagsSet(sg_task_id, SG_FLAG_STOP);
         sg_task_id = NULL;
@@ -457,4 +521,30 @@ void SG_UartStop(void)
 uint8_t SG_UartIsRunning(void)
 {
     return sg_running;
+}
+
+/* SPI2 TX DMA 完成回调（中断上下文） */
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+    if (hspi == &sg_spi2) {
+        sg_spi_done = 1;
+    }
+}
+
+/* DMA1_Stream4 中断转发（stm32f4xx_it.c 调用） */
+void SG_Spi_DMA_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&sg_hdma_spi2_tx);
+}
+
+/* USART6 TX DMA 完成通知（bsp_uart 弱钩子，非 BSP 通道） */
+void BSP_UART_OnTxComplete(void)
+{
+    sg_uart_done = 1;
+}
+
+/* DMA2_Stream6 中断转发（stm32f4xx_it.c 调用） */
+void SG_Uart_DMA_IRQHandler(void)
+{
+    HAL_DMA_IRQHandler(&sg_hdma_usart6_tx);
 }

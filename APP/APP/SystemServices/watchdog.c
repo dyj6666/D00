@@ -49,7 +49,7 @@ void WDOG_Init(void)
 {
     osThreadAttr_t attr = {
         .name = "WDOG",
-        .stack_size = 1024,
+        .stack_size = 512,
         .priority = osPriorityLow,
     };
 
