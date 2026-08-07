@@ -24,7 +24,7 @@ class OtaWorker(QThread):
     stage_signal = pyqtSignal(str)         # IDLE/DOWNLOADING/VERIFYING/COMMITTED/RUNNING
 
     def __init__(self, serial_instance, file_path, version,
-                 uid_hex, private_key_hex, mode="hostlink"):
+                 uid_hex, private_key_hex, mode="hostlink", build_no=None):
         super().__init__()
         self.serial_instance = serial_instance
         self.file_path = file_path
@@ -34,7 +34,7 @@ class OtaWorker(QThread):
         self.mode = mode
         self._stop_flag = False
         self.chip_id = 0x413
-        self.build_no = 1
+        self.build_no = build_no if build_no is not None else 0
 
     def stop(self):
         self._stop_flag = True
@@ -44,8 +44,10 @@ class OtaWorker(QThread):
             self.stage_signal.emit("IDLE")
             lib = load_lib()
             self.chip_id = chip_id_int(lib)
-            self.build_no = alloc_build_no(lib)
-            add_entry(self.version, self.build_no, self.file_path, "auto")
+            if self.build_no <= 0:
+                # 单设备自动分配；批量场景由调用方预分配（避免并发竞争）
+                self.build_no = alloc_build_no(lib)
+                add_entry(self.version, self.build_no, self.file_path, "auto")
             if self.mode == "ymodem":
                 self._run_ymodem()
             else:

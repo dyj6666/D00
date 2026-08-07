@@ -6,28 +6,7 @@
       "version": 69,
       "build": 53,
       "file": "D:\\GIT-SPACE\\D00\\APP\\APP\\MDK-ARM\\Output\\APP.bin",
-      "note": "v69 (new key, GUI demo)",
-      "date": "2026-08-08"
-    },
-    {
-      "version": 68,
-      "build": 52,
-      "file": "D:\\GIT-SPACE\\D00\\APP\\APP\\MDK-ARM\\Output\\APP.bin",
-      "note": "v68 production",
-      "date": "2026-08-08"
-    },
-    {
-      "version": 69,
-      "build": 54,
-      "file": "D:\\GIT-SPACE\\D00\\APP\\APP\\MDK-ARM\\Output\\APP.bin",
-      "note": "auto",
-      "date": "2026-08-08"
-    },
-    {
-      "version": 69,
-      "build": 55,
-      "file": "D:\\GIT-SPACE\\D00\\APP\\APP\\MDK-ARM\\Output\\APP.bin",
-      "note": "auto",
+      "note": "v69 production",
       "date": "2026-08-08"
     }
   ]

@@ -10,7 +10,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QFont
 import serial.tools.list_ports
 from core.ota_worker import OtaWorker
-from core.version_lib import load_lib
+from core.version_lib import load_lib, alloc_build_no, add_entry
 from ui.uid_capture_thread import UidCaptureThread
 from utils.config import Config
 
@@ -416,9 +416,13 @@ class MainWindow(QMainWindow):
 
     # ---------- 批量升级（HOSTLINK 多端口并发） ----------
     def _start_batch(self):
-        ports = [p.strip() for p in self.edit_batch_ports.text().split(",") if p.strip()]
+        ports = list(dict.fromkeys(
+            p.strip() for p in self.edit_batch_ports.text().split(",") if p.strip()))
         if not ports:
             QMessageBox.warning(self, "提示", "请填写批量端口（逗号分隔）")
+            return
+        if getattr(self, "_batch_running", False):
+            QMessageBox.warning(self, "提示", "批量升级正在进行中，请等待完成")
             return
         file_path = self.edit_file.text()
         version = self.edit_version.value()
@@ -428,25 +432,49 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "参数缺失", "请填写所有必要参数")
             return
         baud = int(self.combo_baud.currentText())
+        self._append_log(
+            f"批量 {len(ports)} 台：同批次设备 UID 需一致（AES 密钥由 UID 派生）",
+            COLOR_WARN)
         self.progress.setValue(0)
+        self.btn_batch.setEnabled(False)
+        self._batch_running = True
+        self._batch_workers = []
+        # 串行预分配 build_no（避免并发 alloc 竞争导致版本库损坏/重复）
+        lib = load_lib()
+        assigned = []
         for port in ports:
+            bn = alloc_build_no(lib)
+            assigned.append((port, bn))
+        for port, bn in assigned:
             try:
                 ser = serial.Serial(port, baud, timeout=0.5)
             except Exception as ex:
                 self._append_log(f"[{port}] 打开失败: {ex}", COLOR_ERROR)
                 continue
             w = OtaWorker(serial_instance=ser, file_path=file_path, version=version,
-                          uid_hex=uid, private_key_hex=key, mode="hostlink")
+                          uid_hex=uid, private_key_hex=key, mode="hostlink",
+                          build_no=bn)
             w.log_signal.connect(lambda m, c, p=port: self._append_log(f"[{p}] {m}", c))
             w.progress_signal.connect(self.progress.setValue)
             w.stage_signal.connect(self._set_stage)
-            w.finished_signal.connect(lambda ok, p=port: self._batch_done(ok, p))
+            w.finished_signal.connect(
+                lambda ok, p=port, s=ser: self._batch_done(ok, p, s))
+            self._batch_workers.append(w)
             w.start()
-            self._append_log(f"[{port}] 批量升级已启动", COLOR_INFO)
+            self._append_log(f"[{port}] 批量升级已启动 (build {bn})", COLOR_INFO)
 
-    def _batch_done(self, ok, port):
+    def _batch_done(self, ok, port, ser):
+        try:
+            if ser and ser.is_open:
+                ser.close()
+        except Exception:
+            pass
         self._append_log(f"[{port}] 升级{'成功' if ok else '失败'}",
                          COLOR_OK if ok else COLOR_ERROR)
+        if self._batch_workers and all(not w.isRunning() for w in self._batch_workers):
+            self._batch_running = False
+            self.btn_batch.setEnabled(True)
+            self._append_log("批量升级全部结束", COLOR_INFO)
 
     def closeEvent(self, event):
 
