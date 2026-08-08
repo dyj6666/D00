@@ -43,7 +43,7 @@ typedef struct {
  * 当前 4 通道：探索者V3 的 PG6/PG7/PG12/PG15（全部“完全独立”）。
  */
 #define LA_GPIO_PORT         GPIOG
-#define LA_CHANNEL_PINS      {GPIO_PIN_6, GPIO_PIN_7, GPIO_PIN_12, GPIO_PIN_15, \
+#define LA_CHANNEL_PINS      {GPIO_PIN_6, GPIO_PIN_7, GPIO_PIN_8, GPIO_PIN_15, \
                                0, 0, 0, 0}
 
 /* ---------------- 时间戳模式 ---------------- */

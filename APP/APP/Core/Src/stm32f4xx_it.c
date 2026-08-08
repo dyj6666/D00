@@ -355,15 +355,6 @@ void DMA2_Stream7_IRQHandler(void)
 }
 
 /**
-  * @brief This function handles DMA1 stream4 global interrupt.
-  *        (SPI2 TX DMA, signal generator)
-  */
-void DMA1_Stream4_IRQHandler(void)
-{
-  SG_Spi_DMA_IRQHandler();
-}
-
-/**
   * @brief This function handles DMA2 stream6 global interrupt.
   *        (USART6 TX DMA, signal generator)
   */

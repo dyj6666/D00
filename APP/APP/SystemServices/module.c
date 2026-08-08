@@ -9,6 +9,7 @@
 #include "data_agent.h"
 #include "la_sample.h"
 #include "la_buffer.h"
+#include "lcd_app.h"
 
 #include <string.h>
 
@@ -21,6 +22,7 @@ static module_desc_t module_table[] = {
     MODULE_INIT("LA_Sample",30,  LA_Sample_Init),
     MODULE_INIT("KeyApp",   40,  KeyApp_Init),
     MODULE_INIT("LedApp",   50,  LedApp_Init),
+    MODULE_INIT("LcdApp",   55,  LcdApp_Init),
     MODULE_INIT("OtaAgent", 60,  OtaAgent_Init),
     MODULE_INIT("SysMon",   70,  SysMon_Init),
     MODULE_INIT("DataAgent",80,  DataAgent_Init),

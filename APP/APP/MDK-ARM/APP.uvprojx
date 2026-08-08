@@ -2225,6 +2225,11 @@
               <FileType>1</FileType>
               <FilePath>..\Application\data_agent.c</FilePath>
             </File>
+            <File>
+              <FileName>lcd_app.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Application\lcd_app.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -2254,6 +2259,11 @@
               <FileName>bsp_gpio.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\bsp_gpio.c</FilePath>
+            </File>
+            <File>
+              <FileName>lcd.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\LCD\lcd.c</FilePath>
             </File>
           </Files>
         </Group>

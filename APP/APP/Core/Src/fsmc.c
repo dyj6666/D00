@@ -75,7 +75,8 @@ void MX_FSMC_Init(void)
   }
 
   /* USER CODE BEGIN FSMC_Init 2 */
-
+  /* 注：板载 TFTLCD（BANK4/NE4）由官方 LCD 驱动 lcd_init() 自行完成
+   * FSMC 配置（寄存器级，读慢写快分离时序），此处不再重复配置。 */
   /* USER CODE END FSMC_Init 2 */
 }
 
@@ -149,7 +150,7 @@ static void HAL_FSMC_MspInit(void){
 
   /* GPIO_InitStruct */
   GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3
-                          |GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_10;
+                          |GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_10|GPIO_PIN_12;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;

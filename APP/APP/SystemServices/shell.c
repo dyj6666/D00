@@ -9,6 +9,7 @@
 #include "signal_gen.h"
 #include "ota_agent.h"
 #include "err_mgr.h"
+#include "LCD/lcd.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -53,6 +54,7 @@ static void cmd_sg_i2c_stop(const char *args);
 static void cmd_sg_i2c_complex(const char *args);
 static void cmd_ota_rbtest(const char *args);
 static void cmd_eb_stress(const char *args);
+static void cmd_lcd(const char *args);
 #if CRASH_INJECT_ENABLE
 static void cmd_crash(const char *args);
 #endif
@@ -87,6 +89,7 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_i2c_complex","I2C complex frame demo", cmd_sg_i2c_complex},
     {"ota_rbtest",   "OTA rollback self-test (danger)", cmd_ota_rbtest},
     {"eb_stress",    "Event bus stress <n> <payload> <mode>", cmd_eb_stress},
+    {"lcd",          "LCD test/info <info|test|clear|bl>", cmd_lcd},
 #if CRASH_INJECT_ENABLE
     {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", cmd_crash},
 #endif
@@ -656,6 +659,74 @@ static void cmd_ota_rbtest(const char *args)
     (void)args;
     LOG_Printf("OTA rollback test: arming...\r\n");
     Ota_ForceRollbackTest();
+}
+
+/* ================== LCD 测试命令 ==================
+ * 用法：lcd <info|test|clear|bl> */
+static void cmd_lcd(const char *args)
+{
+    if (args == NULL || strcmp(args, "info") == 0) {
+        LOG_Printf("LCD: id=0x%04X, %ux%u\r\n",
+                   lcddev.id, lcddev.width, lcddev.height);
+        return;
+    }
+    if (strcmp(args, "clear") == 0) {
+        lcd_clear(BLACK);
+        LOG_Printf("LCD: cleared\r\n");
+        return;
+    }
+    if (strcmp(args, "bl") == 0) {
+        LCD_BL(1);
+        LOG_Printf("LCD: backlight on\r\n");
+        return;
+    }
+    if (strncmp(args, "dir", 3) == 0) {
+        int d = atoi(args + 3);
+        if (d < 0 || d > 7) {
+            LOG_Printf("Usage: lcd dir <0-7>\r\n");
+            return;
+        }
+        lcd_scan_dir((uint8_t)d);
+        /* 重画方向测试：四边色块边框（红上/绿下/蓝左/黄右）+ 中心十字 */
+        uint16_t w = lcddev.width, h = lcddev.height;
+        lcd_clear(BLACK);
+        lcd_fill(0, 0, (uint16_t)(w - 1), 9, RED);                     /* 上红 */
+        lcd_fill(0, (uint16_t)(h - 10), (uint16_t)(w - 1),
+                 (uint16_t)(h - 1), GREEN);                            /* 下绿 */
+        lcd_fill(0, 0, 9, (uint16_t)(h - 1), BLUE);                    /* 左蓝 */
+        lcd_fill((uint16_t)(w - 10), 0, (uint16_t)(w - 1),
+                 (uint16_t)(h - 1), YELLOW);                           /* 右黄 */
+        lcd_fill((uint16_t)(w / 2 - 2), (uint16_t)(h / 2 - 40),
+                 (uint16_t)(w / 2 + 2), (uint16_t)(h / 2 + 40), WHITE); /* 中竖 */
+        lcd_fill((uint16_t)(w / 2 - 40), (uint16_t)(h / 2 - 2),
+                 (uint16_t)(w / 2 + 40), (uint16_t)(h / 2 + 2), WHITE); /* 中横 */
+        LOG_Printf("LCD: scan dir=%d\r\n", d);
+        return;
+    }
+    if (strcmp(args, "test") == 0) {
+        static const uint16_t bars[] = {
+            RED, GREEN, BLUE, YELLOW, CYAN, MAGENTA, WHITE, 0xFBE0
+        };
+        /* 全屏彩条 */
+        uint16_t w = lcddev.width;
+        uint16_t h = lcddev.height;
+        for (int i = 0; i < 8; i++) {
+            lcd_fill((uint16_t)(i * w / 8), 0,
+                     (uint16_t)((i + 1) * w / 8 - 1),
+                     (uint16_t)(h / 2 - 1), bars[i]);
+        }
+        lcd_fill(0, h / 2, (uint16_t)(w - 1), (uint16_t)(h - 1), BLACK);
+        g_back_color = BLACK;
+        lcd_show_string(8, (uint16_t)(h / 2 + 8), w, h, 24,
+                        (char *)"D00 LCD TEST", WHITE);
+        lcd_show_string(8, (uint16_t)(h / 2 + 40), w, h, 16,
+                        (char *)"abcdefghijklmnopqrstuvwxyz 0123456789", GREEN);
+        lcd_show_string(8, (uint16_t)(h / 2 + 64), w, h, 12,
+                        (char *)"ABCDEFGHIJKLMNOPQRSTUVWXYZ !@#$%^&*()", CYAN);
+        LOG_Printf("LCD: test pattern drawn\r\n");
+        return;
+    }
+    LOG_Printf("Usage: lcd <info|test|clear|bl>\r\n");
 }
 
 #if CRASH_INJECT_ENABLE

@@ -28,9 +28,6 @@ int    SG_SpiStartHex(const char *hex, uint16_t interval_ms);
 /* 停止 SPI 发生器 */
 void   SG_SpiStop(void);
 
-/* SPI2 TX DMA 中断转发（stm32f4xx_it.c 的 DMA1_Stream4_IRQHandler 调用） */
-void   SG_Spi_DMA_IRQHandler(void);
-
 /* USART6 TX DMA 中断转发（stm32f4xx_it.c 的 DMA2_Stream6_IRQHandler 调用） */
 void   SG_Uart_DMA_IRQHandler(void);
 

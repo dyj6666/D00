@@ -863,3 +863,25 @@ auto-stop）全部按设计工作。
   - **info 增强**：附加 Free heap 显示。
 - **验证**：实机测试 help/help <cmd>/Tab 补全/历史上下键/sysmon/info 全部正常，
   编译 0 Error / 0 Warning。
+
+### 12.41 板载 2.8 寸 TFTLCD 驱动（官方移植）+ 系统面板 + 引脚重规划
+- **重大发现**：探索者 V3 板载 2.8 寸 LCD 实际控制器为 **ST7789（ID=0x7789）**
+  而非 ILI9341！此前自研驱动强制 ILI9341 序列导致持续乱屏。
+- **方案**：移植正点原子官方探索者 F407 LCD 驱动
+  （`BSP/LCD/lcd.c + lcd_ex.c + lcdfont.h`，多 IC 自动识别，
+   ST7789/ILI9341/NT35310/ST7796 等），适配 D00 工程：
+  - 兼容层替代官方 SYSTEM/sys（sys_gpio_set/af_set/pin_set、delay_ms/us）；
+  - FSMC BANK4 由官方 lcd_init 寄存器级配置（读慢 15/60、写快 9/8 分离时序）；
+  - 移除自研 bsp_lcd 与 fsmc.c 冗余 BANK4 配置。
+- **调试历程关键教训**：
+  1. FSMC 16 位模式 RS 地址线 A6 = HADDR bit7（偏移 0x80）；
+  2. FSMC 读需慢时序（DATAST=60），否则读 ID 返回 0；
+  3. MADCTL 需按真实控制器（ST7789 竖屏官方值）；
+  4. 官方多控制器驱动是终极可靠方案（板上验证过）。
+- **引脚重规划**（LCD 优先）：LCD 占用 PG12(CS)/PF12(RS)/PB15(背光)/FSMC 总线；
+  LA 采样通道改为 **PG6/PG7/PG8/PG15**（原 PG12 让出）；
+  信号发生器 SPI 改**软件 SPI**（PE5=SCK/PE6=MOSI/PF6=CS，释放 PB15）。
+- **系统面板 lcd_app**：HOME(版本/CPU/堆/任务) / SYSTEM(任务栈水位) /
+  BUS(事件总线+HOSTLINK 状态) 三页，按键短按切换，1s 局部刷新不闪烁。
+- **验证**：LCD 显示完美（用户确认）、LA SRAM 自检 PASS、堆 10.8KB、
+  事件总线/HOSTLINK 零丢失零错误、编译 0 Error 0 Warning。

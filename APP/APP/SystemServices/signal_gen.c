@@ -4,7 +4,6 @@
 
 #include "cmsis_os2.h"
 #include "stm32f4xx_hal.h"
-#include "stm32f4xx_hal_spi.h"
 
 #define SG_STACK_SIZE  512
 #define SG_FLAG_STOP   0x01
@@ -18,8 +17,6 @@ typedef enum {
 } sg_mode_t;
 
 static UART_HandleTypeDef sg_huart6;
-static SPI_HandleTypeDef  sg_spi2;
-static DMA_HandleTypeDef  sg_hdma_spi2_tx;
 static DMA_HandleTypeDef  sg_hdma_usart6_tx;
 static osThreadId_t       sg_task_id = NULL;
 static volatile uint8_t   sg_running = 0;
@@ -28,11 +25,16 @@ static uint8_t            sg_data[SG_TEXT_MAX];
 static uint16_t           sg_len = 0;
 static uint16_t           sg_interval_ms = 5;
 static uint16_t           sg_i2c_addr = 0x50 << 1;
-static volatile uint8_t   sg_spi_done = 0;   /* SPI2 TX DMA 完成标志 */
 static volatile uint8_t   sg_uart_done = 0;  /* USART6 TX DMA 完成标志 */
 
-#define SG_SPI_CS_PORT   GPIOB
-#define SG_SPI_CS_PIN    GPIO_PIN_12
+/* 软件 SPI（模式0）输出：SCK=PE5 / MOSI=PE6 / CS=PF6。
+ * 全部为独立引脚，与板载 LCD（占用 PB15/FSMC）零冲突。 */
+#define SG_SPI_SCK_PORT  GPIOE
+#define SG_SPI_SCK_PIN   GPIO_PIN_5
+#define SG_SPI_MOSI_PORT GPIOE
+#define SG_SPI_MOSI_PIN  GPIO_PIN_6
+#define SG_SPI_CS_PORT   GPIOF
+#define SG_SPI_CS_PIN    GPIO_PIN_6
 
 /* 软件模拟 I2C（bit-bang）：PE2=SCL / PE3=SDA（按键引脚，独立引出） */
 #define SG_I2C_SCL_PORT  GPIOE
@@ -153,6 +155,21 @@ static void sg_i2c_init_gpio(void)
     sg_i2c_sda(1);
 }
 
+/* 软件 SPI（模式0：CPOL=0/CPHA=0，MSB 先），无固定限速（GPIO 直驱极速） */
+static void sg_spi_write_bytes(const uint8_t *data, uint16_t len)
+{
+    for (uint16_t i = 0; i < len; i++) {
+        uint8_t byte = data[i];
+        for (int b = 7; b >= 0; b--) {
+            HAL_GPIO_WritePin(SG_SPI_SCK_PORT, SG_SPI_SCK_PIN, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(SG_SPI_MOSI_PORT, SG_SPI_MOSI_PIN,
+                              (byte & (1u << b)) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(SG_SPI_SCK_PORT, SG_SPI_SCK_PIN, GPIO_PIN_SET);
+        }
+    }
+    HAL_GPIO_WritePin(SG_SPI_SCK_PORT, SG_SPI_SCK_PIN, GPIO_PIN_RESET);
+}
+
 static void sg_tx_task(void *arg)
 {
     (void)arg;
@@ -166,13 +183,7 @@ static void sg_tx_task(void *arg)
             }
         } else if (sg_mode == SG_MODE_SPI) {
             HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_RESET);
-            sg_spi_done = 0;
-            if (HAL_SPI_Transmit_DMA(&sg_spi2, sg_data, sg_len) == HAL_OK) {
-                /* DMA 传输期间任务让出 CPU；完成回调置位后退出等待 */
-                while (!sg_spi_done) {
-                    osDelay(1);
-                }
-            }
+            sg_spi_write_bytes(sg_data, sg_len);
             HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_SET);
         } else if (sg_mode == SG_MODE_I2C) {
             sg_i2c_tx_frame((uint8_t)(sg_i2c_addr >> 1), sg_data, sg_len);
@@ -312,66 +323,24 @@ static int sg_spi_start_bytes(const uint8_t *data, uint16_t len,
         SG_UartStop();
     }
 
-    __HAL_RCC_SPI2_CLK_ENABLE();
-    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOE_CLK_ENABLE();
+    __HAL_RCC_GPIOF_CLK_ENABLE();
 
-    /* PB13=SPI2_SCK, PB15=SPI2_MOSI (AF5) */
+    /* 软件 SPI：SCK=PE5 / MOSI=PE6（推挽输出，高速） */
     GPIO_InitTypeDef gpio = {0};
-    gpio.Pin = GPIO_PIN_13 | GPIO_PIN_15;
-    gpio.Mode = GPIO_MODE_AF_PP;
+    gpio.Pin = SG_SPI_SCK_PIN | SG_SPI_MOSI_PIN;
+    gpio.Mode = GPIO_MODE_OUTPUT_PP;
     gpio.Pull = GPIO_NOPULL;
     gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    gpio.Alternate = GPIO_AF5_SPI2;
-    HAL_GPIO_Init(GPIOB, &gpio);
+    HAL_GPIO_Init(SG_SPI_SCK_PORT, &gpio);
 
-    /* PB12 = CS，低有效，空闲高 */
+    /* CS=PF6，低有效，空闲高 */
     gpio.Pin = SG_SPI_CS_PIN;
     gpio.Mode = GPIO_MODE_OUTPUT_PP;
     gpio.Pull = GPIO_NOPULL;
     gpio.Speed = GPIO_SPEED_FREQ_LOW;
-    gpio.Alternate = 0;
     HAL_GPIO_Init(SG_SPI_CS_PORT, &gpio);
     HAL_GPIO_WritePin(SG_SPI_CS_PORT, SG_SPI_CS_PIN, GPIO_PIN_SET);
-
-    memset(&sg_spi2, 0, sizeof(sg_spi2));
-    sg_spi2.Instance = SPI2;
-    sg_spi2.Init.Mode = SPI_MODE_MASTER;
-    sg_spi2.Init.Direction = SPI_DIRECTION_2LINES;
-    sg_spi2.Init.DataSize = SPI_DATASIZE_8BIT;
-    sg_spi2.Init.CLKPolarity = SPI_POLARITY_LOW;
-    sg_spi2.Init.CLKPhase = SPI_PHASE_1EDGE;
-    sg_spi2.Init.NSS = SPI_NSS_SOFT;
-    sg_spi2.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256;  /* 42MHz/256=164kHz */
-    sg_spi2.Init.FirstBit = SPI_FIRSTBIT_MSB;
-    sg_spi2.Init.TIMode = SPI_TIMODE_DISABLE;
-    sg_spi2.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-    sg_spi2.Init.CRCPolynomial = 7;
-    if (HAL_SPI_Init(&sg_spi2) != HAL_OK) {
-        __HAL_RCC_SPI2_CLK_DISABLE();
-        return -2;
-    }
-
-    /* SPI2_TX = DMA1_Stream4/Channel0：DMA 传输期间任务可睡眠，CPU 近零占用 */
-    __HAL_RCC_DMA1_CLK_ENABLE();
-    memset(&sg_hdma_spi2_tx, 0, sizeof(sg_hdma_spi2_tx));
-    sg_hdma_spi2_tx.Instance = DMA1_Stream4;
-    sg_hdma_spi2_tx.Init.Channel = DMA_CHANNEL_0;
-    sg_hdma_spi2_tx.Init.Direction = DMA_MEMORY_TO_PERIPH;
-    sg_hdma_spi2_tx.Init.PeriphInc = DMA_PINC_DISABLE;
-    sg_hdma_spi2_tx.Init.MemInc = DMA_MINC_ENABLE;
-    sg_hdma_spi2_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
-    sg_hdma_spi2_tx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
-    sg_hdma_spi2_tx.Init.Mode = DMA_NORMAL;
-    sg_hdma_spi2_tx.Init.Priority = DMA_PRIORITY_LOW;
-    sg_hdma_spi2_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
-    if (HAL_DMA_Init(&sg_hdma_spi2_tx) != HAL_OK) {
-        HAL_SPI_DeInit(&sg_spi2);
-        __HAL_RCC_SPI2_CLK_DISABLE();
-        return -2;
-    }
-    __HAL_LINKDMA(&sg_spi2, hdmatx, sg_hdma_spi2_tx);
-    HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 5, 0);
-    HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
 
     memcpy(sg_data, data, len);
     sg_len = len;
@@ -388,8 +357,6 @@ static int sg_spi_start_bytes(const uint8_t *data, uint16_t len,
     if (sg_task_id == NULL) {
         sg_mode = SG_MODE_NONE;
         sg_running = 0;
-        HAL_SPI_DeInit(&sg_spi2);
-        __HAL_RCC_SPI2_CLK_DISABLE();
         return -3;
     }
     return 0;
@@ -416,9 +383,6 @@ void SG_SpiStop(void)
     if (!sg_running && sg_task_id == NULL) {
         return;
     }
-    /* 强制中止进行中的 SPI DMA 并置完成标志，防止任务卡在等待 */
-    sg_spi_done = 1;
-    HAL_SPI_DMAStop(&sg_spi2);
     if (sg_task_id != NULL) {
         osThreadFlagsSet(sg_task_id, SG_FLAG_STOP);
         sg_task_id = NULL;
@@ -521,20 +485,6 @@ void SG_UartStop(void)
 uint8_t SG_UartIsRunning(void)
 {
     return sg_running;
-}
-
-/* SPI2 TX DMA 完成回调（中断上下文） */
-void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-    if (hspi == &sg_spi2) {
-        sg_spi_done = 1;
-    }
-}
-
-/* DMA1_Stream4 中断转发（stm32f4xx_it.c 调用） */
-void SG_Spi_DMA_IRQHandler(void)
-{
-    HAL_DMA_IRQHandler(&sg_hdma_spi2_tx);
 }
 
 /* USART6 TX DMA 完成通知（bsp_uart 弱钩子，非 BSP 通道） */
