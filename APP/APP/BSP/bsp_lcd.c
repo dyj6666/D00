@@ -52,6 +52,31 @@ void BSP_LCD_Fill(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
     lcd_fill(x0, y0, x1, y1, color);
 }
 
+/* 批量读取矩形像素（逐点读回，光标覆盖层精确恢复用） */
+void BSP_LCD_ReadPixels(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                        uint16_t *buf)
+{
+    for (uint16_t j = 0; j < h; j++) {
+        for (uint16_t i = 0; i < w; i++) {
+            buf[(uint32_t)j * w + i] = lcd_read_point_rgb565(
+                (uint16_t)(x + i), (uint16_t)(y + j));
+        }
+    }
+}
+
+/* 批量写入矩形像素（单窗口连续写，性能最优） */
+void BSP_LCD_WritePixels(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                         const uint16_t *buf)
+{
+    lcd_set_window(x, y, w, h);
+    lcd_write_ram_prepare();
+    volatile uint16_t *ram = &LCD->LCD_RAM;
+    uint32_t n = (uint32_t)w * h;
+    for (uint32_t i = 0; i < n; i++) {
+        *ram = buf[i];
+    }
+}
+
 void BSP_LCD_DrawPoint(uint16_t x, uint16_t y, uint16_t color)
 {
     lcd_draw_point(x, y, color);

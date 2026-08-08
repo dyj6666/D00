@@ -1,4 +1,5 @@
 #include "lcd_ui.h"
+#include "touch_svc.h"
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "cmsis_os2.h"
@@ -45,6 +46,107 @@ static uint8_t ui_page_count = 0;
 static volatile uint8_t ui_page_cur = 0;
 static volatile uint8_t ui_test_mode = 0;
 static volatile uint32_t ui_dropped = 0;
+
+/* ---------- 触摸光标状态（渲染任务私有） ---------- */
+#define UI_CURSOR_SIZE   8   /* 8x8 光标 */
+#define UI_CURSOR_HALF   3   /* 中心偏移 */
+#define UI_MOVE_DEADBAND 2   /* 位移死区（px），吸收亚像素抖动 */
+#define UI_SWIPE_DIST    40  /* 滑动判定阈值（px） */
+static uint32_t s_touch_gen = 0;
+static uint8_t  s_touch_active = 0;
+static uint16_t s_cursor_x = 0, s_cursor_y = 0;
+static uint16_t s_cursor_save[UI_CURSOR_SIZE * UI_CURSOR_SIZE];  /* 原色备份 */
+
+/* 光标左上角（边界钳位，保持 8x8） */
+static void ui_cursor_rect(uint16_t x, uint16_t y, uint16_t *x0, uint16_t *y0)
+{
+    int16_t a = (int16_t)x - (int16_t)UI_CURSOR_HALF;
+    int16_t b = (int16_t)y - (int16_t)UI_CURSOR_HALF;
+    if (a < 0) a = 0;
+    if (b < 0) b = 0;
+    if (a > (int16_t)(BSP_LCD_GetWidth() - UI_CURSOR_SIZE))
+        a = (int16_t)(BSP_LCD_GetWidth() - UI_CURSOR_SIZE);
+    if (b > (int16_t)(BSP_LCD_GetHeight() - UI_CURSOR_SIZE))
+        b = (int16_t)(BSP_LCD_GetHeight() - UI_CURSOR_SIZE);
+    *x0 = (uint16_t)a;
+    *y0 = (uint16_t)b;
+}
+
+/* 擦除：把之前保存的原色逐像素写回（无黑洞、无拖影） */
+static void ui_cursor_erase(void)
+{
+    uint16_t x0, y0;
+    ui_cursor_rect(s_cursor_x, s_cursor_y, &x0, &y0);
+    BSP_LCD_WritePixels(x0, y0, UI_CURSOR_SIZE, UI_CURSOR_SIZE,
+                        s_cursor_save);
+}
+
+/* 绘制：先读回原色备份，再画白色光标 */
+static void ui_cursor_draw(uint16_t x, uint16_t y)
+{
+    uint16_t x0, y0;
+    ui_cursor_rect(x, y, &x0, &y0);
+    BSP_LCD_ReadPixels(x0, y0, UI_CURSOR_SIZE, UI_CURSOR_SIZE,
+                       s_cursor_save);
+    BSP_LCD_Fill(x0, y0, (uint16_t)(x0 + UI_CURSOR_SIZE - 1),
+                 (uint16_t)(y0 + UI_CURSOR_SIZE - 1), BSP_LCD_COLOR_WHITE);
+}
+
+/* ---------- 触摸事件处理（渲染任务上下文，串行绘制） ---------- */
+static void ui_handle_touch(const touch_svc_state_t *ts)
+{
+    switch (ts->state) {
+    case TOUCH_EVT_DOWN:
+    case TOUCH_EVT_MOVE:
+        if (!ui_test_mode) {   /* 测试/校准画面保持纯净，不画光标 */
+            if (!s_touch_active) {
+                s_touch_active = 1;
+                s_cursor_x = ts->x;
+                s_cursor_y = ts->y;
+                ui_cursor_draw(ts->x, ts->y);
+            } else {
+                /* 死区：位移 <2px 不重绘（吸收抖动） */
+                uint16_t adx = (ts->x > s_cursor_x)
+                                   ? (uint16_t)(ts->x - s_cursor_x)
+                                   : (uint16_t)(s_cursor_x - ts->x);
+                uint16_t ady = (ts->y > s_cursor_y)
+                                   ? (uint16_t)(ts->y - s_cursor_y)
+                                   : (uint16_t)(s_cursor_y - ts->y);
+                if (adx >= UI_MOVE_DEADBAND || ady >= UI_MOVE_DEADBAND) {
+                    ui_cursor_erase();
+                    s_cursor_x = ts->x;
+                    s_cursor_y = ts->y;
+                    ui_cursor_draw(ts->x, ts->y);
+                }
+            }
+        }
+        /* 页面实时触摸反馈（可选） */
+        if (ui_page_cur < ui_page_count && ui_pages[ui_page_cur] != NULL &&
+            ui_pages[ui_page_cur]->touch != NULL) {
+            ui_pages[ui_page_cur]->touch(ts->state, ts->x, ts->y);
+        }
+        break;
+
+    case TOUCH_EVT_UP:
+        if (s_touch_active) ui_cursor_erase();
+        s_touch_active = 0;
+        /* 手势：触摸全程最大横向位移 >40px 且占优 → 切页
+         * （接触抖动/中途瞬断不影响判定）；否则 tap → 页面回调 */
+        {
+            if (ts->max_dx > UI_SWIPE_DIST && ts->max_dx > ts->max_dy) {
+                LcdUI_NextPage();   /* 滑动切页 */
+            } else if (ui_page_cur < ui_page_count &&
+                       ui_pages[ui_page_cur] != NULL &&
+                       ui_pages[ui_page_cur]->touch != NULL) {
+                ui_pages[ui_page_cur]->touch(TOUCH_EVT_TAP, ts->up_x, ts->up_y);
+            }
+        }
+        break;
+
+    default:
+        break;
+    }
+}
 
 /* ---------- 当前页绘制 ---------- */
 static void ui_draw_page(void)
@@ -128,17 +230,33 @@ static void ui_exec(const ui_cmd_t *cmd)
 static void lcd_ui_task(void *arg)
 {
     (void)arg;
+    uint32_t refresh_last = 0;
     for (;;) {
         ui_cmd_t cmd;
-        /* 命令优先：队列有命令立即执行；空闲 1s 后刷新当前页 */
-        if (xQueueReceive(ui_queue, &cmd, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        /* 固定 8ms 节拍：命令优先，触摸始终低延迟轮询，
+         * 周期刷新由 1s 时间闸门控制（非触摸/非测试时） */
+        if (xQueueReceive(ui_queue, &cmd, pdMS_TO_TICKS(8)) == pdTRUE) {
             ui_exec(&cmd);
             continue;
         }
-        if (!ui_test_mode && ui_page_cur < ui_page_count &&
+        /* 触摸事件轮询 */
+        {
+            const touch_svc_state_t *ts = TouchSvc_GetState();
+            if (ts->gen != s_touch_gen) {
+                s_touch_gen = ts->gen;
+                ui_handle_touch(ts);
+                continue;
+            }
+        }
+        /* 空闲 1s 周期刷新（触摸期间暂停，保证光标丝滑） */
+        if (!s_touch_active && !ui_test_mode && ui_page_cur < ui_page_count &&
             ui_pages[ui_page_cur] != NULL &&
             ui_pages[ui_page_cur]->refresh != NULL) {
-            ui_pages[ui_page_cur]->refresh();
+            uint32_t now = (uint32_t)xTaskGetTickCount();
+            if (now - refresh_last >= pdMS_TO_TICKS(1000)) {
+                refresh_last = now;
+                ui_pages[ui_page_cur]->refresh();
+            }
         }
     }
 }

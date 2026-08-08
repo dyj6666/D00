@@ -60,6 +60,12 @@ void BSP_LCD_Clear(uint16_t color);
 void BSP_LCD_Fill(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
                   uint16_t color);
 
+/* 批量像素读写（光标覆盖层/图像等精确恢复用） */
+void BSP_LCD_ReadPixels(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                        uint16_t *buf);
+void BSP_LCD_WritePixels(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                         const uint16_t *buf);
+
 /* 画点 / 线 / 矩形框 / 圆 */
 void BSP_LCD_DrawPoint(uint16_t x, uint16_t y, uint16_t color);
 void BSP_LCD_DrawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,

@@ -1,6 +1,8 @@
 #include "lcd_app.h"
 #include "bsp_lcd.h"
 #include "lcd_ui.h"
+#include "touch_svc.h"
+#include "bsp_touch.h"
 #include "event_bus.h"
 #include "app_config.h"
 #include "data_link.h"
@@ -226,11 +228,72 @@ static void lcd_bus_draw(void)
     lcd_page_footer("KEY: NEXT PAGE");
 }
 
+/* ================= TOUCH 页（触摸测试/调校观察） ================= */
+static const char *lcd_touch_state_name(uint8_t st)
+{
+    switch (st) {
+    case TOUCH_EVT_DOWN: return "DOWN";
+    case TOUCH_EVT_MOVE: return "MOVE";
+    case TOUCH_EVT_UP:   return "UP";
+    default:             return "NONE";
+    }
+}
+
+static void lcd_touch_refresh(void)
+{
+    const touch_svc_state_t *ts = TouchSvc_GetState();
+    bsp_touch_cal_t cal;
+    char buf[24];
+    BSP_Touch_GetCal(&cal);
+
+    snprintf(buf, sizeof(buf), "%s", lcd_touch_state_name(ts->state));
+    lcd_val(92, buf, BSP_LCD_COLOR_WHITE);
+    snprintf(buf, sizeof(buf), "%u,%u", (unsigned)ts->x, (unsigned)ts->y);
+    lcd_val(118, buf, BSP_LCD_COLOR_GREEN);
+    snprintf(buf, sizeof(buf), "%u,%u", (unsigned)ts->raw_x, (unsigned)ts->raw_y);
+    lcd_val(144, buf, BSP_LCD_COLOR_CYAN);
+    snprintf(buf, sizeof(buf), "%ld,%ld", (long)cal.xfac, (long)cal.yfac);
+    lcd_val(170, buf, BSP_LCD_COLOR_YELLOW);
+    snprintf(buf, sizeof(buf), "%ld,%ld", (long)cal.xc, (long)cal.yc);
+    lcd_val(196, buf, BSP_LCD_COLOR_YELLOW);
+}
+
+static void lcd_touch_draw(void)
+{
+    lcd_page_clear_content();
+    lcd_page_header("TOUCH");
+    BSP_LCD_ShowString(8, 36, "Touch Test", BSP_LCD_COLOR_YELLOW,
+                       BSP_LCD_FONT_16);
+    BSP_LCD_ShowString(8, 58, "Finger track / swipe page",
+                       BSP_LCD_COLOR_CYAN, BSP_LCD_FONT_12);
+    BSP_LCD_Fill(8, 80, (uint16_t)(BSP_LCD_GetWidth() - 9), 81,
+                 BSP_LCD_COLOR_GRAY);
+
+    BSP_LCD_ShowString(8, 94, "State", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 120, "Position", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 146, "Raw", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 172, "CalXY", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 198, "Center", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_touch_refresh();
+    lcd_page_footer("SWIPE: NEXT PAGE");
+}
+
+/* 触摸实时反馈：手指移动时刷新 Position（渲染任务上下文） */
+static void lcd_touch_event(uint8_t evt, uint16_t x, uint16_t y)
+{
+    if (evt == TOUCH_EVT_DOWN || evt == TOUCH_EVT_MOVE) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%u,%u", (unsigned)x, (unsigned)y);
+        lcd_val(118, buf, BSP_LCD_COLOR_GREEN);
+    }
+}
+
 /* ================= 页面注册 ================= */
 static const lcd_ui_page_t lcd_pages[] = {
-    { "HOME",   lcd_home_draw,   lcd_home_refresh },
-    { "SYSTEM", lcd_system_draw, lcd_system_refresh },
-    { "BUS",    lcd_bus_draw,    lcd_bus_refresh },
+    { "HOME",   lcd_home_draw,   lcd_home_refresh,   NULL },
+    { "SYSTEM", lcd_system_draw, lcd_system_refresh, NULL },
+    { "BUS",    lcd_bus_draw,    lcd_bus_refresh,    NULL },
+    { "TOUCH",  lcd_touch_draw,  lcd_touch_refresh,  lcd_touch_event },
 };
 
 /* ---------- 按键导航 ---------- */

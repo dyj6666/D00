@@ -24,6 +24,9 @@ typedef struct {
     const char *name;              /* 页面名（页眉显示） */
     void (*draw)(void);            /* 整页绘制（切页时调用） */
     void (*refresh)(void);         /* 1s 周期刷新（可选，可传 NULL） */
+    void (*touch)(uint8_t evt, uint16_t x, uint16_t y);  /* 可选：触摸回调
+                                        （DOWN/MOVE 实时送达 + TAP；渲染任务
+                                        上下文，框架仍负责光标与滑动切页） */
 } lcd_ui_page_t;
 
 /* ---------- 框架接口 ---------- */

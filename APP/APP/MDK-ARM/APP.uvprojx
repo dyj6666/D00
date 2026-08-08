@@ -2210,6 +2210,11 @@
               <FileType>1</FileType>
               <FilePath>..\SystemServices\lcd_test.c</FilePath>
             </File>
+            <File>
+              <FileName>touch_svc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\touch_svc.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -2279,6 +2284,11 @@
               <FileName>bsp_lcd.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\bsp_lcd.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_touch.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_touch.c</FilePath>
             </File>
           </Files>
         </Group>

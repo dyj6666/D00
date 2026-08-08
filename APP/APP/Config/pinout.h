@@ -17,6 +17,18 @@
 #define KEY0_Pin            GPIO_PIN_4
 #define KEY0_PRESSED_STATE  GPIO_PIN_RESET
 
+/* 触摸屏（XPT2046 电阻式，探索者V3 LCD 触摸接口） */
+#define TOUCH_CLK_GPIO_Port  GPIOB
+#define TOUCH_CLK_Pin        GPIO_PIN_0
+#define TOUCH_PEN_GPIO_Port  GPIOB
+#define TOUCH_PEN_Pin        GPIO_PIN_1
+#define TOUCH_MISO_GPIO_Port GPIOB
+#define TOUCH_MISO_Pin       GPIO_PIN_2
+#define TOUCH_CS_GPIO_Port   GPIOC
+#define TOUCH_CS_Pin         GPIO_PIN_13
+#define TOUCH_MOSI_GPIO_Port GPIOF
+#define TOUCH_MOSI_Pin       GPIO_PIN_11
+
 #define HOSTLINK_UART       huart1      /* 涓婁綅鏈洪�氫俊涓撶敤 */
 #define HOSTLINK_UART_IRQn  USART1_IRQn
 #define HOSTLINK_BAUDRATE   921600

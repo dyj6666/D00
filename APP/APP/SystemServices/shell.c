@@ -12,6 +12,8 @@
 #include "bsp_lcd.h"
 #include "lcd_ui.h"
 #include "lcd_test.h"
+#include "touch_svc.h"
+#include "bsp_touch.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -57,6 +59,7 @@ static void cmd_sg_i2c_complex(const char *args);
 static void cmd_ota_rbtest(const char *args);
 static void cmd_eb_stress(const char *args);
 static void cmd_lcd(const char *args);
+static void cmd_touch(const char *args);
 #if CRASH_INJECT_ENABLE
 static void cmd_crash(const char *args);
 #endif
@@ -92,6 +95,7 @@ static const cmd_entry_t cmd_table[] = {
     {"ota_rbtest",   "OTA rollback self-test (danger)", cmd_ota_rbtest},
     {"eb_stress",    "Event bus stress <n> <payload> <mode>", cmd_eb_stress},
     {"lcd",          "LCD test/info <info|test|clear|bench|dir|bl>", cmd_lcd},
+    {"touch",        "Touch <info|cal|test>", cmd_touch},
 #if CRASH_INJECT_ENABLE
     {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", cmd_crash},
 #endif
@@ -661,6 +665,53 @@ static void cmd_ota_rbtest(const char *args)
     Ota_ForceRollbackTest();
 }
 
+/* ================== 触摸屏命令 ==================
+ * 用法：touch <info|cal|test> */
+static void cmd_touch(const char *args)
+{
+    if (args == NULL || strcmp(args, "info") == 0) {
+        const touch_svc_state_t *ts = TouchSvc_GetState();
+        bsp_touch_cal_t cal;
+        BSP_Touch_GetCal(&cal);
+        LOG_Printf("TOUCH: state=%u pos=%u,%u raw=%u,%u gen=%lu\r\n",
+                   (unsigned)ts->state, (unsigned)ts->x, (unsigned)ts->y,
+                   (unsigned)ts->raw_x, (unsigned)ts->raw_y,
+                   (unsigned long)ts->gen);
+        LOG_Printf("TOUCH: cal xfac=%ld yfac=%ld xc=%ld yc=%ld valid=%u\r\n",
+                   (long)cal.xfac, (long)cal.yfac, (long)cal.xc, (long)cal.yc,
+                   (unsigned)cal.valid);
+        int32_t frx = 0, fry = 0;
+        uint8_t fok = BSP_Touch_ReadRawForce(&frx, &fry);
+        LOG_Printf("TOUCH: probe ok=%u raw=%ld,%ld\r\n",
+                   (unsigned)fok, (long)frx, (long)fry);
+        return;
+
+    }
+    if (strncmp(args, "nudge", 5) == 0) {
+        const char *p = args + 5;
+        int dx = atoi(p);
+        while (*p == ' ' || (*p >= '0' && *p <= '9') || *p == '-') p++;
+        int dy = atoi(p);
+        bsp_touch_cal_t cal;
+        BSP_Touch_GetCal(&cal);
+        if (cal.xfac != 0) cal.xc += (int32_t)dx * cal.xfac;
+        if (cal.yfac != 0) cal.yc += (int32_t)dy * cal.yfac;
+        BSP_Touch_SetCal(&cal);
+        LOG_Printf("TOUCH: nudge (%d,%d) -> xc=%ld yc=%ld\r\n",
+                   dx, dy, (long)cal.xc, (long)cal.yc);
+        return;
+    }
+    if (strcmp(args, "cal") == 0) {
+        TouchSvc_Calibrate();
+        return;
+    }
+    if (strcmp(args, "test") == 0) {
+        LcdUI_ShowPage(3);   /* TOUCH 测试页 */
+        LOG_Printf("TOUCH: test page shown, touch the screen\r\n");
+        return;
+    }
+    LOG_Printf("Usage: touch <info|cal|nudge <dx> <dy>|test>\r\n");
+}
 /* ================== LCD 测试命令 ==================
  * 用法：lcd <info|test|clear|bench|dir <0-7>|bl <0|1>>
  * 所有测试绘制均在 LcdUI 渲染任务内串行执行，与面板刷新完全互斥。 */
