@@ -21,6 +21,8 @@
 
 static uint8_t lcd_page = 0;
 static uint8_t lcd_ready = 0;
+static uint8_t lcd_test_mode = 0;
+static uint8_t lcd_dirty = 0;      /* 屏幕被外部绘制修改，暂停面板刷新 */
 static uint32_t lcd_run_prev = 0, lcd_idle_prev = 0;
 static uint8_t  lcd_cpu_pct = 0;
 
@@ -125,6 +127,21 @@ static void lcd_page_system_draw(void)
     UBaseType_t n = uxTaskGetSystemState(arr, LCD_MAX_TASKS, &total);
     if (n > 12) n = 12;
 
+    /* 固定排序：优先级降序（数值大优先），同优先级按名称，
+     * 避免 uxTaskGetSystemState 链表遍历顺序不稳定导致行跳动 */
+    for (UBaseType_t i = 1; i < n; i++) {
+        TaskStatus_t key = arr[i];
+        int j = (int)i - 1;
+        while (j >= 0 &&
+               (arr[j].uxCurrentPriority < key.uxCurrentPriority ||
+                (arr[j].uxCurrentPriority == key.uxCurrentPriority &&
+                 strcmp(arr[j].pcTaskName, key.pcTaskName) > 0))) {
+            arr[j + 1] = arr[j];
+            j--;
+        }
+        arr[j + 1] = key;
+    }
+
     lcd_text(4, 28, "TASK", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
     lcd_text(130, 28, "STACK", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
     lcd_text(210, 28, "PRIO", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
@@ -186,6 +203,8 @@ static void lcd_draw_page(void)
     else if (lcd_page == 1) lcd_page_system_draw();
     else lcd_page_bus_frame();
     lcd_footer(lcd_page);
+    lcd_dirty = 0;
+    vTaskDelay(pdMS_TO_TICKS(40));   /* 整页重绘后等待面板刷新（两帧），防撕裂 */
 }
 
 static void lcd_refresh_values(void)
@@ -199,7 +218,7 @@ static void lcd_refresh_values(void)
 static void lcd_on_tick(const message_t *msg)
 {
     (void)msg;
-    if (!lcd_ready) return;
+    if (!lcd_ready || lcd_test_mode || lcd_dirty) return;
     lcd_update_cpu();
     lcd_refresh_values();
 }
@@ -209,6 +228,8 @@ static void lcd_on_key(const message_t *msg)
     if (!lcd_ready || msg == NULL) return;
     if (msg->hdr.type == MSG_KEY_SHORT) {
         lcd_page = (uint8_t)((lcd_page + 1) % LCD_PAGE_COUNT);
+        lcd_test_mode = 0;   /* 按键退出测试模式 */
+        lcd_dirty = 0;
         lcd_draw_page();
     }
 }
@@ -226,4 +247,18 @@ void LcdApp_Init(void)
 
     EventBus_Subscribe(MSG_TICK_1S, lcd_on_tick);
     EventBus_Subscribe(MSG_KEY_SHORT, lcd_on_key);
+}
+
+void LcdApp_EnterTest(void)
+{
+    lcd_test_mode = 1;
+    lcd_dirty = 1;
+}
+
+void LcdApp_ExitTest(void)
+{
+    lcd_test_mode = 0;
+    if (lcd_ready) {
+        lcd_draw_page();   /* 重绘面板，恢复干净显示 */
+    }
 }

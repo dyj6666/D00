@@ -10,6 +10,7 @@
 #include "ota_agent.h"
 #include "err_mgr.h"
 #include "bsp_lcd.h"
+#include "lcd_app.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -671,7 +672,9 @@ static void cmd_lcd(const char *args)
         return;
     }
     if (strcmp(args, "clear") == 0) {
+        LcdApp_EnterTest();
         BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
+        LcdApp_ExitTest();
         LOG_Printf("LCD: cleared\r\n");
         return;
     }
@@ -681,7 +684,9 @@ static void cmd_lcd(const char *args)
         return;
     }
     if (strcmp(args, "bench") == 0) {
+        LcdApp_EnterTest();
         BSP_LCD_Bench();
+        /* 保持测试画面供观察；按键恢复 HOME */
         return;
     }
     if (strncmp(args, "dir", 3) == 0) {
@@ -690,6 +695,7 @@ static void cmd_lcd(const char *args)
             LOG_Printf("Usage: lcd dir <0-7>\r\n");
             return;
         }
+        LcdApp_EnterTest();
         BSP_LCD_ScanDir((uint8_t)d);
         /* 重画方向测试：四边色块边框（红上/绿下/蓝左/黄右）+ 中心十字 */
         uint16_t w = BSP_LCD_GetWidth(), h = BSP_LCD_GetHeight();
@@ -710,14 +716,17 @@ static void cmd_lcd(const char *args)
         return;
     }
     if (strcmp(args, "test") == 0) {
+        LcdApp_EnterTest();
         static const uint16_t bars[] = {
             BSP_LCD_COLOR_RED, BSP_LCD_COLOR_GREEN, BSP_LCD_COLOR_BLUE,
             BSP_LCD_COLOR_YELLOW, BSP_LCD_COLOR_CYAN, BSP_LCD_COLOR_MAGENTA,
             BSP_LCD_COLOR_WHITE, 0xFBE0
         };
-        /* 全屏彩条 */
+        /* 先清屏避免与既有显示重合 */
+        BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
         uint16_t w = BSP_LCD_GetWidth();
         uint16_t h = BSP_LCD_GetHeight();
+        /* 上半屏彩条 */
         for (int i = 0; i < 8; i++) {
             BSP_LCD_Fill((uint16_t)(i * w / 8), 0,
                          (uint16_t)((i + 1) * w / 8 - 1),
@@ -728,11 +737,13 @@ static void cmd_lcd(const char *args)
         BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 8), "D00 LCD TEST",
                            BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_24);
         BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 40),
-                           "abcdefghijklmnopqrstuvwxyz 0123456789",
+                           "abcdefghijklmnopqrstuvwxyz",
                            BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
-        BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 64),
-                           "ABCDEFGHIJKLMNOPQRSTUVWXYZ !@#$%^&*()",
-                           BSP_LCD_COLOR_CYAN, BSP_LCD_FONT_12);
+        BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 64), "0123456789",
+                           BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
+        BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 88),
+                           "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                           BSP_LCD_COLOR_CYAN, BSP_LCD_FONT_16);
         LOG_Printf("LCD: test pattern drawn\r\n");
         return;
     }

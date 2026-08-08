@@ -230,12 +230,19 @@ void lcd_set_cursor(uint16_t x, uint16_t y)
         lcd_wr_regno(lcddev.setycmd + 1);
         lcd_wr_data(y & 0XFF);
     }
-    else    /* 9341/5310/7789/7796/9806 等 设置坐标 */
+    else    /* 9341/5310/7789/7796/9806 等 设置坐标
+              * 注意：必须写完整单点窗口（x0=x1, y0=y1），
+              * 官方只写起点导致终点残留上次窗口值，
+              * 引发后续 fill/clear 只覆盖窄条而残留旧画面！ */
     {
         lcd_wr_regno(lcddev.setxcmd);
         lcd_wr_data(x >> 8);
         lcd_wr_data(x & 0XFF);
+        lcd_wr_data(x >> 8);
+        lcd_wr_data(x & 0XFF);
         lcd_wr_regno(lcddev.setycmd);
+        lcd_wr_data(y >> 8);
+        lcd_wr_data(y & 0XFF);
         lcd_wr_data(y >> 8);
         lcd_wr_data(y & 0XFF);
     }
@@ -820,19 +827,10 @@ void lcd_init(void)
  */
 void lcd_clear(uint16_t color)
 {
-    uint32_t totalpoint = (uint32_t)lcddev.width * lcddev.height;
-    lcd_set_cursor(0x00, 0x0000);   /* 设置光标位置 */
-    lcd_write_ram_prepare();        /* 开始写入GRAM */
-
-    volatile uint16_t *ram = &LCD->LCD_RAM;
-    while (totalpoint >= 8u) {       /* 8 像素循环展开 */
-        *ram = color; *ram = color; *ram = color; *ram = color;
-        *ram = color; *ram = color; *ram = color; *ram = color;
-        totalpoint -= 8u;
-    }
-    while (totalpoint--) {
-        *ram = color;
-    }
+    /* 全屏逐行填充（复用 lcd_fill 的逐行 SetCursor 可靠方案，
+     * 确保 GRAM 全屏覆盖，避免依赖 GRAM 递增方向导致的残留）。 */
+    lcd_fill(0, 0, (uint16_t)(lcddev.width - 1),
+             (uint16_t)(lcddev.height - 1), color);
 }
 
 /**
@@ -843,17 +841,16 @@ void lcd_clear(uint16_t color)
  */
 void lcd_fill(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint32_t color)
 {
-    /* 逐行 SetCursor + 连续写（官方可靠方案）。
-     * 注：单窗口连续写在部分控制器上存在递增方向兼容风险，
-     * 正确性优先；性能由字符连续写与写时序提速保证。 */
-    uint16_t i, j;
-    uint16_t xlen = (uint16_t)(ex - sx + 1);
-    for (i = sy; i <= ey; i++) {
-        lcd_set_cursor(sx, i);
-        lcd_write_ram_prepare();
-        for (j = 0; j < xlen; j++) {
-            LCD->LCD_RAM = (uint16_t)color;
-        }
+    /* 完整窗口 + 连续写：lcd_set_window 写全 CASET/PASET（x0/x1/y0/y1），
+     * 不依赖任何残留值，任意区域可靠全覆盖（且性能最优）。 */
+    uint32_t xlen = (uint32_t)(ex - sx + 1);
+    uint32_t ylen = (uint32_t)(ey - sy + 1);
+    uint32_t n = xlen * ylen;
+    lcd_set_window(sx, sy, (uint16_t)xlen, (uint16_t)ylen);
+    lcd_write_ram_prepare();
+    volatile uint16_t *ram = &LCD->LCD_RAM;
+    while (n--) {
+        *ram = (uint16_t)color;
     }
 }
 
@@ -1211,7 +1208,7 @@ void lcd_show_string(uint16_t x, uint16_t y, uint16_t width, uint16_t height, ui
         if (y >= height) break; /* 退出 */
 
         lcd_show_char(x, y, *p, size, 0, color);
-        x += size / 2;
+        x += size / 2 + 1;      /* 1px 字符间距，避免相邻字符视觉贴合/重叠 */
         p++;
     }
 }
@@ -1225,6 +1222,7 @@ void lcd_bench(void)
     uint32_t total_px = (uint32_t)lcddev.width * lcddev.height;
     LOG_Printf("LCD bench: %ux%u, FSMC BWTR(ADDSET/DATAST)\r\n",
                lcddev.width, lcddev.height);
+    lcd_clear(BLACK);   /* 先清屏，避免测试图案与既有显示重合 */
 
     /* 1. 全屏清屏 10 次 */
     t0 = DWT->CYCCNT;
