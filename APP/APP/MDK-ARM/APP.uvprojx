@@ -2200,6 +2200,16 @@
               <FileType>1</FileType>
               <FilePath>..\SystemServices\la_trigger.c</FilePath>
             </File>
+            <File>
+              <FileName>lcd_ui.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\lcd_ui.c</FilePath>
+            </File>
+            <File>
+              <FileName>lcd_test.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\lcd_test.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

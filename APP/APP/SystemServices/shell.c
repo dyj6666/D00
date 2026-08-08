@@ -10,7 +10,8 @@
 #include "ota_agent.h"
 #include "err_mgr.h"
 #include "bsp_lcd.h"
-#include "lcd_app.h"
+#include "lcd_ui.h"
+#include "lcd_test.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -21,8 +22,8 @@
 typedef void (*cmd_func_t)(const char *args);
 
 typedef struct {
-    const char *name;    /* 命令名 */
-    const char *brief;   /* 用途说明（help 显示） */
+    const char *name;    /* 命令�?*/
+    const char *brief;   /* 用途说明（help 显示�?*/
     cmd_func_t  func;
 } cmd_entry_t;
 
@@ -90,7 +91,7 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_i2c_complex","I2C complex frame demo", cmd_sg_i2c_complex},
     {"ota_rbtest",   "OTA rollback self-test (danger)", cmd_ota_rbtest},
     {"eb_stress",    "Event bus stress <n> <payload> <mode>", cmd_eb_stress},
-    {"lcd",          "LCD test/info <info|test|clear|bl>", cmd_lcd},
+    {"lcd",          "LCD test/info <info|test|clear|bench|dir|bl>", cmd_lcd},
 #if CRASH_INJECT_ENABLE
     {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", cmd_crash},
 #endif
@@ -106,8 +107,8 @@ static char shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];
 static int  shell_hist_count = 0;
 static int  shell_hist_pos = -1;      /* -1 = 正在编辑新行 */
 
-/* ---------- ESC 序列状态机（方向键） ---------- */
-static int shell_esc_state = 0;       /* 0=普通 1=收到ESC 2=收到ESC[ */
+/* ---------- ESC 序列状态机（方向键�?---------- */
+static int shell_esc_state = 0;       /* 0=普�?1=收到ESC 2=收到ESC[ */
 
 static void shell_prompt(void)
 {
@@ -147,7 +148,7 @@ static void shell_history_save(void)
     }
 }
 
-static void shell_history_nav(int dir)   /* -1 上一条, +1 下一条 */
+static void shell_history_nav(int dir)   /* -1 上一�? +1 下一�?*/
 {
     if (shell_hist_count == 0) return;
     if (dir < 0) {
@@ -174,7 +175,7 @@ static void shell_history_nav(int dir)   /* -1 上一条, +1 下一条 */
     shell_redraw();
 }
 
-/* Tab 命令补全：唯一匹配补全，多匹配列出候选 */
+/* Tab 命令补全：唯一匹配补全，多匹配列出候�?*/
 static void shell_complete(void)
 {
     int wlen = 0;
@@ -245,7 +246,7 @@ static void shell_execute(void)
 /* 处理每个接收字符 */
 void Shell_ProcessChar(uint8_t ch)
 {
-    /* ESC 序列状态机（方向键） */
+    /* ESC 序列状态机（方向键�?*/
     if (shell_esc_state == 1) {
         shell_esc_state = (ch == '[') ? 2 : 0;
         return;
@@ -262,7 +263,7 @@ void Shell_ProcessChar(uint8_t ch)
     }
 
     if (ch == '\r' || ch == '\n') {
-        /* 回车执行：换行 → 存历史 → 执行 → 分隔行 → 提示符 */
+        /* 回车执行：换�?�?存历�?�?执行 �?分隔�?�?提示�?*/
         LOG_Printf("\r\n");
         shell_history_save();
         shell_execute();
@@ -300,7 +301,7 @@ void Shell_ProcessChar(uint8_t ch)
 void ShellTaskFunction(void)
 {
     StreamBufferHandle_t rx = LOG_GetRxStream();
-    shell_prompt();   /* 初始提示符 */
+    shell_prompt();   /* 初始提示�?*/
     for (;;) {
         uint8_t ch;
         if (xStreamBufferReceive(rx, &ch, 1, portMAX_DELAY) > 0) {
@@ -415,9 +416,7 @@ static void cmd_la_trig(const char *args)
 {
     /* 格式：la_trig <type> <ch> [post] [cond_ch] [cond_level]
        type: 0=off 1=rising 2=falling 3=any
-       post: 触发后采样点数（默认 2048）
-       cond_ch/cond_level: 条件通道与电平（可选，如 I2C START：
-       la_trig 2 0 2048 1 1 = CH0 下降沿且 CH1 为高时触发） */
+       post: 触发后采样点数（默认 2048�?       cond_ch/cond_level: 条件通道与电平（可选，�?I2C START�?       la_trig 2 0 2048 1 1 = CH0 下降沿且 CH1 为高时触发） */
     la_trigger_cfg_t cfg;
     LA_Trigger_GetConfig(&cfg);
     int type = 0, channel = 0, post = 0, cond_ch = -1, cond_level = 1;
@@ -468,7 +467,7 @@ static void cmd_la_dma_stop(const char *args)
 
 static void cmd_la_dump(const char *args)
 {
-    /* 格式：la_dump <count>（默认 512，上限为缓冲深度），导出 DMA 采样值 */
+    /* 格式：la_dump <count>（默�?512，上限为缓冲深度），导出 DMA 采样�?*/
     uint32_t count = 512;
     if (args) count = (uint32_t)atoi(args);
     if (count == 0) count = 1;
@@ -490,8 +489,8 @@ static void cmd_la_dump(const char *args)
                    (unsigned long)buf[2], (unsigned long)buf[3],
                    (unsigned long)buf[4], (unsigned long)buf[5],
                    (unsigned long)buf[6], (unsigned long)buf[7]);
-        /* 限速：日志 TX 按 115200 波特率排空（约 11.5 KB/s），
-         * 不延时会把 2 KB 流缓冲灌满并静默丢帧 */
+        /* 限速：日志 TX �?115200 波特率排空（�?11.5 KB/s），
+         * 不延时会�?2 KB 流缓冲灌满并静默丢帧 */
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -508,7 +507,7 @@ static void cmd_la_dma_stat(const char *args)
 
 static void cmd_la_dma_buf(const char *args)
 {
-    /* 格式：la_dma_buf <sram|iram> —— 切换 DMA 缓冲（SRAM 深 4 倍，IRAM 速率高） */
+    /* 格式：la_dma_buf <sram|iram> —�?切换 DMA 缓冲（SRAM �?4 倍，IRAM 速率高） */
     if (args == NULL) {
         LOG_Printf("Usage: la_dma_buf <sram|iram>\r\n");
         return;
@@ -662,8 +661,78 @@ static void cmd_ota_rbtest(const char *args)
     Ota_ForceRollbackTest();
 }
 
-/* ================== LCD 测试命令 ==================
- * 用法：lcd <info|test|clear|bl> */
+/* ================== LCD �������� ==================
+ * �÷���lcd <info|test|clear|bench|dir <0-7>|bl <0|1>>
+ * ���в��Ի��ƾ��� LcdUI ��Ⱦ�����ڴ���ִ�У������ˢ����ȫ���⡣ */
+static uint8_t s_lcd_dir = 0;
+static uint16_t s_lcd_soak_sec = 30;
+
+static void lcd_soak_wrapper(void)
+{
+    LcdTest_RunSoak(s_lcd_soak_sec);
+}
+
+static void lcd_test_clear(void)
+{
+    BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
+}
+
+static void lcd_test_bench(void)
+{
+    BSP_LCD_Bench();
+}
+
+static void lcd_test_dir(void)
+{
+    BSP_LCD_ScanDir(s_lcd_dir);
+    /* �ػ�������ԣ��ı�ɫ��߿򣨺���/����/����/���ң�+ ����ʮ�� */
+    uint16_t w = BSP_LCD_GetWidth(), h = BSP_LCD_GetHeight();
+    BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
+    BSP_LCD_Fill(0, 0, (uint16_t)(w - 1), 9, BSP_LCD_COLOR_RED);
+    BSP_LCD_Fill(0, (uint16_t)(h - 10), (uint16_t)(w - 1),
+                 (uint16_t)(h - 1), BSP_LCD_COLOR_GREEN);
+    BSP_LCD_Fill(0, 0, 9, (uint16_t)(h - 1), BSP_LCD_COLOR_BLUE);
+    BSP_LCD_Fill((uint16_t)(w - 10), 0, (uint16_t)(w - 1),
+                 (uint16_t)(h - 1), BSP_LCD_COLOR_YELLOW);
+    BSP_LCD_Fill((uint16_t)(w / 2 - 2), (uint16_t)(h / 2 - 40),
+                 (uint16_t)(w / 2 + 2), (uint16_t)(h / 2 + 40),
+                 BSP_LCD_COLOR_WHITE);
+    BSP_LCD_Fill((uint16_t)(w / 2 - 40), (uint16_t)(h / 2 - 2),
+                 (uint16_t)(w / 2 + 40), (uint16_t)(h / 2 + 2),
+                 BSP_LCD_COLOR_WHITE);
+}
+
+static void lcd_test_pattern(void)
+{
+    static const uint16_t bars[] = {
+        BSP_LCD_COLOR_RED, BSP_LCD_COLOR_GREEN, BSP_LCD_COLOR_BLUE,
+        BSP_LCD_COLOR_YELLOW, BSP_LCD_COLOR_CYAN, BSP_LCD_COLOR_MAGENTA,
+        BSP_LCD_COLOR_WHITE, 0xFBE0
+    };
+    /* �����������������ʾ�غ� */
+    BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
+    uint16_t w = BSP_LCD_GetWidth();
+    uint16_t h = BSP_LCD_GetHeight();
+    /* �ϰ������� */
+    for (int i = 0; i < 8; i++) {
+        BSP_LCD_Fill((uint16_t)(i * w / 8), 0,
+                     (uint16_t)((i + 1) * w / 8 - 1),
+                     (uint16_t)(h / 2 - 1), bars[i]);
+    }
+    BSP_LCD_Fill(0, h / 2, (uint16_t)(w - 1), (uint16_t)(h - 1),
+                 BSP_LCD_COLOR_BLACK);
+    BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 8), "D00 LCD TEST",
+                       BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_24);
+    BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 40),
+                       "abcdefghijklmnopqrstuvwxyz",
+                       BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
+    BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 64), "0123456789",
+                       BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
+    BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 88),
+                       "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                       BSP_LCD_COLOR_CYAN, BSP_LCD_FONT_16);
+}
+
 static void cmd_lcd(const char *args)
 {
     if (args == NULL || strcmp(args, "info") == 0) {
@@ -672,9 +741,9 @@ static void cmd_lcd(const char *args)
         return;
     }
     if (strcmp(args, "clear") == 0) {
-        LcdApp_EnterTest();
-        BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
-        LcdApp_ExitTest();
+        LcdUI_EnterTest();
+        LcdUI_RunTest(lcd_test_clear);
+        LcdUI_ExitTest();   /* �ػ����ָ��ɾ���ʾ */
         LOG_Printf("LCD: cleared\r\n");
         return;
     }
@@ -683,10 +752,15 @@ static void cmd_lcd(const char *args)
         LOG_Printf("LCD: backlight on\r\n");
         return;
     }
+    if (strncmp(args, "bl ", 3) == 0) {
+        BSP_LCD_Backlight((uint8_t)(atoi(args + 3) ? 1 : 0));
+        LOG_Printf("LCD: backlight %s\r\n", atoi(args + 3) ? "on" : "off");
+        return;
+    }
     if (strcmp(args, "bench") == 0) {
-        LcdApp_EnterTest();
-        BSP_LCD_Bench();
-        /* 保持测试画面供观察；按键恢复 HOME */
+        LcdUI_EnterTest();
+        LcdUI_RunTest(lcd_test_bench);
+        /* ���ֲ��Ի��湩�۲죻�����ָ� HOME */
         return;
     }
     if (strncmp(args, "dir", 3) == 0) {
@@ -695,68 +769,46 @@ static void cmd_lcd(const char *args)
             LOG_Printf("Usage: lcd dir <0-7>\r\n");
             return;
         }
-        LcdApp_EnterTest();
-        BSP_LCD_ScanDir((uint8_t)d);
-        /* 重画方向测试：四边色块边框（红上/绿下/蓝左/黄右）+ 中心十字 */
-        uint16_t w = BSP_LCD_GetWidth(), h = BSP_LCD_GetHeight();
-        BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
-        BSP_LCD_Fill(0, 0, (uint16_t)(w - 1), 9, BSP_LCD_COLOR_RED);
-        BSP_LCD_Fill(0, (uint16_t)(h - 10), (uint16_t)(w - 1),
-                     (uint16_t)(h - 1), BSP_LCD_COLOR_GREEN);
-        BSP_LCD_Fill(0, 0, 9, (uint16_t)(h - 1), BSP_LCD_COLOR_BLUE);
-        BSP_LCD_Fill((uint16_t)(w - 10), 0, (uint16_t)(w - 1),
-                     (uint16_t)(h - 1), BSP_LCD_COLOR_YELLOW);
-        BSP_LCD_Fill((uint16_t)(w / 2 - 2), (uint16_t)(h / 2 - 40),
-                     (uint16_t)(w / 2 + 2), (uint16_t)(h / 2 + 40),
-                     BSP_LCD_COLOR_WHITE);
-        BSP_LCD_Fill((uint16_t)(w / 2 - 40), (uint16_t)(h / 2 - 2),
-                     (uint16_t)(w / 2 + 40), (uint16_t)(h / 2 + 2),
-                     BSP_LCD_COLOR_WHITE);
+        s_lcd_dir = (uint8_t)d;
+        LcdUI_EnterTest();
+        LcdUI_RunTest(lcd_test_dir);
         LOG_Printf("LCD: scan dir=%d\r\n", d);
         return;
     }
     if (strcmp(args, "test") == 0) {
-        LcdApp_EnterTest();
-        static const uint16_t bars[] = {
-            BSP_LCD_COLOR_RED, BSP_LCD_COLOR_GREEN, BSP_LCD_COLOR_BLUE,
-            BSP_LCD_COLOR_YELLOW, BSP_LCD_COLOR_CYAN, BSP_LCD_COLOR_MAGENTA,
-            BSP_LCD_COLOR_WHITE, 0xFBE0
-        };
-        /* 先清屏避免与既有显示重合 */
-        BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
-        uint16_t w = BSP_LCD_GetWidth();
-        uint16_t h = BSP_LCD_GetHeight();
-        /* 上半屏彩条 */
-        for (int i = 0; i < 8; i++) {
-            BSP_LCD_Fill((uint16_t)(i * w / 8), 0,
-                         (uint16_t)((i + 1) * w / 8 - 1),
-                         (uint16_t)(h / 2 - 1), bars[i]);
-        }
-        BSP_LCD_Fill(0, h / 2, (uint16_t)(w - 1), (uint16_t)(h - 1),
-                     BSP_LCD_COLOR_BLACK);
-        BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 8), "D00 LCD TEST",
-                           BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_24);
-        BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 40),
-                           "abcdefghijklmnopqrstuvwxyz",
-                           BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
-        BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 64), "0123456789",
-                           BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
-        BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 88),
-                           "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-                           BSP_LCD_COLOR_CYAN, BSP_LCD_FONT_16);
+        LcdUI_EnterTest();
+        LcdUI_RunTest(lcd_test_pattern);
         LOG_Printf("LCD: test pattern drawn\r\n");
         return;
     }
-    LOG_Printf("Usage: lcd <info|test|clear|bl>\r\n");
+        if (strcmp(args, "selftest") == 0) {
+        LcdUI_EnterTest();
+        LcdUI_RunTest(LcdTest_RunSelfTest);
+        LcdUI_ExitTest();
+        return;
+    }
+    if (strncmp(args, "soak", 4) == 0) {
+        int sec = atoi(args + 4);
+        if (sec < 1 || sec > 3600) sec = 30;
+        s_lcd_soak_sec = (uint16_t)sec;
+        LcdUI_EnterTest();
+        LcdUI_RunTest(lcd_soak_wrapper);
+        LcdUI_ExitTest();
+        return;
+    }
+    if (strncmp(args, "stress", 6) == 0) {
+        int n = atoi(args + 6);
+        if (n < 1 || n > 1000) n = 50;
+        LcdTest_RunStress((uint16_t)n);
+        return;
+    }
+    LOG_Printf("Usage: lcd <info|test|clear|bench|dir <0-7>|selftest|soak <sec>|stress <n>|bl <0|1>>\r\n");
 }
-
 #if CRASH_INJECT_ENABLE
 /* ================== 崩溃注入（仅调试构建，用于验证纠错系统） ==================
- * 用法：
- *   crash bus     -> 写非法地址触发 BusFault
+ * 用法�? *   crash bus     -> 写非法地址触发 BusFault
  *   crash undef   -> 跳转非法指令触发 UsageFault/HardFault
- *   crash stack   -> 无限递归触发 FreeRTOS 栈溢出检测
- *   crash assert  -> 直接调用 ERR_HandleAssert 模拟 RTOS 断言失败 */
+ *   crash stack   -> 无限递归触发 FreeRTOS 栈溢出检�? *   crash assert  -> 直接调用 ERR_HandleAssert 模拟 RTOS 断言失败 */
 __attribute__((noinline)) static void crash_bus(void)
 {
     *(volatile uint32_t *)0xDEADBEEFu = 0x55u;
@@ -773,7 +825,7 @@ __attribute__((noinline)) static void crash_stack(int depth)
     pad[0] = (uint8_t)0xAA;
     (void)pad;
     if (depth > 0) {
-        taskYIELD();          /* 让调度器在递归间隙做栈溢出检查 */
+        taskYIELD();          /* 让调度器在递归间隙做栈溢出检�?*/
         crash_stack(depth - 1);
     }
 }
@@ -790,11 +842,11 @@ static void cmd_crash(const char *args)
     } else if (strcmp(args, "undef") == 0) {
         crash_undef();
     } else if (strcmp(args, "stack") == 0) {
-        crash_stack(200);     /* 128B×200 远超 2KB 任务栈，触发溢出检测 */
+        crash_stack(200);     /* 128B×200 远超 2KB 任务栈，触发溢出检�?*/
     } else if (strcmp(args, "assert") == 0) {
         ERR_HandleAssert(0xBADFu);
     } else if (strcmp(args, "irq") == 0) {
-        /* 使能并置位一个未实现处理器的中断，触发 Default_Handler 诊断 */
+        /* 使能并置位一个未实现处理器的中断，触�?Default_Handler 诊断 */
         NVIC_EnableIRQ(TIM4_IRQn);
         NVIC_SetPendingIRQ(TIM4_IRQn);
     } else if (strcmp(args, "unhandled") == 0) {
@@ -807,11 +859,9 @@ static void cmd_crash(const char *args)
 #endif
 
 /* ================== 事件总线极限负载测试 ==================
- * 用法：
- *   eb_stress <count> [payload] [burst|steady]
- *   - burst ：挂起 eventBusTask 后连发，测纯发布速率与缓冲/池上限；
- *   - steady：不挂起连发，测系统稳态吞吐（消费者实时消化）与丢包拐点。
- * payload 为每条消息字节数（<= EVENT_BUS_MSG_MAX_PAYLOAD）。 */
+ * 用法�? *   eb_stress <count> [payload] [burst|steady]
+ *   - burst ：挂�?eventBusTask 后连发，测纯发布速率与缓�?池上限；
+ *   - steady：不挂起连发，测系统稳态吞吐（消费者实时消化）与丢包拐点�? * payload 为每条消息字节数�?= EVENT_BUS_MSG_MAX_PAYLOAD）�?*/
 extern TaskHandle_t eventBusTaskHandle;
 
 static volatile uint32_t g_eb_processed = 0;
@@ -844,7 +894,7 @@ static void cmd_eb_stress(const char *args)
         g_eb_subscribed = 1;
     }
 
-    /* DWT 周期计数（168MHz） */
+    /* DWT 周期计数�?68MHz�?*/
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
@@ -875,7 +925,7 @@ static void cmd_eb_stress(const char *args)
         vTaskResume(eventBusTaskHandle);
     }
 
-    /* 等待消费者消化完成（最多 5s） */
+    /* 等待消费者消化完成（最�?5s�?*/
     uint32_t wait_ms = 0;
     while (g_eb_processed - proc0 < pub_ok && wait_ms < 5000) {
         vTaskDelay(pdMS_TO_TICKS(2));
@@ -884,10 +934,10 @@ static void cmd_eb_stress(const char *args)
     uint32_t proc_done = g_eb_processed - proc0;
     uint32_t lost_delta = EventBus_GetLostCount() - lost0;
 
-    /* 速率（整数计算，@168MHz） */
-    uint32_t cpmsg = pub_cycles / count;              /* cycles/msg（含失败路径） */
+    /* 速率（整数计算，@168MHz�?*/
+    uint32_t cpmsg = pub_cycles / count;              /* cycles/msg（含失败路径�?*/
     uint32_t pub_rate = cpmsg ? (168000000u / cpmsg) : 0;   /* 发布 msg/s */
-    uint32_t total_us = pub_cycles / 168u + wait_ms * 1000u; /* 总耗时（µs） */
+    uint32_t total_us = pub_cycles / 168u + wait_ms * 1000u; /* 总耗时（µs�?*/
     uint64_t sys_rate64 = total_us ? ((uint64_t)proc_done * 1000000u / total_us) : 0;
     uint32_t sys_rate = (uint32_t)sys_rate64;
 

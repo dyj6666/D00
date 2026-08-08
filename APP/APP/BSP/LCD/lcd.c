@@ -153,6 +153,19 @@ uint32_t lcd_read_point(uint16_t x, uint16_t y)
 }
 
 /**
+ * @brief       读取指定点 RGB565（ST7789 等 16 位 GRAM 直接返回）
+ * @param       x,y:坐标
+ * @retval      该点 RGB565 颜色（读回失败/越界返回 0）
+ * @note        供自动化测试做 GRAM 完整性校验（写-读回比对）。
+ */
+uint16_t lcd_read_point_rgb565(uint16_t x, uint16_t y)
+{
+    /* ST7789 走官方 2 次读 + RGB565 还原公式（与 lcd_read_point 一致），
+     * 读回值应等于写入值，便于测试直接比对。 */
+    return (uint16_t)lcd_read_point(x, y);
+}
+
+/**
  * @brief       LCD开启显示
  * @param       无
  * @retval      无
@@ -1193,6 +1206,9 @@ void lcd_show_xnum(uint16_t x, uint16_t y, uint32_t num, uint8_t len, uint8_t si
  */
 void lcd_show_string(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint8_t size, char *p, uint16_t color)
 {
+    /* 整串渲染（v129）在实机出现斜体/页面残留交互问题，为稳妥恢复 v128
+     * 已验证的逐字符路径：每字符一次完整窗口，无跨行偏移/残留风险。
+     * 字符级性能优化保留在 lcd_show_char（窗口连续写，约 5 倍）。 */
     uint8_t x0 = x;
     width += x;
     height += y;

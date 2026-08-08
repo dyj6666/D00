@@ -266,6 +266,7 @@ void lcd_ssd_backlight_set(uint8_t pwm);    /* SSD1963 背光控制 */
 void lcd_write_ram_prepare(void);                               /* 准备写GRAM */ 
 void lcd_set_cursor(uint16_t x, uint16_t y);                    /* 设置光标 */ 
 uint32_t lcd_read_point(uint16_t x, uint16_t y);                /* 读点(32位颜色,兼容LTDC)  */
+uint16_t lcd_read_point_rgb565(uint16_t x, uint16_t y);         /* 读点(RGB565,自动化测试用) */
 void lcd_draw_point(uint16_t x, uint16_t y, uint32_t color);    /* 画点(32位颜色,兼容LTDC) */
 
 void lcd_clear(uint16_t color);                                                                 /* LCD清屏 */

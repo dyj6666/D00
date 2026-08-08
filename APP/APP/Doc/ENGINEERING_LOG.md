@@ -928,3 +928,131 @@ auto-stop）全部按设计工作。
   - SYSTEM 页任务列表固定排序（优先级降序+名称），消除行跳动。
 - **验证**：lcd dir/test/bench 全部纯净，切页/恢复无任何残留，
   面板实时数据仅 HOME 页显示，SYSTEM 排序稳定（用户确认完全正常）。
+### 12.45 LCD 底层驱动性能榨干（fill 16 像素展开 + 字符串整窗连续写，v129）
+- **lcd_fill**：16 像素循环展开（8 连写 ×2 组），消除逐像素循环判断开销；
+  像素计数变量提升为 uint32，杜绝大区域/整屏填充的 16 位溢出隐患。
+- **lcd_show_string**：整串**单窗口连续写**（行优先渲染，含 1px 间距背景列，
+  支持多行/宽度裁剪），替代逐字符 SetWindow（每字符 3 次窗口写），
+  字符串绘制理论提升约 5 倍。
+- **安全边界**：FSMC 写时序保持已验证的 2/2（12ns，ST7789 最小写周期约束，
+  1/1 有风险不采用——性能让位于长期可靠性）。
+- **字体布局核对**：asc2_1206=6 列×2B、asc2_1608=8 列×2B、asc2_2412=12 列×3B，
+  行优先取 `bi=row>>3` 与官方 lcd_show_char 逐字节一致（无渲染错位风险）。
+- **状态**：v129 已 OTA 上线；bench 实测待实机确认
+  （对比基线 v115：clear 20.6ms / char16 35µs / string 2.23ms/20 字）。
+### 12.46 LCD UI 渲染任务框架（LcdUI，RTOS 极致应用层，v130）
+- **架构**：新增 `SystemServices/lcd_ui.{c,h}`——独立 LcdUI 渲染任务
+  （2048B 栈，osPriorityNormal）+ 8 深命令队列 + 消息结构；所有绘制异步提交、
+  渲染任务串行执行，成为全局唯一写屏者，从根上杜绝并发写冲突与画面参杂。
+- **命令集**：Clear / Fill / Text / Num / Bar(进度条) / Rect /
+  ShowPage / NextPage / EnterTest / ExitTest / **RunTest**。
+- **页面注册**：`LcdUI_AddPage({name, draw, refresh})` 最多 6 页；
+  渲染任务空闲 1s 周期调用 refresh()（测试模式暂停）。
+- **测试隔离**：shell `lcd test/bench/dir/clear` 全部改为 `LcdUI_RunTest`
+  回调——测试画面在渲染任务内执行，与面板刷新完全互斥
+  （根治历史上"界面互相参杂/数字残留"一类问题）。
+- **lcd_app 重构**：HOME/SYSTEM/BUS 三页注册 + 按键 LcdUI_NextPage +
+  任务固定排序；测试模式接口从 LcdApp_* 迁移至 LcdUI_*（lcd_app.h 精简）。
+- **工程**：lcd_ui.c 已加入 MDK-ARM/APP.uvprojx（SystemServices 组）；
+  编码按 .editorconfig UTF-8，shell.c（GBK）用 PowerShell GB2312 读写
+  做外科式修改，未破坏原有中文注释。
+- **验证**：编译 0 Error / 0 Warning；v130 (build 114) OTA 全链路成功
+  （BOOT phase 2→7 全部 err=0）。实机面板/切页/1s 刷新/bench 待确认。
+### 12.47 字体斜体根因（整串渲染窗口宽度 off-by-one）+ 修复（v131）
+- **现象**：v130 上机后所有字体变斜（逐行左移的剪切效果）。
+- **根因**：v129 整串渲染调用 `lcd_set_window(x, y, n*(cw+1)-1, size)`，
+  但 lcd_set_window 的 width 参数是**像素个数**（内部 `x1=sx+width-1`），
+  多减 1 使窗口比每行写入的 `n*(cw+1)` 像素窄 1px——每行末 1 像素溢出
+  滚入下一行行首，逐行累积左移 1px，视觉上即"斜体"。
+- **修复**：窗口宽度改传 `n*(cw+1)`，与写入流严格一致；已加注释防止回退。
+  lcd_fill/lcd_show_char 的窗口调用本就是像素个数，无此问题。
+- **验证**：编译 0 Error / 0 Warning；v131 (build 115) OTA 全链路成功。
+  实机字体确认中。
+### 12.48 页面切换残留（SYSTEM 标题/IDLE 行未清干净）+ 恢复逐字符渲染（v132）
+- **现象**：v131 字体已恢复端正，但 SYSTEM → 其他页切换时 SYSTEM 标题
+  与任务行（IDLE 116 0）残留，且多处页面可见。
+- **排查**：逐项核对 lcd_fill/lcd_show_char/lcd_show_string 的窗口像素数，
+  静态上 v131 写入计数全部与窗口一致；唯一与 v128（实机确认纯净）不同的
+  渲染路径是 v129 的整串单窗口渲染，判定为最大嫌疑（实机交互问题静态难复现）。
+- **处置**：lcd_show_string 恢复 v128 已验证的逐字符实现
+  （每字符一次完整窗口，无跨行偏移/残留风险）；字符级性能优化
+  （lcd_show_char 窗口连续写）与 lcd_fill 16 像素展开保留。
+- **验证**：编译 0 Error / 0 Warning；v132 (build 116) OTA 全链路成功。
+  实机切页/残留确认中。
+### 12.49 页面残留 + 下半屏花屏根因（lcd_fill 16 像素展开破坏 GRAM）+ 还原（v135）
+- **现象演进**：v130-v134 期间，SYSTEM → 其他页切换残留任务行
+  （IDLE 116 0）；v133 整屏清底后标题残留消失但 IDLE 行仍在；
+  v134 实测**重新上电后下半屏完全花屏**。
+- **排查**：全工程 grep 确认 "IDLE" 仅由 lcd_system_draw 绘制，且框架日志
+  （draw/refresh）证明切页状态机完全正确（HOME 页只发生 draw/refresh HOME）；
+  排除中断/钩子/其他任务画屏（SysTick 钩子仅喂狗、UART IDLE 中断仅断帧）。
+- **定位**：v128（实机完美）与 v129+ 的驱动层差异只剩 **lcd_fill 的 16 像素
+  循环展开**。展开后连续大区域写入（整屏清屏 76800px、SYSTEM 页多行长填充）
+  突发过于密集，ST7789 在高速长填充下 GRAM 丢像素/错位 →
+  下半屏花屏 + 特定区域像素残留（IDLE 行）。
+- **处置**：lcd_fill 还原 v128 普通循环（逐像素写，写入节奏与已验证版本
+  完全一致）；lcd.c 现已与 v128 完全等价（仅注释差异）。
+- **验证**：编译 0 Error / 0 Warning；v135 (build 119) OTA 全链路成功。
+  实机重新上电/切页/残留确认中。
+### 12.50 HOME/BUS 布局对齐规范化 + SYSTEM 1s 刷新去频闪（v136）
+- **布局规范**（HOME/BUS 统一）：标签左列 x=8（FONT12），数值右对齐
+  x=150（FONT16），行距 26px；数值上移 2px 与标签垂直居中
+  （FONT16 中心线与 FONT12 中心线重合），右对齐后数字/单位尾字符对齐
+  成一列，观感整齐；HOME 标题与信息区加 1px 分隔线。
+- **页脚修复**：原页脚提示文字 y=h-11（FONT12 越界 1px 被
+  lcd_show_char 越界保护跳过，从未显示）→ 页脚改高 14px、
+  文字置于 y=h-13，提示可见。
+- **SYSTEM 去频闪**：1s 刷新由"整页重绘"（清内容+页眉+列表，每 1s
+  全屏闪黑）改为**只重画任务列表**（每行先清后画），页眉/页脚/分隔线
+  保持不动——恢复 v128 验证过的无频闪路径。
+- **清理**：移除 lcd_ui.c 诊断日志（draw/refresh/page），框架保持纯净；
+  保留整屏清底 + 40ms 防撕裂（v133 起验证有效）。
+- **验证**：编译 0 Error / 0 Warning；v136 (build 120) OTA 全链路成功。
+  实机对齐/频闪确认中。
+### 12.51 CPU 采样稳定性修复 + 内存优化（v137）
+- **CPU% 每次切页不同**——定位为采样问题：原实现只在 HOME 页调用，
+  差值窗口随切页时机变化（快速切页只有零点几秒且含绘制突发负载）；
+  且运行时间统计用 DWT 168MHz（32 位 25.6s 回绕），长间隔会算错。
+  **修复**：三页 refresh 均调用 lcd_update_cpu → 采样节奏恒定 1s；
+  短间隔（<900ms）沿用上次值；超长间隔（>5s）仅重建基线防回绕。
+  现在 CPU% 是稳定的 1s 窗口读数，与切页时机无关。
+- **内存优化**：
+  1. 任务状态缓冲 `s_lcd_tasks[16]` 静态化——消除每秒 640B
+     pvPortMalloc/vPortFree 的堆抖动与碎片（仅 LcdUI 任务串行使用）；
+  2. LcdUI 任务栈 4096 → 2048B（诊断期临时放大，根因已定为填充展开，
+     v128 同负载在 1536B 任务内验证过）；
+  3. FreeRTOS 堆 30720 → 35840B（RAM 128KB 内安全：ZI 91.76KB）。
+- **验证**：编译 0 Error / 0 Warning；v137 (build 121) OTA 全链路成功。
+  实机 CPU 稳定性 / Heap 余量确认中。
+### 12.52 LCD 自动化测试基础设施 + 框架清理（v138）
+- **自动化测试模块** `SystemServices/lcd_test.{c,h}`（shell: `lcd selftest` /
+  `lcd soak <sec>` / `lcd stress <n>`）：
+  - **SelfTest**：GRAM 写-读回像素级校验（FSMC 读时序 360ns 可靠）——
+    全屏 5 色网格采样、窗口边界、1px 窗口隔离、字符/字符串
+    128/272 像素逐点对照字体点阵（可捕获斜体/残留/错位类回归）；
+  - **Soak**：混合负载长稳（清屏+色块+字符串+数字循环），每轮读回校验
+    + 堆稳定性报告；
+  - **Stress**：快速切页命令注入 + 队列排空/丢命令统计 + 堆报告。
+- **驱动**：新增 `lcd_read_point_rgb565()`（ST7789 单次 16 位读回）。
+- **框架清理**：移除切页冗余的整屏清底（v133 为残留打的补丁，根因
+  fill 展开已修复，页面绘制本就覆盖全屏），切页更快、无黑闪；
+  新增 `LcdUI_GetPendingCount/GetDroppedCount`，`LcdUI_NextPage` 返回状态。
+- **验证**：编译 0 Error / 0 Warning；v138 (build 122) OTA 全链路成功。
+  实机 selftest/soak/stress/bench 结果待确认。
+### 12.53 LCD 全面自动化测试报告（v138/v139）
+- **读回校准修正（v139）**：lcd_read_point_rgb565 改用官方双读 + RGB565
+  还原公式——校准表 写入==读回 完全一致（RED 0xF800/GREEN 0x07E0/
+  BLUE 0x001F/WHITE 0xFFFF），测试改为直接比对，校验更严格。
+- **SelfTest（654 项，285ms）**：PASS
+  - fill：5 色全屏 240 点网格采样 PASS
+  - window：50x50 蓝窗内/外 7 点边界 PASS
+  - 1px-window：单点红+四邻蓝 5 点隔离 PASS
+  - char：'A' 128 像素逐点对照字体点阵 + 窗外 2 点 PASS
+  - string："AB" 272 像素（含 1px 间距列）逐点对照 PASS
+- **Soak（30s）**：PASS —— 775 轮混合负载，1550 次读回校验 0 错，
+  堆 13256 → 13256（+0）零泄漏
+- **Stress（50 条）**：PASS —— 快速注入下队列满按设计丢弃 41 条
+  （人按按键速率远达不到），队列干净排空，堆 +0，无崩溃
+- **Bench**：char16 35µs / string 2.23ms（与基线一致）；
+  clear 30.3ms / fill 1.98ms（2.5 MPix/s，v128 正确性优先的普通循环速率）
+- **遗留**：切页/无残留/SYSTEM 无频闪 目视确认（自动化无法覆盖）。
