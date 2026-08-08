@@ -113,41 +113,51 @@ static void handle_ota_start_msg(const message_t *msg)
 }
 
 /* ---------------- Flash 操作（HAL） ---------------- */
+/* 地址 → Flash 扇区号 */
+static uint32_t ota_flash_sector_of(uint32_t addr)
+{
+    if (addr >= 0x08000000 && addr < 0x08004000) return FLASH_SECTOR_0;
+    if (addr < 0x08008000) return FLASH_SECTOR_1;
+    if (addr < 0x0800C000) return FLASH_SECTOR_2;
+    if (addr < 0x08010000) return FLASH_SECTOR_3;
+    if (addr < 0x08020000) return FLASH_SECTOR_4;
+    if (addr < 0x08040000) return FLASH_SECTOR_5;
+    if (addr < 0x08060000) return FLASH_SECTOR_6;
+    if (addr < 0x08080000) return FLASH_SECTOR_7;
+    if (addr < 0x080A0000) return FLASH_SECTOR_8;
+    if (addr < 0x080C0000) return FLASH_SECTOR_9;
+    if (addr < 0x080E0000) return FLASH_SECTOR_10;
+    return FLASH_SECTOR_11;
+}
+
+/* 擦除 [addr, addr+len) 覆盖的全部扇区；len==0 时仅擦 addr 所在扇区。
+ * DOWNLOAD 现为 256KB（扇区9+10），必须整区擦除后再写入，防止编程 0→1 失败。 */
 static bool ota_flash_erase(uint32_t addr, uint32_t len)
 {
-    uint32_t sector = 0;
-    if (addr >= 0x08000000 && addr < 0x08004000) sector = FLASH_SECTOR_0;
-    else if (addr < 0x08008000) sector = FLASH_SECTOR_1;
-    else if (addr < 0x0800C000) sector = FLASH_SECTOR_2;
-    else if (addr < 0x08010000) sector = FLASH_SECTOR_3;
-    else if (addr < 0x08020000) sector = FLASH_SECTOR_4;
-    else if (addr < 0x08040000) sector = FLASH_SECTOR_5;
-    else if (addr < 0x08060000) sector = FLASH_SECTOR_6;
-    else if (addr < 0x08080000) sector = FLASH_SECTOR_7;
-    else if (addr < 0x080A0000) sector = FLASH_SECTOR_8;
-    else if (addr < 0x080C0000) sector = FLASH_SECTOR_9;
-    else if (addr < 0x080E0000) sector = FLASH_SECTOR_10;
-    else sector = FLASH_SECTOR_11;
-
-    HAL_FLASH_Unlock();
-    /* 清全部错误标志（含 OPTERR/SOP）：RDP 解除或此前操作可能残留，
-     * HAL_FLASHEx_Erase 检测到错误会直接返回 HAL_ERROR */
-    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_PGSERR | FLASH_FLAG_PGPERR |
-                           FLASH_FLAG_PGAERR | FLASH_FLAG_WRPERR |
-                           FLASH_FLAG_OPERR);
-    FLASH_EraseInitTypeDef er = {
-        .TypeErase = FLASH_TYPEERASE_SECTORS,
-        .Sector = sector,
-        .NbSectors = 1,
-        .VoltageRange = FLASH_VOLTAGE_RANGE_3,
-    };
-    uint32_t err = 0;
-    HAL_StatusTypeDef st = HAL_FLASHEx_Erase(&er, &err);
-    HAL_FLASH_Lock();
-    (void)len;
-    LOG_Printf("OTA: flash erase sector=%lu st=%d err=0x%08lX\r\n",
-               (unsigned long)sector, (int)st, (unsigned long)err);
-    return (st == HAL_OK && err == 0xFFFFFFFF);
+    uint32_t start_sector = ota_flash_sector_of(addr);
+    uint32_t end_sector = (len == 0) ? start_sector
+                                     : ota_flash_sector_of(addr + len - 1);
+    for (uint32_t sector = start_sector; sector <= end_sector; sector++) {
+        HAL_FLASH_Unlock();
+        /* 清全部错误标志（含 OPTERR/SOP）：RDP 解除或此前操作可能残留，
+         * HAL_FLASHEx_Erase 检测到错误会直接返回 HAL_ERROR */
+        __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_PGSERR | FLASH_FLAG_PGPERR |
+                               FLASH_FLAG_PGAERR | FLASH_FLAG_WRPERR |
+                               FLASH_FLAG_OPERR);
+        FLASH_EraseInitTypeDef er = {
+            .TypeErase = FLASH_TYPEERASE_SECTORS,
+            .Sector = sector,
+            .NbSectors = 1,
+            .VoltageRange = FLASH_VOLTAGE_RANGE_3,
+        };
+        uint32_t err = 0;
+        HAL_StatusTypeDef st = HAL_FLASHEx_Erase(&er, &err);
+        HAL_FLASH_Lock();
+        LOG_Printf("OTA: flash erase sector=%lu st=%d err=0x%08lX\r\n",
+                   (unsigned long)sector, (int)st, (unsigned long)err);
+        if (st != HAL_OK || err != 0xFFFFFFFF) return false;
+    }
+    return true;
 }
 
 static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
@@ -280,7 +290,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     }
 
     LOG_Printf("OTA: erasing download area...\r\n");
-    if (!ota_flash_erase(OTA_DOWNLOAD_ADDR, 0)) {
+    if (!ota_flash_erase(OTA_DOWNLOAD_ADDR, OTA_DOWNLOAD_SIZE)) {
         LOG_Printf("OTA: download erase FAILED\r\n");
         return 3;
     }
@@ -312,7 +322,7 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
         return 3;
     }
     ota_received += len;
-    /* 每块持久化一次精确进度（512 槽足够覆盖 112KB 固件）：
+    /* 每块持久化一次精确进度（768 槽覆盖 ≤184KB；超出部分续传从最后有效槽恢复）：
      * 恢复点 = 实际已写位置，避免重写已写区域导致 Flash 编程失败 */
     uint32_t slot = ota_received / OTA_CHUNK_MAX;
     if (slot < OTA_SESSION_SLOTS) {

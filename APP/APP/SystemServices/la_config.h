@@ -27,12 +27,10 @@ typedef struct {
     uint8_t  cond_level;    /* 条件通道期望电平（0/1） */
 } la_trigger_cfg_t;
 
-/* ---------------- DMA 流模式缓冲（运行时可选） ----------------
- * IRAM：内部 RAM 8192 点（32 KB），DMA 吞吐高（实测 ≥21 MHz）；
- * SRAM：外部 SRAM 32768 点（128 KB，深度 4 倍），受 FSMC 带宽限制
- *       （实测约 6 MHz 上限）。默认 SRAM，可用 la_dma_buf 切换。
+/* ---------------- DMA 流模式缓冲（统一外部 SRAM） ----------------
+ * 外部 SRAM 32768 点（128 KB，FSMC NE3）；DMA 吞吐实测约 6 MHz 上限。
+ * 原 32KB 内部 IRAM 缓冲已移除（RAM 瘦身：内部 SRAM 让给堆/任务/LwIP）。
  * DMA 模式与时间戳模式互斥，共用同一片外部 SRAM。 */
-#define LA_DMA_IRAM_SIZE      8192
 #define LA_DMA_SRAM_SIZE      32768
 #define LA_DMA_SRAM_ADDR      LA_SRAM_START_ADDR
 
@@ -40,7 +38,7 @@ typedef struct {
  * LA_GPIO_PORT      采样端口（DMA 单端口读取）
  * LA_CHANNEL_PINS   通道 0..7 对应的引脚，0 表示该通道未使用；
  *                   导出时自动归一化为 数据位 i = 通道 i（上位机无需感知）。
- * 当前 4 通道：探索者V3 的 PG6/PG7/PG12/PG15（全部“完全独立”）。
+ * 当前 4 通道：探索者V3 的 PG6/PG7/PG8/PG15（全部“完全独立”）。
  */
 #define LA_GPIO_PORT         GPIOG
 #define LA_CHANNEL_PINS      {GPIO_PIN_6, GPIO_PIN_7, GPIO_PIN_8, GPIO_PIN_15, \

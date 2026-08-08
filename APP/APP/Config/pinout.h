@@ -3,8 +3,8 @@
 #include "main.h"
 #include "usart.h"
 
-#define DEBUG_UART          huart2
-#define DEBUG_UART_IRQn     USART2_IRQn
+#define DEBUG_UART          huart3      /* 调试/Shell：USART3(PC10=TX PC11=RX) */
+#define DEBUG_UART_IRQn     USART3_IRQn
 
 #define LED0_GPIO_Port      GPIOF
 #define LED0_Pin            GPIO_PIN_9
@@ -38,6 +38,25 @@
 #define MPU6050_SCL_Pin      GPIO_PIN_6
 #define MPU6050_SDA_Port     GPIOB
 #define MPU6050_SDA_Pin      GPIO_PIN_7
+
+/* 串口资源规划（ETH 接入后）：
+ *   USART1 PA9/PA10  HOSTLINK
+ *   USART3 PC10/PC11 调试/Shell（USART2 让位给 ETH）
+ *   UART5  PC12/PD2  摄像头（预留）
+ *   USART6 PC6/PC7   ESP32-S3（预留）
+ *   UART4  PA0/PA1   牺牲给 ETH */
+#define DBG_TX_Port         GPIOC
+#define DBG_TX_Pin          GPIO_PIN_10
+#define DBG_RX_Port         GPIOC
+#define DBG_RX_Pin          GPIO_PIN_11
+#define CAM_UART_TX_Port    GPIOC
+#define CAM_UART_TX_Pin     GPIO_PIN_12
+#define CAM_UART_RX_Port    GPIOD
+#define CAM_UART_RX_Pin     GPIO_PIN_2
+#define ESP32_UART_TX_Port  GPIOC
+#define ESP32_UART_TX_Pin   GPIO_PIN_6
+#define ESP32_UART_RX_Port  GPIOC
+#define ESP32_UART_RX_Pin   GPIO_PIN_7
 
 #define HOSTLINK_UART       huart1      /* 涓婁綅鏈洪�氫俊涓撶敤 */
 #define HOSTLINK_UART_IRQn  USART1_IRQn

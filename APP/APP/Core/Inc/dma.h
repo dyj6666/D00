@@ -34,6 +34,9 @@ extern "C" {
 
 /* USER CODE END Includes */
 
+/* 逻辑分析仪采样 DMA（TIM1_UP → DMA2_Stream5，CubeMX 模型外手配） */
+extern DMA_HandleTypeDef hdma_tim1_up;
+
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */

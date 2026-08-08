@@ -322,9 +322,16 @@ static void state_rx_frame(void) {
                 cancel_transfer();
                 return;
             }
-            printf("[Ymodem] File: %s, Size: %lu, Expected CRC: 0x%08X\r\n",
-                   fsm.ctx->file_name, fsm.ctx->file_size, fsm.ctx->file_crc);
-            fsm.total_packets = (fsm.ctx->file_size + YMODEM_PACKET_SIZE - 1) / YMODEM_PACKET_SIZE;
+        printf("[Ymodem] File: %s, Size: %lu, Expected CRC: 0x%08X\r\n",
+               fsm.ctx->file_name, fsm.ctx->file_size, fsm.ctx->file_crc);
+        if (fsm.ctx->file_size > (fsm.ctx->flash_end - fsm.flash_addr)) {
+            printf("[Ymodem] File too large for Download area (%lu > %lu), rejecting\r\n",
+                   (unsigned long)fsm.ctx->file_size,
+                   (unsigned long)(fsm.ctx->flash_end - fsm.flash_addr));
+            cancel_transfer();
+            return;
+        }
+        fsm.total_packets = (fsm.ctx->file_size + YMODEM_PACKET_SIZE - 1) / YMODEM_PACKET_SIZE;
             fsm.ctx->packet_seq = 1;
             crc32_init(&fsm.ctx->current_crc);
             fsm.ctx->received_size = 0;
@@ -340,6 +347,13 @@ static void state_rx_frame(void) {
             uint16_t valid_len = data_len;
             if (fsm.ctx->received_size + valid_len > fsm.ctx->file_size) {
                 valid_len = fsm.ctx->file_size - fsm.ctx->received_size;
+            }
+
+            /* 下载区越界保护：任何情况下不得写穿 Download 区 */
+            if (fsm.ctx->write_addr + valid_len > fsm.ctx->flash_end) {
+                printf("[Ymodem] Overflow: write past Download area end, cancelling\r\n");
+                cancel_transfer();
+                return;
             }
 
             /* ---- Write valid data to flash ---- */

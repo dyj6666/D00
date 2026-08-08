@@ -80,4 +80,48 @@ void HAL_MspInit(void)
 
 /* USER CODE BEGIN 1 */
 
+/**
+  * @brief ETH MSP 初始化：时钟 + RMII GPIO + PHY 复位 + 中断。
+  * @note  CubeMX 6.18 + USER_PHY 未生成 HAL_ETH_MspInit，此处放在 USER CODE
+  *        区以保证重新生成时保留。若未来 CubeMX 生成了同名函数，删除本版本即可。
+  */
+void HAL_ETH_MspInit(ETH_HandleTypeDef *heth)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  if (heth->Instance == ETH) {
+    /* ETH 外设时钟 */
+    __HAL_RCC_ETH_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+
+    /* RMII 引脚（AF11，100MHz）：
+     * PA1=REF_CLK  PA2=MDIO  PA7=CRS_DV
+     * PC1=MDC      PC4=RXD0  PC5=RXD1
+     * PB11=TX_EN   PB12=TXD0 PB13=TXD1 */
+    GPIO_InitStruct.Pin = GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_7;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_1 | GPIO_PIN_4 | GPIO_PIN_5;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    /* PHY 硬件复位（YT8512C，低电平复位脉冲） */
+    HAL_GPIO_WritePin(PHY_RESET_GPIO_Port, PHY_RESET_Pin, GPIO_PIN_RESET);
+    HAL_Delay(10);
+    HAL_GPIO_WritePin(PHY_RESET_GPIO_Port, PHY_RESET_Pin, GPIO_PIN_SET);
+
+    /* ETH 全局中断 */
+    HAL_NVIC_SetPriority(ETH_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(ETH_IRQn);
+  }
+}
+
 /* USER CODE END 1 */

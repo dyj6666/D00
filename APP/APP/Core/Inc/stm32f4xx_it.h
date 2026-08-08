@@ -52,19 +52,23 @@ void MemManage_Handler(void);
 void BusFault_Handler(void);
 void UsageFault_Handler(void);
 void DebugMon_Handler(void);
+void DMA1_Stream1_IRQHandler(void);
 void DMA1_Stream2_IRQHandler(void);
-void DMA1_Stream5_IRQHandler(void);
-void DMA1_Stream6_IRQHandler(void);
+void DMA1_Stream3_IRQHandler(void);
 void EXTI9_5_IRQHandler(void);
 void EXTI15_10_IRQHandler(void);
 void TIM2_IRQHandler(void);
 void TIM3_IRQHandler(void);
 void USART1_IRQHandler(void);
-void USART2_IRQHandler(void);
+void USART3_IRQHandler(void);
 void TIM7_IRQHandler(void);
 void DMA2_Stream2_IRQHandler(void);
+void ETH_IRQHandler(void);
+void DMA2_Stream5_IRQHandler(void);
 void DMA2_Stream7_IRQHandler(void);
 /* USER CODE BEGIN EFP */
+/* 非 CubeMX 模型的中断（放 USER CODE 区，重新生成时保留） */
+void DMA2_Stream6_IRQHandler(void);   /* 信号发生器 USART6 TX DMA */
 
 /* USER CODE END EFP */
 

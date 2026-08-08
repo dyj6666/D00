@@ -7,8 +7,8 @@
  * Flash 分区（STM32F407ZGT6 1MB，扇区对齐核算）
  *   BOOT    0x08000000  64KB   扇区0-3
  *   RUN     0x08010000  320KB  扇区4-6   （APP 链接地址，当前运行区）
- *   BACKUP  0x08060000  384KB  扇区7-9   （上一版固件备份，回滚源，>= RUN）
- *   DOWNLOAD 0x080C0000 128KB  扇区10    （新固件下载暂存区）
+ *   BACKUP  0x08060000  256KB  扇区7-8   （上一版固件备份，回滚源）
+ *   DOWNLOAD 0x080A0000 256KB  扇区9-10  （新固件下载暂存区）
  *   PARAM   0x080E0000  128KB  扇区11    （启动标志/回滚计数/升级日志）
  * ===================================================================== */
 #define BOOT_BASE_ADDR          0x08000000UL
@@ -18,10 +18,10 @@
 #define APP_SIZE                (320 * 1024)      /* RUN 区 */
 
 #define BACKUP_BASE_ADDR        0x08060000UL
-#define BACKUP_SIZE             (384 * 1024)
+#define BACKUP_SIZE             (256 * 1024)
 
-#define DOWNLOAD_BASE_ADDR      0x080C0000UL
-#define DOWNLOAD_SIZE           (128 * 1024)
+#define DOWNLOAD_BASE_ADDR      0x080A0000UL
+#define DOWNLOAD_SIZE           (256 * 1024)
 
 #define PARAM_BASE_ADDR         0x080E0000UL
 #define PARAM_SIZE              (128 * 1024)
@@ -31,6 +31,11 @@
 #define APP_VALID_ADDR          (APP_BASE_ADDR + APP_VALID_OFFSET)
 #define APP_VALID_MAGIC         0x4F54412E
 #define APP_VERSION_ADDR        (APP_VALID_ADDR + 4)
+
+/* BACKUP 区有效性（位于 BACKUP 区尾部，与 RUN 区独立） */
+#define BACKUP_VALID_OFFSET     (BACKUP_SIZE - 8)
+#define BACKUP_VALID_ADDR       (BACKUP_BASE_ADDR + BACKUP_VALID_OFFSET)
+#define BACKUP_VERSION_ADDR     (BACKUP_VALID_ADDR + 4)
 
 /* 备份域标志（APP 触发强制升级） */
 #define BOOT_FLAG_NONE          0x0000

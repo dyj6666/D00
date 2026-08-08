@@ -1,9 +1,11 @@
 /* APP 固件链接脚本（GCC）
  *
- * 分区布局（与 BOOT/boot_config.h、APP.sct、Other/flash分区 严格一致）：
+ * 分区布局（与 BOOT/boot_config.h、APP.sct 严格一致）：
  *   BOOT     0x08000000 ~ 0x0800FFFF  (64 KB)
- *   APP      0x08010000 ~ 0x0804FFFF  (256 KB，末尾 8 字节为魔数+版本)
- *   Download 0x08060000 ~ 0x0809FFFF  (256 KB)
+ *   APP/RUN  0x08010000 ~ 0x0805FFFF  (320 KB，末尾 8 字节为魔数+版本)
+ *   BACKUP   0x08060000 ~ 0x0809FFFF  (256 KB)
+ *   DOWNLOAD 0x080A0000 ~ 0x080DFFFF  (256 KB)
+ *   PARAM    0x080E0000 ~ 0x080FFFFF  (128 KB)
  * 主 SRAM 128 KB：0x20000000 ~ 0x2001FFFF。
  */
 ENTRY(Reset_Handler)

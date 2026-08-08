@@ -7,13 +7,13 @@
 #define BOOT_FLAG_UPGRADE  0x5A5A
 
 /* ------------------ OTA（与 BOOT/boot_config.h 分区严格一致） ---------- */
-#define OTA_DOWNLOAD_ADDR       0x080C0000UL   /* 下载暂存区 128KB */
-#define OTA_DOWNLOAD_SIZE       (128 * 1024)
-#define OTA_DOWNLOAD_SAFE       (OTA_DOWNLOAD_SIZE - 16 * 1024) /* 安全上限（留 16KB 会话槽区） */
+#define OTA_DOWNLOAD_ADDR       0x080A0000UL   /* 下载暂存区 256KB（扇区9-10） */
+#define OTA_DOWNLOAD_SIZE       (256 * 1024)
+#define OTA_DOWNLOAD_SAFE       (OTA_DOWNLOAD_SIZE - 24 * 1024) /* 安全上限（留 24KB 会话槽区） */
 
-/* OTA 断点续传会话槽区（DOWNLOAD 区尾部 512B，16 槽 × 32B） */
-#define OTA_SESSION_BASE        (OTA_DOWNLOAD_ADDR + OTA_DOWNLOAD_SIZE - 16 * 1024)
-#define OTA_SESSION_SLOTS       512
+/* OTA 断点续传会话槽区（DOWNLOAD 区尾部 24KB，768 槽 × 32B，覆盖 ≤184KB 固件） */
+#define OTA_SESSION_BASE        (OTA_DOWNLOAD_ADDR + OTA_DOWNLOAD_SIZE - 24 * 1024)
+#define OTA_SESSION_SLOTS       768
 #define OTA_SESSION_MAGIC       0x4F54414DUL   /* 'OTAM' */
 
 #define OTA_PARAM_ADDR          0x080E0000UL   /* 参数区 */

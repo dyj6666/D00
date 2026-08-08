@@ -1266,3 +1266,143 @@ auto-stop）全部按设计工作。
   渲染成本可控）；立方体重绘阈值 0.3°→0.2°。
 - **验证**：编译 0 Error / 0 Warning；bin 108.7KB；v155 (build 139)
   OTA 全链路成功。实机实时跟随手感待用户确认。
+### 12.69 串口资源重规划（ETH 前置）：调试口 USART2 → USART3（v156）
+- **背景**：ETH 需占用 PA2（MDIO），USART2 在 F407 上固定 PA2/PA3
+  不可复用 → 调试口必须迁移。
+- **最终串口分配**（结合引脚复用，用户确认 SD 引脚可外接）：
+  - USART1 (PA9/PA10)：HOSTLINK（不动）；
+  - **USART3 (PC10/PC11)**：调试/Shell（115200，DMA1_S1_CH4 RX +
+    DMA1_S3_CH4 TX，IRQ 已配）；USART2 退役（PA2 让给 ETH）；
+  - UART5 (PC12/PD2)：摄像头（预留，未初始化）；
+  - USART6 (PC6/PC7)：ESP32-S3（预留，信号发生器 UART 模式与
+    LA PWM 源让位——次要功能）；
+  - UART4 (PA0/PA1)：牺牲给 ETH（复用点 PC10/11 与调试口撞车）。
+- **验证**：编译 0 Error / 0 Warning；bin 109.1KB（OTA 内）；
+  v156 (build 140) 构建就绪，待串口重连后烧录；
+  烧录后调试杜邦线需从 PA2/PA3 移至 PC10/PC11。
+  **实机验证**：用户移线至 PC10/PC11 后 OTA 烧录 v156 成功；
+  COM9（USART3）正常响应 info/mpu info（12 任务/堆 10.5KB/IMU 0 故障），
+  PA2/PA3 已释放待 ETH。APP.ioc 已同步追加 USART3 配置
+  （CubeMX 模型源；全量重生成会覆盖自定义引脚，故采用模型同步+选择性合并）。
+
+### 12.70 ETH/LWIP 集成 + CubeMX 再生成配置找回（v157/v158）
+- **背景**：用户在 CubeMX 中生成 ETH(RMII)+LWIP 2.1.2+USER_PHY（生成于
+  LWIP/App、LWIP/Target、Middlewares/Third_Party/LwIP），并重写了
+  gpio/tim/usart/main/it/dma/fsmc/freertos/uvprojx。生成前已做安全备份
+  `backup_pre_eth/`（本轮全面核对并恢复完毕后，按用户要求删除）。
+- **被 MX 抹掉/改坏并已修复的配置（逐项核对 backup_pre_eth 得出）**：
+  1. `gpio.c`：恢复 LA 采样 PG6/7/8/15 的 EXTI 配置；移除 CubeMX 误配的
+     PB0-7 EXTI（PB6/PB7 是 I2C1=MPU、PB0/1/2 是触摸屏引脚，GPXTI 会抢引脚）；
+     保留 PHY_RESET(PD3)。
+  2. `stm32f4xx_it.c`：删除 MX 生成的 5 个默认 `__weak` fault C 处理器
+     （与 err_mgr 的汇编异常入口同名冲突 #247，汇编版才是真正入口）；
+     恢复被删的 DMA2_Stream6_IRQHandler（信号发生器 USART6 TX DMA）；
+     EXTI9_5/EXTI15_10 收敛为 PG6/7/8/15；ETH_IRQHandler 保留。
+  3. `main.c`：恢复 `MX_I2C1_Init()`（MPU6050 必需，MX 因 .ioc 无 I2C1 而丢失）；
+     移除重复的 `MX_LWIP_Init()`（freertos.c 的 StartStartupTask 已调用一次，
+     双调用会导致 tcpip_init/netif_add 重复初始化）。
+  4. `stm32f4xx_hal_conf.h`：恢复 `HAL_I2C_MODULE_ENABLED`；补
+     `ETHERNET_PHY_ADDRESS 0x00` / `PHY_TYPE YT8512C`（探索者V3 板载 PHY）。
+  5. `FreeRTOSConfig.h`：恢复 `configUSE_TICK_HOOK=1`（sysmon 任务看门狗/
+     ERR_TickMs 依赖 tick hook）、`configTOTAL_HEAP_SIZE=35840`、
+     `ERR_HandleAssert` 原型（消除 configASSERT 隐式声明警告）。
+  6. `pinout.h`：`DEBUG_UART_IRQn` 残留 `USART2_IRQn` → `USART3_IRQn`。
+  7. `stm32f4xx_hal_msp.c`：**补齐缺失的 `HAL_ETH_MspInit`**——MX 6.18 +
+     USER_PHY 未生成该函数，导致 ETH 时钟/RMII GPIO/PHY 复位/ETH 中断
+     全部未初始化（ETH 即使编译通过也是死的）。置于 USER CODE 区防再生成清除。
+  8. `sys_arch.c`：`UINT16_MAX` → `0xFFFFu`（ARMCC5 的 stdint.h 未提供该宏）。
+  9. `la_sample.c`：补 `#include "dma.h"`（hdma_tim1_up 声明迁移至 dma.h）。
+- **.ioc 根治（让 CubeMX 永久认识这些配置，杜绝再次被抹）**：
+  - 新增 `I2C1`（400kHz，PB6=SCL/PB7=SDA）到 Mcu.IP/functionlistsort，
+    MX_I2C1_Init 由 CubeMX 自动生成；
+  - 新增 LA 引脚 `PG6/7/8/15 = GPXTI6/7/8/15` + `NVIC.EXTI15_10_IRQn`
+    （原 .ioc 完全没有 LA 引脚，重生成必丢）；
+  - 移除 PB0-7 的 GPXTI 误配：PB0=GPIO_Output（触摸 CLK）、PB1/2=GPIO_Input
+    （触摸 PEN/MISO）、PB3/4/5=GPIO_Input 上拉（闲置）、PB6/7=I2C1；
+  - FreeRTOS：任务栈恢复经实机验证值（startup 256/shell 384/logger 128/
+    eventBus 384 words）、堆 35840、`configUSE_TICK_HOOK=1` 入模型。
+- **新增 `Script/fix_after_mx.ps1`（幂等）**：CubeMX 每次再生成后运行一次，
+  自动恢复以上全部“模型外”配置（fault 处理器去重、LA EXTI、DMA2_Stream6、
+  MX_I2C1_Init、tick hook/堆、HAL_ETH_MspInit、dma.h、USART3 IRQ），
+  把“重新生成→手动补丁”固化为“重新生成→跑脚本→编译”。
+- **验证**：编译 **0 Error / 0 Warning**；APP.bin = 165.9KB。
+- **⚠️ 新风险（架构级，待决策）**：
+  1. **OTA 下载区上限 112KB（DOWNLOAD 128KB - 会话区 16KB）已无法容纳
+     ETH 固件（165.9KB）**：需二选一——(a) 重排 Flash 分区（如 BACKUP
+     384KB→256KB、DOWNLOAD 128KB→256KB，同时改 BOOT/APP/HOST 三端地址），
+     或 (b) 精简 LWIP 功能把 bin 压回 112KB 内；
+  2. **RAM 余量仅 ~3.4KB**（ZI 126.5KB / 128KB SRAM，未用 CCM 64KB），
+     后续新增功能前需专项优化（如 LA 32KB IRAM 缓冲外置、LWIP 收包池 12→8）。
+- **清理**：删除 APP 根目录历史 build_*.log（构建产物）；`backup_pre_eth/`
+  在全部核对与编译验证后删除（恢复源为 git HEAD + 本日志）。
+
+### 12.71 Flash 分区重排（方案a）+ RAM 整体瘦身（v159/v160）
+- **背景**：ETH/LWIP 加入后 APP.bin=165.9KB，超过原 OTA 上限 112KB
+  （DOWNLOAD 128KB - 会话区 16KB）；LA 32KB 内部 IRAM 缓冲挤占堆空间。
+  经用户确认执行方案 (a)：**BACKUP 384→256KB、DOWNLOAD 128→256KB**，
+  并彻底移除 LA 内部 IRAM 缓冲。
+- **新分区（与 BOOT/boot_config.h、APP.sct/.ld、Other/flash分区 严格一致）**：
+  - BOOT    0x08000000  64KB   扇区0-3
+  - RUN     0x08010000  320KB  扇区4-6   （APP，末尾 8B 魔数+版本）
+  - BACKUP  0x08060000  256KB  扇区7-8   （回滚源，**独立尾部有效性**）
+  - DOWNLOAD 0x080A0000 256KB  扇区9-10  （**固件包 ≤232KB**）
+  - PARAM   0x080E0000  128KB  扇区11
+- **BOOT 联动修改（boot_app.c）**：
+  - `boot_check_app_valid` 按区取有效魔数偏移（RUN=APP_SIZE-8 /
+    BACKUP=BACKUP_SIZE-8），SP/PC 仍以 RUN 链接地址为准；
+  - 备份 RUN→BACKUP 与恢复 BACKUP→RUN 的拷贝长度改为 BACKUP_SIZE
+    （原 APP_SIZE=320KB 会写穿 256KB 的 BACKUP 溢出到 DOWNLOAD），
+    并互写尾部有效性（RUN 尾 ↔ BACKUP 尾 8 字节）；
+  - YMODEM 路径新增下载区越界保护（文件过大/写入超界即取消）。
+- **APP 联动修改（ota_agent.c / app_config.h）**：
+  - `OTA_DOWNLOAD_ADDR 0x080C0000→0x080A0000`、`SIZE 128KB→256KB`；
+  - 会话槽区 16KB/512槽 → **24KB/768槽**（覆盖 ≤184KB 固件，断点续传粒度保持 240B/槽）；
+  - **`ota_flash_erase` 单扇区 → 按地址区间擦除**：DOWNLOAD 现跨扇区 9+10，
+    只擦单扇区会导致写进未擦扇区编程失败（0→1 不可写）；
+  - `OTA_DOWNLOAD_SAFE = 256KB - 24KB = 232KB`。
+- **LA 瘦身（la_sample.c/h、la_config.h、shell.c）**：
+  - 删除 `la_stream_iram[8192]`（32KB 内部 SRAM），DMA 流模式统一使用
+    外部 SRAM（FSMC NE3，32768 点）；`la_dma_buf` 命令与
+    `LA_Sample_SetDMABuffer/IsDMASram` 移除（冗余分支剔除）。
+- **ETH 收包池瘦身**：`ETH_RX_BUFFER_CNT 12→8`（省 6KB SRAM，仍满足
+  零拷贝 2× 描述符需求）。
+- **验证**：
+  - APP v159：编译 0 Error / 0 Warning；**ZI 126,568 → 87,528（省 ~38KB）**，
+    RAM 余量 ~41.5KB；bin ≈ 165KB（< 232KB OTA 上限 ✓）；
+  - BOOT v160：编译 0 Error / 0 Warning；BOOT.bin ≈ 32KB。
+- **⚠️ 迁移注意**：分区地址已变，**必须同时重刷 BOOT + APP**（DAP 或
+  BOOT0 全片擦除后烧录）；旧 BOOT/APP 组合与新分区不兼容（下载地址不同），
+  不能跨版本 OTA 升级到新分区。
+
+### 12.72 分区重排后实机全量验证（DAP + OTA 双通道，v160/v161）
+- **烧录链路（新分区首装）**：
+  1. DAP（Keil UV4 -f）烧录新 BOOT（返回码 0）；
+  2. 旧 APP 发 `ota` 命令置 BKP 升级标志复位 → 新 BOOT 进入升级模式
+     （YMODEM 控制台在 **USART1/COM13@115200**，物理可达）；
+  3. YMODEM 发送 165,572B 安全包（v160/build 200）→ BOOT 校验/备份/
+     擦除/解密写入/提交 → 复位 → 新 APP 启动。**DAP 与 OTA 双通道闭环**。
+- **系统级验证（v161）**：
+  - 15 任务全活（新增 LwIP：EthLink/tcpip_thread/EthIf），栈余量健康；
+  - IWDG 1s 喂狗正常；任务看门狗无 stall；事件总线/数据链路 0 丢失；
+  - CPU：IDLE 89% / ImuSvc 8%；Free heap 7208B；
+  - 复位原因为 External pin reset（shell reset），无新崩溃（Crash seq 5
+    为 BKP 保留的历史记录，早期崩溃注入测试遗留，非当前故障）。
+- **外设验证**：
+  - LCD：id=0x7789 240x320，bench 清屏 18.63MPix/s、填充 18.72MPix/s、
+    字符 142,857 字/s；
+  - 触摸：校准有效（xfac=18 yfac=12），探针 OK；
+  - MPU6050：WHO_AM_I=0x68、I2C1 400kHz、samples=5959 **faults=0**、
+    R/P/Y 正常、温度 27.7°C；
+  - **LA：DMA 缓冲=外部 SRAM 32768pts 自检 PASS，100kHz 采集 240,361
+    样本 0 溢出**（32KB IRAM 移除后实测）；时间戳模式 EXTI 6/7/8/15 全使能
+    （顺带修复 la_start 诊断打印 12→8 的过时引脚）；
+  - 蜂鸣器/LED 命令响应正常（待用户目视确认）；
+  - eb_stress 压力模式 32/200 缓冲饱和为设计行为，稳态 0 丢失。
+- **OTA 全链路（v160→v161）**：165,572B 下载 0 丢包，BOOT 状态帧
+  phase 2→7（VERIFY→BACKUP→ERASE→WRITE→COMMIT→DONE）全部回传，
+  启动确认（PENDING→NORMAL，last build 201）生效。
+- **回滚自测（关键）**：`ota_rbtest` 置 PENDING+MAX 复位 → BOOT 检测超限 →
+  **从新 BACKUP(256KB) 恢复 v160 成功**（拷贝 256KB + RUN 尾魔数/版本补齐），
+  随后重新 OTA v161（build 202）恢复最新。
+- **结论**：新分区（BACKUP 256KB/DOWNLOAD 256KB）、RAM 瘦身（LA 外部
+  SRAM）、ETH+LwIP 运行时共存全部实机验证通过，可提交。

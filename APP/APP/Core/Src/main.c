@@ -21,6 +21,7 @@
 #include "cmsis_os.h"
 #include "dma.h"
 #include "iwdg.h"
+#include "lwip.h"
 #include "rtc.h"
 #include "tim.h"
 #include "usart.h"
@@ -108,18 +109,16 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_USART2_UART_Init();
   MX_RTC_Init();
-  #if !APP_DEBUG_MODE
   MX_IWDG_Init();
-  #endif
   MX_USART1_UART_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_FSMC_Init();
-  MX_TIM8_Init();       
-  MX_TIM1_Init();       
-  MX_I2C1_Init();       
+  MX_TIM8_Init();
+  MX_TIM1_Init();
+  MX_USART3_UART_Init();
+  MX_I2C1_Init();               /* MPU6050（I2C1，CubeMX .ioc 已纳入管理） */
   /* USER CODE BEGIN 2 */
   EventBus_Init();    // 必须在调度器启动前初始化事件总线
 

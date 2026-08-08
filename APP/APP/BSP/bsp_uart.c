@@ -17,7 +17,7 @@ typedef struct {
 } bsp_uart_chan_t;
 
 static bsp_uart_chan_t g_uart[BSP_UART_COUNT] = {
-    [BSP_UART_DBG]  = { .huart = &huart2 },
+    [BSP_UART_DBG]  = { .huart = &huart3 },   /* 调试口：USART3 (PC10/PC11) */
     [BSP_UART_HOST] = { .huart = &huart1 },
 };
 

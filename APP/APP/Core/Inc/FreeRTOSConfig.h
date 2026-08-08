@@ -31,9 +31,6 @@
 #ifndef FREERTOS_CONFIG_H
 #define FREERTOS_CONFIG_H
 
-/* 错误管理：configASSERT 失败进入统一诊断（err_mgr.c） */
-void ERR_HandleAssert(unsigned int line);
-
 /*-----------------------------------------------------------
  * Application specific definitions.
  *
@@ -57,6 +54,7 @@ void ERR_HandleAssert(unsigned int line);
 /* USER CODE BEGIN 0 */
   extern void configureTimerForRunTimeStats(void);
   extern unsigned long getRunTimeCounterValue(void);
+  extern void ERR_HandleAssert(uint32_t line);  /* 错误管理：configASSERT 统一诊断入口 */
 /* USER CODE END 0 */
 #endif
 #ifndef CMSIS_device_header
@@ -67,7 +65,6 @@ void ERR_HandleAssert(unsigned int line);
 #define configENABLE_MPU                         0
 
 #define configUSE_PREEMPTION                     1
-#define configCHECK_FOR_STACK_OVERFLOW           2
 #define configSUPPORT_STATIC_ALLOCATION          1
 #define configSUPPORT_DYNAMIC_ALLOCATION         1
 #define configUSE_IDLE_HOOK                      0
@@ -102,7 +99,7 @@ void ERR_HandleAssert(unsigned int line);
 #define configUSE_TIMERS                         1
 #define configTIMER_TASK_PRIORITY                ( 2 )
 #define configTIMER_QUEUE_LENGTH                 10
-#define configTIMER_TASK_STACK_DEPTH             128
+#define configTIMER_TASK_STACK_DEPTH             256
 
 /* CMSIS-RTOS V2 flags */
 #define configUSE_OS2_THREAD_SUSPEND_RESUME  1

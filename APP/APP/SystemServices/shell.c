@@ -46,7 +46,6 @@ static void cmd_la_dma_start(const char *args);
 static void cmd_la_dma_stop(const char *args);
 static void cmd_la_dump(const char *args);
 static void cmd_la_dma_stat(const char *args);
-static void cmd_la_dma_buf(const char *args);
 static void cmd_la_info(const char *args);
 static void cmd_la_state(const char *args);
 static void cmd_la_peek(const char *args);
@@ -84,7 +83,6 @@ static const cmd_entry_t cmd_table[] = {
     {"la_dma_stop",  "Stop DMA sampling", cmd_la_dma_stop},
     {"la_dump",      "Export samples <count>", cmd_la_dump},
     {"la_dma_stat",  "DMA sampling stats", cmd_la_dma_stat},
-    {"la_dma_buf",   "Switch buffer <sram|iram>", cmd_la_dma_buf},
     {"la_info",      "LA info", cmd_la_info},
     {"la_state",     "LA state", cmd_la_state},
     {"la_peek",      "Peek sample at index", cmd_la_peek},
@@ -512,27 +510,9 @@ static void cmd_la_dma_stat(const char *args)
                (unsigned long)LA_Sample_GetDMACount(),
                (unsigned long)LA_Sample_GetDMABufferSize(),
                LA_Sample_GetDMAOverrun(),
-               LA_Sample_IsDMASram() ? "SRAM" : "IRAM");
+               "SRAM");
 }
 
-static void cmd_la_dma_buf(const char *args)
-{
-    /* 格式：la_dma_buf <sram|iram> —�?切换 DMA 缓冲（SRAM �?4 倍，IRAM 速率高） */
-    if (args == NULL) {
-        LOG_Printf("Usage: la_dma_buf <sram|iram>\r\n");
-        return;
-    }
-    int use_sram = -1;
-    if (strcmp(args, "sram") == 0) use_sram = 1;
-    else if (strcmp(args, "iram") == 0) use_sram = 0;
-    if (use_sram < 0) {
-        LOG_Printf("Usage: la_dma_buf <sram|iram>\r\n");
-        return;
-    }
-    if (LA_Sample_SetDMABuffer((uint8_t)use_sram) != 0) {
-        LOG_Printf("SRAM 自检失败，无法切换\r\n");
-    }
-}
 
 static void cmd_la_info(const char *args)
 {
@@ -542,7 +522,7 @@ static void cmd_la_info(const char *args)
     LOG_Printf("=== LA INFO ===\r\n");
     LOG_Printf("  DMA buffer: %lu pts (%s)\r\n",
                (unsigned long)LA_Sample_GetDMABufferSize(),
-               LA_Sample_IsDMASram() ? "external SRAM" : "internal RAM");
+               "external SRAM");
     LOG_Printf("  SRAM self-test: %s\r\n", LA_Buffer_IsSramOk() ? "PASS" : "FAIL");
     LOG_Printf("  Trigger: type=%d ch=%d post=%u cond=",
                cfg.type, cfg.channel, (unsigned)cfg.post_samples);

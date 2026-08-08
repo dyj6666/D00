@@ -58,28 +58,28 @@
 osThreadId_t startupTaskHandle;
 const osThreadAttr_t startupTask_attributes = {
   .name = "startupTask",
-  .stack_size = 1024,
+  .stack_size = 256 * 4,
   .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for shellTask */
 osThreadId_t shellTaskHandle;
 const osThreadAttr_t shellTask_attributes = {
   .name = "shellTask",
-  .stack_size = 1536,
+  .stack_size = 384 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for loggerTXTask */
 osThreadId_t loggerTXTaskHandle;
 const osThreadAttr_t loggerTXTask_attributes = {
   .name = "loggerTXTask",
-  .stack_size = 512,
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for eventBusTask */
 osThreadId_t eventBusTaskHandle;
 const osThreadAttr_t eventBusTask_attributes = {
   .name = "eventBusTask",
-  .stack_size = 1536,
+  .stack_size = 384 * 4,
   .priority = (osPriority_t) osPriorityRealtime,
 };
 
@@ -98,6 +98,7 @@ void StartShellTask(void *argument);
 void StartLoggerTXTask(void *argument);
 void StartEventBusTask(void *argument);
 
+extern void MX_LWIP_Init(void);
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
 /* Hook prototypes */
@@ -189,6 +190,8 @@ void MX_FREERTOS_Init(void) {
 /* USER CODE END Header_StartStartupTask */
 void StartStartupTask(void *argument)
 {
+  /* init code for LWIP */
+  MX_LWIP_Init();
   /* USER CODE BEGIN StartStartupTask */
   LOG_Init();
 

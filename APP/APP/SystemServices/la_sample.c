@@ -5,6 +5,7 @@
 #include "logger.h"
 #include "pinout.h"
 #include "tim.h"
+#include "dma.h"              /* hdma_tim1_up（TIM1_UP → DMA2_Stream5 采样引擎） */
 #include "var_manager.h"
 #include "var_ids.h"
 
@@ -38,10 +39,9 @@ static uint8_t last_trigger_state = 0xFF;   /* 触发通道上一状态，用于
 #define LA_TIM_CLOCK_HZ  168000000UL
 /* 通道→引脚映射（LA_CHANNEL_PINS），0 = 通道未使用 */
 static const uint16_t la_ch_pins[LA_MAX_CHANNELS] = LA_CHANNEL_PINS;
-static uint32_t la_stream_iram[LA_DMA_IRAM_SIZE] __attribute__((aligned(4)));
 static uint32_t *la_stream_buf = (uint32_t *)LA_DMA_SRAM_ADDR;
 static uint32_t la_dma_buf_size = LA_DMA_SRAM_SIZE;
-static volatile uint32_t dma_transfer_count = 0;  /* 满传输（8192点）完成次数 */
+static volatile uint32_t dma_transfer_count = 0;  /* 满传输（32768点）完成次数 */
 static volatile uint32_t dma_completed = 0;       /* 停止时固化样本总数 */
 static volatile uint8_t  dma_running = 0;
 static volatile uint8_t  dma_overrun = 0;         /* DMA 溢出/错误标志 */
@@ -82,32 +82,8 @@ void LA_Sample_Init(void)
     HAL_DMA_RegisterCallback(&hdma_tim1_up, HAL_DMA_XFER_CPLT_CB_ID, la_dma_full_cb);
     HAL_DMA_RegisterCallback(&hdma_tim1_up, HAL_DMA_XFER_ERROR_CB_ID, la_dma_error_cb);
 
-    LOG_Printf("[APP] LA   : DMA buffer = %s (%u points)\r\n",
-               la_stream_buf == la_stream_iram ? "IRAM" : "SRAM",
+    LOG_Printf("[APP] LA   : DMA buffer = SRAM (%u points)\r\n",
                (unsigned)la_dma_buf_size);
-}
-
-int LA_Sample_SetDMABuffer(uint8_t use_sram)
-{
-    if (current_mode != LA_MODE_IDLE) {
-        return -2;      /* 采集中不允许切换缓冲 */
-    }
-    if (use_sram) {
-        if (!LA_Buffer_IsSramOk()) return -1;
-        la_stream_buf = (uint32_t *)LA_DMA_SRAM_ADDR;
-        la_dma_buf_size = LA_DMA_SRAM_SIZE;
-    } else {
-        la_stream_buf = la_stream_iram;
-        la_dma_buf_size = LA_DMA_IRAM_SIZE;
-    }
-    LOG_Printf("[APP] LA   : DMA buffer = %s (%u points)\r\n",
-               use_sram ? "SRAM" : "IRAM", (unsigned)la_dma_buf_size);
-    return 0;
-}
-
-uint8_t LA_Sample_IsDMASram(void)
-{
-    return (la_stream_buf != la_stream_iram);
 }
 
 void LA_Sample_Start(LA_SampleMode mode)
@@ -147,10 +123,10 @@ void LA_Diag_PrintExtiStatus(void)
     uint32_t imr = EXTI->IMR;
     uint32_t nvic95 = NVIC->ISER[EXTI9_5_IRQn >> 5] & (1u << (EXTI9_5_IRQn & 0x1F));
     uint32_t nvic1510 = NVIC->ISER[EXTI15_10_IRQn >> 5] & (1u << (EXTI15_10_IRQn & 0x1F));
-    LOG_Printf("EXTI IMR: 6=%s 7=%s 12=%s 15=%s\r\n",
+    LOG_Printf("EXTI IMR: 6=%s 7=%s 8=%s 15=%s\r\n",
                (imr & EXTI_IMR_IM6) ? "en" : "--",
                (imr & EXTI_IMR_IM7) ? "en" : "--",
-               (imr & EXTI_IMR_IM12) ? "en" : "--",
+               (imr & EXTI_IMR_IM8) ? "en" : "--",
                (imr & EXTI_IMR_IM15) ? "en" : "--");
     LOG_Printf("NVIC: EXTI9_5=%s EXTI15_10=%s\r\n",
                nvic95 ? "enabled" : "DISABLED",
@@ -300,7 +276,7 @@ void LA_Sample_Start_DMA(uint32_t sample_rate_hz)
     }
     if (sample_rate_hz == 0) sample_rate_hz = 1000;
 
-    if (LA_Sample_IsDMASram() && !LA_Buffer_IsSramOk()) {
+    if (!LA_Buffer_IsSramOk()) {
         LOG_Printf("LA: SRAM self-test failed, DMA capture aborted\r\n");
         return;
     }

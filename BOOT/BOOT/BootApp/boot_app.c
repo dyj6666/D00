@@ -98,10 +98,12 @@ static void boot_log_init(void)
     /* CubeMX 已初始化 USART2，fputc 重定向在 usart.c 实现 */
 }
 
-/* 检查 APP 固件有效性 */
+/* 检查固件有效性：魔数偏移按所在区（RUN/BACKUP）取；SP/PC 以 RUN 链接地址为准 */
 static uint8_t boot_check_app_valid(uint32_t addr)
 {
-    if (*(volatile uint32_t *)(addr + APP_VALID_OFFSET) != APP_VALID_MAGIC) {
+    uint32_t valid_off = (addr == BACKUP_BASE_ADDR) ? BACKUP_VALID_OFFSET
+                                                    : APP_VALID_OFFSET;
+    if (*(volatile uint32_t *)(addr + valid_off) != APP_VALID_MAGIC) {
         return 0;
     }
     uint32_t sp = *(volatile uint32_t *)addr;
@@ -165,7 +167,7 @@ static void boot_enter_upgrade_mode(void);
 /* 用 BACKUP 区恢复 RUN（回滚/自动修复），成功返回 true */
 static bool boot_restore_backup(void)
 {
-    uint32_t magic = *(volatile uint32_t *)(BACKUP_BASE_ADDR + APP_VALID_OFFSET);
+    uint32_t magic = *(volatile uint32_t *)(BACKUP_BASE_ADDR + BACKUP_VALID_OFFSET);
     uint32_t sp = *(volatile uint32_t *)BACKUP_BASE_ADDR;
     uint32_t pc = *(volatile uint32_t *)(BACKUP_BASE_ADDR + 4);
     if (!boot_check_app_valid(BACKUP_BASE_ADDR)) {
@@ -175,7 +177,14 @@ static bool boot_restore_backup(void)
     }
     printf("[RB] BACKUP valid, restoring RUN...\r\n");
     bool e = flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1);
-    bool c = flash_copy_raw(APP_BASE_ADDR, BACKUP_BASE_ADDR, APP_SIZE);
+    bool c = flash_copy_raw(APP_BASE_ADDR, BACKUP_BASE_ADDR, BACKUP_SIZE);
+    if (e && c) {
+        /* RUN 尾部有效性由 BACKUP 尾 8 字节补齐（魔数 + 版本） */
+        uint32_t mg  = *(volatile uint32_t *)BACKUP_VALID_ADDR;
+        uint32_t ver = *(volatile uint32_t *)BACKUP_VERSION_ADDR;
+        flash_write(APP_VALID_ADDR, (uint8_t *)&mg, sizeof(mg));
+        flash_write(APP_VERSION_ADDR, (uint8_t *)&ver, sizeof(ver));
+    }
     printf("[RB] erase=%d copy=%d\r\n", (int)e, (int)c);
     return e && c;
 }
@@ -239,10 +248,15 @@ static bool boot_apply_download(bool emit_status)
         boot_status_send(BOOT_ST_BACKUP, 0);
         if (!flash_erase(BACKUP_BASE_ADDR,
                          BACKUP_BASE_ADDR + BACKUP_SIZE - 1) ||
-            !flash_copy_raw(BACKUP_BASE_ADDR, APP_BASE_ADDR, APP_SIZE)) {
+            !flash_copy_raw(BACKUP_BASE_ADDR, APP_BASE_ADDR, BACKUP_SIZE)) {
             printf("BACKUP failed! System halted.\r\n");
             while (1) { IWDG->KR = 0xAAAA; }
         }
+        /* BACKUP 尾部补写有效性：RUN 尾 8 字节（魔数+版本）→ BACKUP 尾 8 字节 */
+        uint32_t mg  = *(volatile uint32_t *)APP_VALID_ADDR;
+        uint32_t ver = *(volatile uint32_t *)APP_VERSION_ADDR;
+        flash_write(BACKUP_VALID_ADDR, (uint8_t *)&mg, sizeof(mg));
+        flash_write(BACKUP_VERSION_ADDR, (uint8_t *)&ver, sizeof(ver));
     }
 #if POWERLOSS_TEST_STAGE == 1
     boot_param_t plt; boot_param_load(&plt);
@@ -385,6 +399,7 @@ static void boot_enter_upgrade_mode(void)
 
     while (1) {
         ymodem_ctx_t ctx;
+        ctx.flash_end = DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE;
         ymodem_status_t status = ymodem_receive(&ctx, DOWNLOAD_BASE_ADDR);
         if (status != YMODEM_OK) {
             printf("OTA receive failed, status: %d. Retrying...\r\n", status);

@@ -17,8 +17,6 @@ uint32_t LA_Sample_Stop_DMA(void);      /* 返回本次累计样本数 */
 uint32_t LA_Sample_GetDMACount(void);
 uint8_t  LA_Sample_GetDMAOverrun(void);
 uint32_t LA_Sample_GetDMABufferSize(void);
-int      LA_Sample_SetDMABuffer(uint8_t use_sram);
-uint8_t  LA_Sample_IsDMASram(void);
 void LA_Sample_ReadDMABuffer(uint32_t *buf, uint32_t start, uint32_t count);
 
 /* 采样状态变量（shell / 上位机变量注册使用） */

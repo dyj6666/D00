@@ -42,6 +42,7 @@ typedef struct {
     uint32_t current_crc;
     uint16_t packet_seq;
     uint32_t write_addr;        /* current flash write address in Download area */
+    uint32_t flash_end;         /* Download 区上界（越界写保护，调用方设置） */
 } ymodem_ctx_t;
 
 ymodem_status_t ymodem_receive(ymodem_ctx_t *ctx, uint32_t flash_addr);
