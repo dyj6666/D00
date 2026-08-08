@@ -399,9 +399,9 @@ void OtaAgent_Init(void)
     ota_param_t st;
     memcpy(&st, (const void *)OTA_PARAM_ADDR, sizeof(st));
     if (st.magic == OTA_PARAM_MAGIC && st.crc32 == ota_param_crc(&st)) {
-        LOG_Printf("OTA Agent ready (last build %lu).\r\n",
+        LOG_Printf("[APP] OTA  : Agent ready (last build %lu)\r\n",
                    (unsigned long)st.last_build_no);
     } else {
-        LOG_Printf("OTA Agent ready (param invalid).\r\n");
+        LOG_Printf("[APP] OTA  : Agent ready (param invalid)\r\n");
     }
 }

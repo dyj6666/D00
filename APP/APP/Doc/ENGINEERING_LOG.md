@@ -827,3 +827,22 @@ auto-stop）全部按设计工作。
 - **验证**：BOOT 编译 0 Error（1 个 ARMCC #111-D 固有误报——还原对比确认与改动无关）；
   DAP 烧录 Erase/Program/Verify OK；复位后启动链正常（BOOT→APP 无回归），
   无崩溃记录时复现函数正确静默。崩溃路径机制与 APP 已实机验证方案同构。
+
+### 12.39 项目清理 + BOOT/APP 启动打印重构
+- **项目清理**：删除 453 个未跟踪构建产物/临时文件（build_*.log、flash_*.log、
+  .bak/.tmp/.pyc、_ota_*.bin、temp_secure*.bin、旧 APP_flash*.bin）、14 个
+  __pycache__ 目录、VLink_Debugger 的 PyInstaller build/dist；git 零变化
+  （全部已忽略产物），编译中间产物（.o/.crf/.d）保留以支持增量编译。
+- **启动打印重构**：
+  - BOOT/APP 统一 **ASCII figlet 风格 "D00" logo** + 平台信息框
+    （D00 Embedded Platform | STM32F407 Industrial Bootloader/Application）；
+  - 统一 `[BOOT]`/`[APP]` 前缀与对齐（`标签 : 值`）；
+  - BOOT：State 人类可读（NORMAL/UPGRADE/PENDING/RECOVERY）、跳转行带
+    APP 版本（ver=94）、"BOOT Started." 由 banner 取代；
+  - APP：banner 提前到模块注册之前，显示 Firmware 版本；
+    模块注册对齐（`[%u] %-10s prio=%u`），LA/OTA/SysMon/LED 状态统一格式；
+    收尾行 "Boot complete. Async Event Bus ready."。
+- **发现并修复**：APP banner 超长导致 `LOG_Printf` 256B 内部缓冲截断乱码
+  → 横幅拆分为多段打印；BOOT printf 流式输出不受限（无需拆分）。
+- **验证**：复位实机启动日志全链路（BOOT banner→State→Jump→APP banner→
+  模块注册→Boot complete）排版统一美观、无乱码；BOOT/APP 编译 0 Error。

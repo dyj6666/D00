@@ -121,7 +121,9 @@ static void boot_jump_to_app(uint32_t addr)
     uint32_t app_stack = *(volatile uint32_t *)addr;
     uint32_t app_reset = *(volatile uint32_t *)(addr + 4);
 
-    printf("Jumping to APP: SP=0x%08X, PC=0x%08X\r\n", app_stack, app_reset);
+    printf("[BOOT] Jump  : SP=0x%08X  PC=0x%08X  ver=%lu\r\n",
+           app_stack, app_reset,
+           (unsigned long)(*(volatile uint32_t *)APP_VERSION_ADDR));
 
     HAL_UART_Abort(&huart2);
     HAL_UART_DeInit(&huart2);
@@ -195,7 +197,7 @@ static void boot_rollback(void)
         if (!boot_param_save(&param)) {
             printf("[BOOT] param save FAILED\r\n");
         }
-        printf("Rollback OK, jumping to APP...\r\n");
+        printf("[BOOT] Rollback OK, jumping to APP...\r\n");
         boot_jump_to_app(APP_BASE_ADDR);
         return;
     }
@@ -334,7 +336,7 @@ static bool boot_apply_download(bool emit_status)
 
 static void boot_enter_upgrade_mode(void)
 {
-    printf("Entering upgrade mode...\r\n");
+    printf("[BOOT] Entering upgrade mode...\r\n");
     ymodem_port_init();
 
     uint32_t uid[3];
@@ -400,21 +402,44 @@ static void boot_enter_upgrade_mode(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* 启动横幅：ASCII logo + 平台信息（统一启动视觉风格） */
+static void boot_print_banner(void)
+{
+    printf(
+        "\r\n"
+        "  _____  _____  _____ \r\n"
+        " |  __ \\|  _  ||  _  |\r\n"
+        " | |  \\/| | | || | | |\r\n"
+        " | | __ | | | || | | |\r\n"
+        " | |_\\ \\| |_| || |_| |\r\n"
+        "  \\____/\\_____/\\_____|\r\n"
+        "\r\n"
+        "============================================================\r\n"
+        "  D00 Embedded Platform | STM32F407 Industrial Bootloader\r\n"
+        "  Secure A/B OTA | Startup Confirmed | Rollback Ready\r\n"
+        "============================================================\r\n");
+}
+
 void BootApp_Run(void)
 {
     boot_watchdog_start();
     boot_log_init();
-    printf("BOOT Started.\r\n");
+    boot_print_banner();
 
     boot_param_t param;
     boot_param_load(&param);
-    printf("BOOT state=%lu tries=%lu rollbacks=%lu crc=0x%08X\r\n",
-           param.boot_state, param.boot_count, param.rollback_count,
+    printf("[BOOT] State : %s (tries=%lu rollbacks=%lu crc=0x%08X)\r\n",
+           (param.boot_state == BOOT_STATE_NORMAL) ? "NORMAL" :
+           (param.boot_state == BOOT_STATE_UPGRADE) ? "UPGRADE" :
+           (param.boot_state == BOOT_STATE_PENDING) ? "PENDING" :
+           (param.boot_state == BOOT_STATE_RECOVERY) ? "RECOVERY" : "UNKNOWN",
+           (unsigned long)param.boot_count,
+           (unsigned long)param.rollback_count,
            (unsigned)param.crc32);
 
     /* 1) 强制升级标志（APP 主动触发） */
     if (BKP_READ(0) == BOOT_FLAG_UPGRADE) {
-        printf("Upgrade flag set. Entering upgrade mode.\r\n");
+        printf("[BOOT] Upgrade flag set. Entering upgrade mode...\r\n");
         BKP_WRITE(0, BOOT_FLAG_NONE);
         boot_enter_upgrade_mode();
         return;
@@ -441,7 +466,7 @@ void BootApp_Run(void)
         param.boot_count++;
         boot_param_save(&param);
         if (boot_check_app_valid(APP_BASE_ADDR)) {
-            printf("Pending boot #%lu, jumping to APP...\r\n",
+            printf("[BOOT] Pending boot #%lu, jumping to APP...\r\n",
                    param.boot_count);
             boot_jump_to_app(APP_BASE_ADDR);
             return;
@@ -460,19 +485,19 @@ void BootApp_Run(void)
 
     /* 5) 正常模式：RUN 有效则跳转；无效则 BACKUP 自动修复；再无则升级 */
     if (boot_check_app_valid(APP_BASE_ADDR)) {
-        printf("APP valid, jumping to APP...\r\n");
+        printf("[BOOT] APP   : valid, jumping to APP...\r\n");
         boot_jump_to_app(APP_BASE_ADDR);
         return;
     }
     if (boot_check_app_valid(BACKUP_BASE_ADDR)) {
-        printf("APP invalid, restoring from BACKUP...\r\n");
+        printf("[BOOT] APP invalid, restoring from BACKUP...\r\n");
         if (boot_restore_backup()) {
-            printf("Backup restored, jumping to APP...\r\n");
+            printf("[BOOT] BACKUP restored, jumping to APP...\r\n");
             boot_jump_to_app(APP_BASE_ADDR);
             return;
         }
-        printf("Backup restore failed!\r\n");
+        printf("[BOOT] BACKUP restore failed!\r\n");
     }
-    printf("No valid firmware, entering upgrade mode.\r\n");
+    printf("[BOOT] No valid firmware, entering upgrade mode.\r\n");
     boot_enter_upgrade_mode();
 }

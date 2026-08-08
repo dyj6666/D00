@@ -76,7 +76,7 @@ static void state_off(const message_t *msg)
     if (msg == NULL) {
         /* 进入状态 */
         BSP_LED_Set(0, 0);
-        LOG_Printf("LED: OFF\r\n");
+        LOG_Printf("[APP] LED  : OFF\r\n");
         return;
     }
 
@@ -96,7 +96,7 @@ static void state_on(const message_t *msg)
 {
     if (msg == NULL) {
         BSP_LED_Set(0, 1);
-        LOG_Printf("LED: ON\r\n");
+        LOG_Printf("[APP] LED  : ON\r\n");
         return;
     }
 
@@ -115,7 +115,7 @@ static void state_on(const message_t *msg)
 static void state_slow_blink(const message_t *msg)
 {
     if (msg == NULL) {
-        LOG_Printf("LED: SLOW BLINK\r\n");
+        LOG_Printf("[APP] LED  : SLOW BLINK\r\n");
         return;
     }
 
@@ -137,7 +137,7 @@ static void state_slow_blink(const message_t *msg)
 static void state_fast_blink(const message_t *msg)
 {
     if (msg == NULL) {
-        LOG_Printf("LED: FAST BLINK\r\n");
+        LOG_Printf("[APP] LED  : FAST BLINK\r\n");
         return;
     }
 

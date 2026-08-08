@@ -49,16 +49,16 @@ void modules_init(void)
 {
     sort_modules();
 
-    LOG_Printf("Module registry: %u entries.\r\n", (unsigned)MODULE_COUNT);
+    LOG_Printf("[APP] Module registry: %u entries\r\n", (unsigned)MODULE_COUNT);
     int count = 0;
     for (unsigned int i = 0; i < MODULE_COUNT; i++) {
         if (module_table[i].init) {
-            LOG_Printf("  [%u] %-10s (prio %u)\r\n", i,
+            LOG_Printf("[APP]   [%u] %-10s prio=%u\r\n", i,
                        module_table[i].name ? module_table[i].name : "?",
                        (unsigned)module_table[i].priority);
             module_table[i].init();
             count++;
         }
     }
-    LOG_Printf("Modules initialized: %d\r\n", count);
+    LOG_Printf("[APP] Modules initialized: %d\r\n", count);
 }

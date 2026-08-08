@@ -210,11 +210,11 @@ void SysMon_Init(void)
     /* 启动任务级看门狗（IWDG 之外的软件层防线） */
     WDOG_Init();
 
-    LOG_Printf("SysMon: IWDG feeding started (SysTick IRQ).\r\n");
+    LOG_Printf("[APP] SysMon: online, IWDG feed via SysTick (%d ms)\r\n",
+               WDOG_FEED_PERIOD_MS);
 #endif
 
     // 2. 订阅 sysmon 命令事件（使用新消息类型）
     EventBus_Subscribe(MSG_CMD_SYSMON, handle_sysmon_msg);
 
-    LOG_Printf("SysMon: Online.\r\n");
 }

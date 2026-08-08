@@ -32,6 +32,7 @@
 #include "module.h"
 #include "cmsis_os2.h"
 #include "err_mgr.h"
+#include "app_config.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -190,6 +191,30 @@ void StartStartupTask(void *argument)
 {
   /* USER CODE BEGIN StartStartupTask */
   LOG_Init();
+
+  /* 启动横幅：ASCII logo + 平台信息（与 BOOT 统一视觉风格）。
+   * 分段打印：LOG_Printf 内部缓冲 256B，横幅整体超限需拆分。 */
+  {
+    uint32_t ver = *(volatile uint32_t *)OTA_APP_VERSION_ADDR;
+    LOG_Printf(
+        "\r\n"
+        "  _____  _____  _____ \r\n"
+        " |  __ \\|  _  ||  _  |\r\n"
+        " | |  \\/| | | || | | |\r\n"
+        " | | __ | | | || | | |\r\n"
+        " | |_\\ \\| |_| || |_| |\r\n");
+    LOG_Printf(
+        "  \\____/\\_____/\\_____|\r\n"
+        "\r\n");
+    LOG_Printf(
+        "============================================================\r\n"
+        "  D00 Embedded Platform | STM32F407 Industrial Application\r\n");
+    LOG_Printf(
+        "  Firmware v%lu | 168MHz | DMA Full-Duplex | Event-Driven RTOS\r\n"
+        "============================================================\r\n",
+        (unsigned long)ver);
+  }
+
   modules_init();   // 自动加载所有注册的模块
 
   // 系统定时器仍发布事件，但现在是非阻塞异步发布
@@ -198,12 +223,9 @@ void StartStartupTask(void *argument)
   xTimerStart(tmr_1s, 0);
   xTimerStart(tmr_200ms, 0);
 
-  LOG_Printf("\r\n========================================\r\n");
-  LOG_Printf("\r\n\r\nSTM32F407 Top APP (DMA Full-Duplex)\r\n\r\n");
-  LOG_Printf("========================================\r\n");
   /* Infinite loop */
 
-  LOG_Printf("\r\nAsync Event Bus Ready.\r\n");
+  LOG_Printf("\r\n[APP] Boot complete. Async Event Bus ready.\r\n");
   vTaskDelete(NULL);
   /* USER CODE END StartStartupTask */
 }

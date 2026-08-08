@@ -82,7 +82,7 @@ void LA_Sample_Init(void)
     HAL_DMA_RegisterCallback(&hdma_tim1_up, HAL_DMA_XFER_CPLT_CB_ID, la_dma_full_cb);
     HAL_DMA_RegisterCallback(&hdma_tim1_up, HAL_DMA_XFER_ERROR_CB_ID, la_dma_error_cb);
 
-    LOG_Printf("LA: DMA buffer = %s (%u points)\r\n",
+    LOG_Printf("[APP] LA   : DMA buffer = %s (%u points)\r\n",
                la_stream_buf == la_stream_iram ? "IRAM" : "SRAM",
                (unsigned)la_dma_buf_size);
 }
@@ -100,7 +100,7 @@ int LA_Sample_SetDMABuffer(uint8_t use_sram)
         la_stream_buf = la_stream_iram;
         la_dma_buf_size = LA_DMA_IRAM_SIZE;
     }
-    LOG_Printf("LA: DMA buffer = %s (%u points)\r\n",
+    LOG_Printf("[APP] LA   : DMA buffer = %s (%u points)\r\n",
                use_sram ? "SRAM" : "IRAM", (unsigned)la_dma_buf_size);
     return 0;
 }
