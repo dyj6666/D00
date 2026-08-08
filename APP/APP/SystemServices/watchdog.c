@@ -2,6 +2,7 @@
 #include "bsp.h"
 #include "logger.h"
 #include "cmsis_os2.h"
+#include "err_mgr.h"
 
 #include <string.h>
 
@@ -31,14 +32,11 @@ static void wdg_monitor_task(void *arg)
             if (!g_wdg[i].used) continue;
             uint32_t silent = now - g_wdg[i].last_kick_tick;
             if (silent > g_wdg[i].timeout_ticks) {
-                LOG_Printf("\r\n[WDOG] Task '%s' stalled (%lu ms silent) -> reset!\r\n",
-                           g_wdg[i].name ? g_wdg[i].name : "?",
-                           (unsigned long)(silent * portTICK_PERIOD_MS));
                 taskEXIT_CRITICAL();
-                /* 短暂延时让日志 DMA 有机会发出，然后软件复位 */
-                vTaskDelay(pdMS_TO_TICKS(20));
-                BSP_SystemReset();
-                for (;;) {}
+                /* 进入统一错误管理（转储 + BKP 持久化 + 软复位） */
+                ERR_HandleTaskStall(g_wdg[i].name ? g_wdg[i].name : "?",
+                                    silent * portTICK_PERIOD_MS);
+                for (;;) {}   /* 理论上不可达（ERR 内部复位） */
             }
         }
         taskEXIT_CRITICAL();

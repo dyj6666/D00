@@ -9,6 +9,7 @@
 #include "FreeRTOS.h"
 #include "watchdog.h"
 #include "data_link.h"
+#include "err_mgr.h"
 
 #include <string.h>
 
@@ -19,6 +20,8 @@
 void vApplicationTickHook(void)
 {
     static uint32_t tick_cnt = 0;
+    /* err_mgr 运行时长快照（SysTick 优先级 15 >= syscall 限制，ISR API 合法） */
+    ERR_TickMs = xTaskGetTickCountFromISR() * portTICK_PERIOD_MS;
     if (++tick_cnt >= WDOG_FEED_PERIOD_MS) {   /* 1kHz tick => 周期=WDOG_FEED_PERIOD_MS ms */
         tick_cnt = 0;
         BSP_Watchdog_Refresh();
@@ -46,6 +49,16 @@ static void print_data_link_stats(void)
     LOG_Printf("  Cmd queue lost: %lu\r\n", DataLink_GetCmdLostCount());
     LOG_Printf("  TX frames lost: %lu\r\n", DataLink_GetTxLostCount());
     LOG_Printf("  TX errors:      %lu\r\n", DataLink_GetTxErrorCount());
+}
+
+static void print_crash_info(void)
+{
+    LOG_Printf("=== LAST CRASH ===\r\n");
+    LOG_Printf("  Crash seq: %lu\r\n", (unsigned long)ERR_GetCrashSeq());
+    const err_record_t *rec = ERR_GetLastRecord();
+    if (rec != NULL) {
+        LOG_Printf("  Cause: %s\r\n", rec->cause);
+    }
 }
 
 static void print_task_list(void)
@@ -163,6 +176,7 @@ static const monitor_item_t monitor_items[] = {
     {"Reset Reason",print_reset_reason},
     {"Event Bus",   print_event_bus_stats},
     {"DataLink",    print_data_link_stats},
+    {"Last Crash",  print_crash_info},
     // 示例：未来添加监控变量
     // {"Custom Sensor", print_custom_sensor},
 };
@@ -186,6 +200,10 @@ static void handle_sysmon_msg(const message_t *msg)
 /* ================== 模块初始化 ================== */
 void SysMon_Init(void)
 {
+    /* 错误管理初始化 + 启动时复现上次崩溃原因 */
+    ERR_Init();
+    ERR_ReportLastCrash();
+
 #if APP_DEBUG_MODE
     LOG_Printf("SysMon: debug mode, watchdog disabled.\r\n");
 #else

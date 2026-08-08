@@ -2176,6 +2176,11 @@
               <FilePath>..\SystemServices\watchdog.c</FilePath>
             </File>
             <File>
+              <FileName>err_mgr.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\err_mgr.c</FilePath>
+            </File>
+            <File>
               <FileName>la_sample.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\SystemServices\la_sample.c</FilePath>

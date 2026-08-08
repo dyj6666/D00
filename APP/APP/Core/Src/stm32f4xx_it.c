@@ -31,6 +31,7 @@
 #include "core_cm4.h"
 #include "la_sample.h"
 #include "signal_gen.h"
+#include "err_mgr.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -60,96 +61,72 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void hardfault_dump_c(uint32_t *stack_frame);
-
-/* 仿照 CMSIS 写法，手动实现 __get_LR */
-__STATIC_INLINE uint32_t __get_LR(void)
+/* 异常入口汇编包装：在进入 C 之前捕获真实 EXC_RETURN，
+ * 并按 EXC_RETURN.bit2 选择栈指针（1=线程模式 PSP，0=处理模式 MSP）。
+ * 传递：R0=栈帧指针，R1=EXC_RETURN，R2=错误来源（err_src_t 枚举值）。 */
+__asm void NMI_Handler(void)
 {
-  register uint32_t __regLinkRegister  __ASM("lr");
-  return(__regLinkRegister);
+    IMPORT ERR_HandleFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #1
+    LDR  R3, =ERR_HandleFaultEntry
+    BX   R3
 }
 
-/* 诊断函数（保持不变，但MSP/PSP统一使用CMSIS安全函数） */
-static const char *fault_type_str(uint32_t cfsr) {
-    if (cfsr & (1 << 25)) return "DIVBY0 (Divide by zero)";
-    if (cfsr & (1 << 24)) return "UNALIGNED";
-    if (cfsr & (1 << 17)) return "INVSTATE (Invalid state)";
-    if (cfsr & (1 << 16)) return "UNDEFINSTR";
-    if (cfsr & (1 << 9))  return "PRECISERR (Precise data bus error)";
-    if (cfsr & (1 << 8))  return "IMPRECISERR (Imprecise data bus error)";
-    if (cfsr & (1 << 1))  return "DACCVIOL (Data access violation)";
-    if (cfsr & (1 << 0))  return "IACCVIOL (Instruction access violation)";
-    return "UNKNOWN";
+__asm void HardFault_Handler(void)
+{
+    IMPORT ERR_HandleFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #2
+    LDR  R3, =ERR_HandleFaultEntry
+    BX   R3
 }
 
-static void hardfault_dump(uint32_t *stack_frame) {
-    char buf[256];
-    uint32_t stacked_r0 = stack_frame[0];
-    uint32_t stacked_r1 = stack_frame[1];
-    uint32_t stacked_r2 = stack_frame[2];
-    uint32_t stacked_r3 = stack_frame[3];
-    uint32_t stacked_r12 = stack_frame[4];
-    uint32_t stacked_lr  = stack_frame[5];
-    uint32_t stacked_pc  = stack_frame[6];
-    uint32_t stacked_psr = stack_frame[7];
-
-    uint32_t cfsr = SCB->CFSR;
-    uint32_t hfsr = SCB->HFSR;
-    uint32_t bfar = SCB->BFAR;
-    uint32_t mmfar = SCB->MMFAR;
-
-    int len = sprintf(buf, "\r\n===== HARD FAULT =====\r\n");
-    HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-
-    len = sprintf(buf, "CFSR: 0x%08X  HFSR: 0x%08X\r\n", (unsigned int)cfsr, (unsigned int)hfsr);
-    HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-
-    if (hfsr & (1 << 30)) {
-        len = sprintf(buf, "FORCED HardFault (from another exception)\r\n");
-        HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-    }
-
-    const char *type = fault_type_str(cfsr);
-    len = sprintf(buf, "Fault Type: %s\r\n", type);
-    HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-
-    if (cfsr & (1 << 7)) {
-        len = sprintf(buf, "Fault Address (BFAR): 0x%08X\r\n", (unsigned int)bfar);
-        HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-    }
-    if (cfsr & (1 << 7)) {
-        len = sprintf(buf, "Fault Address (MMFAR): 0x%08X\r\n", (unsigned int)mmfar);
-        HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-    }
-
-    len = sprintf(buf, "R0: 0x%08X  R1: 0x%08X  R2: 0x%08X  R3: 0x%08X\r\n",
-                  (unsigned int)stacked_r0, (unsigned int)stacked_r1,
-                  (unsigned int)stacked_r2, (unsigned int)stacked_r3);
-    HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-
-    len = sprintf(buf, "R12: 0x%08X  LR: 0x%08X  PC: 0x%08X  xPSR: 0x%08X\r\n",
-                  (unsigned int)stacked_r12, (unsigned int)stacked_lr,
-                  (unsigned int)stacked_pc, (unsigned int)stacked_psr);
-    HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-
-    /* MSP 和 PSP 使用 CMSIS 安全函数 */
-    uint32_t msp_val = __get_MSP();
-    uint32_t psp_val = __get_PSP();
-    len = sprintf(buf, "MSP: 0x%08X  PSP: 0x%08X\r\n", (unsigned int)msp_val, (unsigned int)psp_val);
-    HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-
-    len = sprintf(buf, "PC (instruction): 0x%08X\r\n", (unsigned int)stacked_pc);
-    HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
-    len = sprintf(buf, "LR (return): 0x%08X\r\n", (unsigned int)stacked_lr);
-    HAL_UART_Transmit(&DEBUG_UART, (uint8_t*)buf, len, 1000);
+__asm void MemManage_Handler(void)
+{
+    IMPORT ERR_HandleFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #3
+    LDR  R3, =ERR_HandleFaultEntry
+    BX   R3
 }
 
-void hardfault_dump_c(uint32_t *stack_frame) {
-    hardfault_dump(stack_frame);
-    while (1) {
-        HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
-        for (volatile int i = 0; i < 500000; i++);
-    }
+__asm void BusFault_Handler(void)
+{
+    IMPORT ERR_HandleFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #4
+    LDR  R3, =ERR_HandleFaultEntry
+    BX   R3
+}
+
+__asm void UsageFault_Handler(void)
+{
+    IMPORT ERR_HandleFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #5
+    LDR  R3, =ERR_HandleFaultEntry
+    BX   R3
 }
 /* USER CODE END 0 */
 
@@ -173,92 +150,6 @@ extern TIM_HandleTypeDef htim7;
 /******************************************************************************/
 /*           Cortex-M4 Processor Interruption and Exception Handlers          */
 /******************************************************************************/
-/**
-  * @brief This function handles Non maskable interrupt.
-  */
-void NMI_Handler(void)
-{
-  /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
-
-  /* USER CODE END NonMaskableInt_IRQn 0 */
-  /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
-   while (1)
-  {
-  }
-  /* USER CODE END NonMaskableInt_IRQn 1 */
-}
-
-/**
-  * @brief This function handles Hard fault interrupt.
-  */
-void HardFault_Handler(void)
-{
-  /* USER CODE BEGIN HardFault_IRQn 0 */
-  uint32_t *stack_ptr;
-
-    /* 使用自定义 __get_LR 和 CMSIS 标准函数 */
-    if (__get_LR() & 0x04) {
-        stack_ptr = (uint32_t *)__get_PSP();
-    } else {
-        stack_ptr = (uint32_t *)__get_MSP();
-    }
-
-    hardfault_dump_c(stack_ptr);
-  /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    HAL_GPIO_TogglePin(LED0_GPIO_Port, LED0_Pin);
-    HAL_Delay(100);
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
-}
-
-/**
-  * @brief This function handles Memory management fault.
-  */
-void MemManage_Handler(void)
-{
-  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
-  /* USER CODE END MemoryManagement_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
-    /* USER CODE END W1_MemoryManagement_IRQn 0 */
-  }
-}
-
-/**
-  * @brief This function handles Pre-fetch fault, memory access fault.
-  */
-void BusFault_Handler(void)
-{
-  /* USER CODE BEGIN BusFault_IRQn 0 */
-
-  /* USER CODE END BusFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
-    /* USER CODE END W1_BusFault_IRQn 0 */
-  }
-}
-
-/**
-  * @brief This function handles Undefined instruction or illegal state.
-  */
-void UsageFault_Handler(void)
-{
-  /* USER CODE BEGIN UsageFault_IRQn 0 */
-
-  /* USER CODE END UsageFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
-    /* USER CODE END W1_UsageFault_IRQn 0 */
-  }
-}
-
 /**
   * @brief This function handles Debug monitor.
   */

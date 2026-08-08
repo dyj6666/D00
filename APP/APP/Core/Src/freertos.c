@@ -31,6 +31,7 @@
 #include "timers.h"
 #include "module.h"
 #include "cmsis_os2.h"
+#include "err_mgr.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -122,15 +123,9 @@ unsigned long getRunTimeCounterValue(void)
 /* USER CODE BEGIN 4 */
 void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)
 {
-   /* 栈溢出检测：轮询 USART2 打印任务名后停机（不依赖可能损坏的 RTOS/printf） */
-   extern UART_HandleTypeDef huart2;
-   const char *p = pcTaskName ? (const char *)pcTaskName : "?";
+   /* 栈溢出：进入统一错误管理（完整转储 + BKP 持久化 + 软复位） */
    (void)xTask;
-   while (*p) {
-       while (!(huart2.Instance->SR & UART_FLAG_TXE)) {}
-       huart2.Instance->DR = (uint8_t)*p++;
-   }
-   for (;;) {}
+   ERR_HandleStackOverflow((const char *)pcTaskName);
 }
 /* USER CODE END 4 */
 

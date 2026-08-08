@@ -8,6 +8,7 @@
 #include "la_trigger.h"
 #include "signal_gen.h"
 #include "ota_agent.h"
+#include "err_mgr.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -51,6 +52,9 @@ static void cmd_sg_i2c_stop(const char *args);
 static void cmd_sg_i2c_complex(const char *args);
 static void cmd_ota_rbtest(const char *args);
 static void cmd_eb_stress(const char *args);
+#if CRASH_INJECT_ENABLE
+static void cmd_crash(const char *args);
+#endif
 
 static const cmd_entry_t cmd_table[] = {
     {"help",         cmd_help},
@@ -82,6 +86,9 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_i2c_complex", cmd_sg_i2c_complex},
     {"ota_rbtest",     cmd_ota_rbtest},
     {"eb_stress",      cmd_eb_stress},
+#if CRASH_INJECT_ENABLE
+    {"crash",          cmd_crash},
+#endif
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
@@ -504,6 +511,62 @@ static void cmd_ota_rbtest(const char *args)
     LOG_Printf("OTA rollback test: arming...\r\n");
     Ota_ForceRollbackTest();
 }
+
+#if CRASH_INJECT_ENABLE
+/* ================== 崩溃注入（仅调试构建，用于验证纠错系统） ==================
+ * 用法：
+ *   crash bus     -> 写非法地址触发 BusFault
+ *   crash undef   -> 跳转非法指令触发 UsageFault/HardFault
+ *   crash stack   -> 无限递归触发 FreeRTOS 栈溢出检测
+ *   crash assert  -> 直接调用 ERR_HandleAssert 模拟 RTOS 断言失败 */
+__attribute__((noinline)) static void crash_bus(void)
+{
+    *(volatile uint32_t *)0xDEADBEEFu = 0x55u;
+}
+
+__attribute__((noinline)) static void crash_undef(void)
+{
+    ((void (*)(void))0xFFFFFFFFu)();
+}
+
+__attribute__((noinline)) static void crash_stack(int depth)
+{
+    volatile uint8_t pad[128];
+    pad[0] = (uint8_t)0xAA;
+    (void)pad;
+    if (depth > 0) {
+        taskYIELD();          /* 让调度器在递归间隙做栈溢出检查 */
+        crash_stack(depth - 1);
+    }
+}
+
+static void cmd_crash(const char *args)
+{
+    if (args == NULL) {
+        LOG_Printf("Usage: crash <bus|undef|stack|assert>\r\n");
+        return;
+    }
+    LOG_Printf("Injecting crash: %s\r\n", args);
+    if (strcmp(args, "bus") == 0) {
+        crash_bus();
+    } else if (strcmp(args, "undef") == 0) {
+        crash_undef();
+    } else if (strcmp(args, "stack") == 0) {
+        crash_stack(200);     /* 128B×200 远超 2KB 任务栈，触发溢出检测 */
+    } else if (strcmp(args, "assert") == 0) {
+        ERR_HandleAssert(0xBADFu);
+    } else if (strcmp(args, "irq") == 0) {
+        /* 使能并置位一个未实现处理器的中断，触发 Default_Handler 诊断 */
+        NVIC_EnableIRQ(TIM4_IRQn);
+        NVIC_SetPendingIRQ(TIM4_IRQn);
+    } else if (strcmp(args, "unhandled") == 0) {
+        /* 直接调用未处理中断诊断（绕过中断路径，用于定位） */
+        ERR_HandleUnhandledIRQ(46u);
+    } else {
+        LOG_Printf("Unknown crash type\r\n");
+    }
+}
+#endif
 
 /* ================== 事件总线极限负载测试 ==================
  * 用法：

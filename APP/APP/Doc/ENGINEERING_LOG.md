@@ -783,3 +783,31 @@ auto-stop）全部按设计工作。
 - **架构结论**：事件总线"静态池+指针队列+最高优先级分发任务"设计合理，吞吐受
   eventBusTask 消化速率约束（40k msg/s 量级），真实业务（<1k msg/s）余量 ≥40 倍；
   池大小 32 为内存与并发上限的平衡点，按需可调。
+
+### 12.37 顶级纠错系统（崩溃诊断 + 原因复现 + 安全恢复）
+- **设计**：新增 `SystemServices/err_mgr.{c,h}` 错误管理模块，覆盖：
+  - Cortex-M4 全部 fault（NMI/HardFault/MemManage/BusFault/UsageFault）——
+    5 个 **汇编入口直接占用中断向量**（naked/__asm 在进入 C 前捕获真实 EXC_RETURN
+    与栈指针，按 EXC_RETURN.bit2 选 PSP/MSP），不再死循环；
+  - 未处理中断：startup 弱 handler 汇聚点改为**读取 VECTACTIVE 进统一诊断**；
+  - RTOS 层：configASSERT（带 __LINE__）、栈溢出钩子、任务看门狗 stall 全部接入。
+- **现场采集**：寄存器/栈帧/CFSR/HFSR/BFAR/MMFAR 解码、当前任务名（pxCurrentTCB 直读）、
+  堆栈回溯（Flash 范围+Thumb 位启发式扫描，SRAM 边界保护防二次 fault）、
+  EXC_RETURN 线程/处理模式判别。
+- **持久化与复现**：摘要存 RTC 备份寄存器（reg 1-15，reg 0 保留给 OTA），
+  含 CRC 校验；启动时 `ERR_ReportLastCrash()` 自动打印上次崩溃原因（[CRASH] 复现）。
+- **恢复策略**：默认**软复位**（LED 快闪提示）；RTC 秒级窗口检测连续快速崩溃
+  （10s 内 3 次）→ **防抖锁定**（喂狗+慢闪等待人工断电，防复位风暴）。
+- **崩溃注入工具**：`crash <bus|undef|stack|assert|irq>` shell 命令
+  （`CRASH_INJECT_ENABLE` 开关，生产发布置 0）。
+- **实机验证（v82-v92）**：5 种来源全矩阵通过，崩溃序号 #1-#5 递增、
+  完整诊断输出、复位后自动复现、防抖锁定生效（3 次快速崩溃后 12s 无复位）。
+- **调试中发现并根治的 4 个关键坑**：
+  1. 汇编入口必须**直接作为中断向量**（C 包装的 BL 调用破坏现场寄存器）；
+  2. `HAL_UART_AbortTransmit` 在中断上下文可能阻塞 → 转储改裸寄存器
+     （直接禁 DMA 流 + 清标志 + 轮询 TXE）；
+  3. `xTaskGetCurrentTaskHandle()` 内部 `taskENTER_CRITICAL` 在 ISR 非法 →
+     改为直接读 `pxCurrentTCB`（task.h 未导出，extern 声明）；
+  4. `xTaskGetTickCountFromISR()` 在最高优先级中断（优先级 0）触发 FreeRTOS
+     优先级断言 → 递归 assert 死循环 → 改为 SysTick 钩子维护 `ERR_TickMs` 快照。
+- **sysmon**：新增 "Last Crash" 监控项（崩溃序号 + 原因），复位原因独立显示。

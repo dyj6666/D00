@@ -387,7 +387,14 @@ DCMI_IRQHandler
 HASH_RNG_IRQHandler
 FPU_IRQHandler  
            
-                B       .
+                ; 未处理中断统一诊断：读取 VECTACTIVE 后进入 C 错误管理
+                IMPORT  ERR_HandleUnhandledIRQ
+                LDR     R0, =0xE000ED04      ; SCB->ICSR
+                LDR     R0, [R0]
+                LDR     R1, =0x1FF           ; VECTACTIVE 位 [8:0]
+                AND     R0, R0, R1
+                LDR     R1, =ERR_HandleUnhandledIRQ
+                BX      R1
 
                 ENDP
 
