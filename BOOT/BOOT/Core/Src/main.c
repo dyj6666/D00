@@ -27,6 +27,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "boot_app.h"
+#include "boot_err.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -96,6 +97,7 @@ int main(void)
   // MX_IWDG_Init();
   MX_RTC_Init();
   MX_USART2_UART_Init();
+  Boot_ErrReportLast();      /* 复现上次 BOOT 崩溃原因（RTC/USART2 就绪后） */
   /* USER CODE BEGIN 2 */
   /* BOOT 主流程：看门狗 / 升级标志 / APP 校验 / 跳转或升级 */
   BootApp_Run();

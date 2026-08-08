@@ -28,7 +28,7 @@
 #define BOOT_ST_DONE     7   /* 完成重启 */
 #define BOOT_ST_FAIL     0xFF
 
-static volatile bool g_emit_status = false;
+static bool g_emit_status;   /* 单线程访问（BOOT 主流程），无需 volatile */
 
 static uint16_t crc16_mbus(const uint8_t *data, uint32_t len)
 {

@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "usart.h"
 #include "ymodem_port.h"
+#include "boot_err.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -53,7 +54,72 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/* 异常入口 __asm 包装：进入 C 前捕获真实 EXC_RETURN，按 bit2 选 PSP/MSP。
+ * 传递：R0=栈帧指针，R1=EXC_RETURN，R2=错误来源。 */
+__asm void NMI_Handler(void)
+{
+    IMPORT Boot_ErrFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #1
+    LDR  R3, =Boot_ErrFaultEntry
+    BX   R3
+}
 
+__asm void HardFault_Handler(void)
+{
+    IMPORT Boot_ErrFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #2
+    LDR  R3, =Boot_ErrFaultEntry
+    BX   R3
+}
+
+__asm void MemManage_Handler(void)
+{
+    IMPORT Boot_ErrFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #3
+    LDR  R3, =Boot_ErrFaultEntry
+    BX   R3
+}
+
+__asm void BusFault_Handler(void)
+{
+    IMPORT Boot_ErrFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #4
+    LDR  R3, =Boot_ErrFaultEntry
+    BX   R3
+}
+
+__asm void UsageFault_Handler(void)
+{
+    IMPORT Boot_ErrFaultEntry
+    TST  LR, #4
+    ITE  EQ
+    MRSEQ R0, MSP
+    MRSNE R0, PSP
+    MOV  R1, LR
+    MOV  R2, #5
+    LDR  R3, =Boot_ErrFaultEntry
+    BX   R3
+}
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -67,81 +133,6 @@ extern UART_HandleTypeDef huart2;
 /******************************************************************************/
 /*           Cortex-M4 Processor Interruption and Exception Handlers          */
 /******************************************************************************/
-/**
-  * @brief This function handles Non maskable interrupt.
-  */
-void NMI_Handler(void)
-{
-  /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
-
-  /* USER CODE END NonMaskableInt_IRQn 0 */
-  /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
-   while (1)
-  {
-  }
-  /* USER CODE END NonMaskableInt_IRQn 1 */
-}
-
-/**
-  * @brief This function handles Hard fault interrupt.
-  */
-void HardFault_Handler(void)
-{
-  /* USER CODE BEGIN HardFault_IRQn 0 */
-
-  /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
-}
-
-/**
-  * @brief This function handles Memory management fault.
-  */
-void MemManage_Handler(void)
-{
-  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-
-  /* USER CODE END MemoryManagement_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
-    /* USER CODE END W1_MemoryManagement_IRQn 0 */
-  }
-}
-
-/**
-  * @brief This function handles Pre-fetch fault, memory access fault.
-  */
-void BusFault_Handler(void)
-{
-  /* USER CODE BEGIN BusFault_IRQn 0 */
-
-  /* USER CODE END BusFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
-    /* USER CODE END W1_BusFault_IRQn 0 */
-  }
-}
-
-/**
-  * @brief This function handles Undefined instruction or illegal state.
-  */
-void UsageFault_Handler(void)
-{
-  /* USER CODE BEGIN UsageFault_IRQn 0 */
-
-  /* USER CODE END UsageFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
-    /* USER CODE END W1_UsageFault_IRQn 0 */
-  }
-}
-
 /**
   * @brief This function handles System service call via SWI instruction.
   */

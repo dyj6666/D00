@@ -811,3 +811,19 @@ auto-stop）全部按设计工作。
   4. `xTaskGetTickCountFromISR()` 在最高优先级中断（优先级 0）触发 FreeRTOS
      优先级断言 → 递归 assert 死循环 → 改为 SysTick 钩子维护 `ERR_TickMs` 快照。
 - **sysmon**：新增 "Last Crash" 监控项（崩溃序号 + 原因），复位原因独立显示。
+
+### 12.38 BOOT 轻量纠错系统（bootloader 专用精简版）
+- **背景**：BOOT 全部 fault handler 原为**空死循环**（仅靠 IWDG 兜底，崩溃无现场信息）。
+- **设计原则**：bootloader 比 APP 更精简——无 RTOS（无任务名/回溯/钩子），
+  不做防抖锁定（BOOT 必须能自动恢复，持续崩溃由升级流程兜底）。
+- **实现**（`BootServices/boot_err.{c,h}`）：
+  - 5 个 fault（NMI/HardFault/MemManage/BusFault/UsageFault）汇编入口直接占向量，
+    捕获真实 EXC_RETURN 与栈指针 → 统一 C 入口；
+  - 裸 UART2 诊断输出（fault 类型/PC/LR/寄存器/CFSR/HFSR，不依赖 printf/HAL）；
+  - **软复位恢复**（绝不死循环）；
+  - 崩溃摘要持久化 BKP **reg 16-19**（与 APP err_mgr 的 reg 1-15 隔离，
+    reg 0 保留给 OTA 标志），CRC 校验；
+  - 启动时 `Boot_ErrReportLast()` 自动复现上次 BOOT 崩溃（main.c 集成）。
+- **验证**：BOOT 编译 0 Error（1 个 ARMCC #111-D 固有误报——还原对比确认与改动无关）；
+  DAP 烧录 Erase/Program/Verify OK；复位后启动链正常（BOOT→APP 无回归），
+  无崩溃记录时复现函数正确静默。崩溃路径机制与 APP 已实机验证方案同构。
