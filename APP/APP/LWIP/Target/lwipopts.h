@@ -113,7 +113,37 @@
 #define CHECKSUM_CHECK_ICMP6 0
 /*-----------------------------------------------------------------------------*/
 /* USER CODE BEGIN 1 */
-
+/* ---- 性能/内存平衡调优（覆盖 opt.h 默认，CubeMX 重新生成后保留） ----
+ * 零拷贝 RX（自定义池 8×1536）+ 硬件 TX 校验和卸载；
+ * TCP 窗口 8.5KB / 发送缓冲 4.3KB，MEM 堆 12KB 覆盖双连接。 */
+#define MEM_SIZE                    (12 * 1024)
+#define PBUF_POOL_SIZE              8
+#define TCP_WND                     (8 * TCP_MSS)
+#define TCP_SND_BUF                 (8 * TCP_MSS)
+#undef  TCP_SND_QUEUELEN
+#define TCP_SND_QUEUELEN            (4 * TCP_SND_BUF / TCP_MSS + 8)
+#undef  TCP_SNDLOWAT
+#define TCP_SNDLOWAT                (TCP_SND_BUF / 2)
+#undef  TCP_SNDQUEUELOWAT
+#define TCP_SNDQUEUELOWAT           12
+#undef  TCP_WND_UPDATE_THRESHOLD
+#define TCP_WND_UPDATE_THRESHOLD    (TCP_WND / 2)
+#define MEMP_NUM_TCP_SEG            64
+#define MEMP_NUM_ARP_QUEUE          16
+#define LWIP_RAW                    1   /* ICMP ping（raw API） */
+#define LWIP_SOCKET                 0   /* 未用 POSIX socket：省 flash，服务用 netconn/raw */
+#undef  CHECKSUM_GEN_ICMP
+#define CHECKSUM_GEN_ICMP           1   /* F4 MAC 不卸载 ICMP 校验和，必须软件计算 */
+#undef  CHECKSUM_GEN_IP
+#define CHECKSUM_GEN_IP             1   /* 对照实验：软件计算，排除 MAC 卸载嫌疑 */
+#undef  CHECKSUM_GEN_UDP
+#define CHECKSUM_GEN_UDP            1
+#undef  CHECKSUM_GEN_TCP
+#define CHECKSUM_GEN_TCP            1
+#undef  TCPIP_THREAD_STACKSIZE
+#define TCPIP_THREAD_STACKSIZE      2048   /* raw 回调（ping/回显）在 tcpip 线程执行，1024 会溢出 */
+#undef  DEFAULT_THREAD_STACKSIZE
+#define DEFAULT_THREAD_STACKSIZE    2048
 /* USER CODE END 1 */
 
 #ifdef __cplusplus

@@ -21,7 +21,7 @@ MEMORY
   FLASH (rx)      : ORIGIN = 0x08010000, LENGTH = 0x50000   /* 320 KB */
   RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 0x20000   /* 128 KB */
   MEMORY_B1 (rx)  : ORIGIN = 0x60000000, LENGTH = 0K
-  CCMRAM (rw)     : ORIGIN = 0x10000000, LENGTH = 0K
+  CCMRAM (rw)     : ORIGIN = 0x10000000, LENGTH = 64K
 }
 
 SECTIONS
@@ -95,6 +95,12 @@ SECTIONS
     _ebss = .;
     __bss_end__ = _ebss;
   } >RAM
+
+  /* CCM RAM：CPU-only 数据（FreeRTOS 堆、LA 预触发缓冲），DMA 不可达 */
+  .ccmram (NOLOAD) :
+  {
+    *(.ccmram)
+  } >CCMRAM
 
   /* 堆与栈 */
   ._user_heap_stack :

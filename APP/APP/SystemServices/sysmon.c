@@ -10,6 +10,7 @@
 #include "watchdog.h"
 #include "data_link.h"
 #include "err_mgr.h"
+#include "eth_app.h"
 
 #include <string.h>
 
@@ -49,6 +50,26 @@ static void print_data_link_stats(void)
     LOG_Printf("  Cmd queue lost: %lu\r\n", DataLink_GetCmdLostCount());
     LOG_Printf("  TX frames lost: %lu\r\n", DataLink_GetTxLostCount());
     LOG_Printf("  TX errors:      %lu\r\n", DataLink_GetTxErrorCount());
+}
+
+static void print_eth_stats(void)
+{
+    EthApp_RefreshStatus();
+    const eth_status_t *st = EthApp_GetStatus();
+    LOG_Printf("=== ETH ===\r\n");
+    LOG_Printf("  Link: %s", st->link_up ? "UP" : "DOWN");
+    if (st->link_up) {
+        LOG_Printf("  IP: %u.%u.%u.%u  MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                   st->ip[0], st->ip[1], st->ip[2], st->ip[3],
+                   st->mac[0], st->mac[1], st->mac[2],
+                   st->mac[3], st->mac[4], st->mac[5]);
+        LOG_Printf("  RX: %lu packets  TX: %lu packets  UP: %lu s\r\n",
+                   (unsigned long)st->rx_packets,
+                   (unsigned long)st->tx_packets,
+                   (unsigned long)st->link_uptime_s);
+    } else {
+        LOG_Printf("\r\n");
+    }
 }
 
 static void print_crash_info(void)
@@ -176,6 +197,7 @@ static const monitor_item_t monitor_items[] = {
     {"Reset Reason",print_reset_reason},
     {"Event Bus",   print_event_bus_stats},
     {"DataLink",    print_data_link_stats},
+    {"ETH",         print_eth_stats},
     {"Last Crash",  print_crash_info},
     // 示例：未来添加监控变量
     // {"Custom Sensor", print_custom_sensor},

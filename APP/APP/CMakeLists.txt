@@ -57,6 +57,7 @@ if(CMAKE_CROSSCOMPILING)
         Application/led_app.c
         Application/ota_agent.c
         Application/data_agent.c
+        Application/eth_app.c
         # FreeRTOS
         Middlewares/Third_Party/FreeRTOS/Source/croutine.c
         Middlewares/Third_Party/FreeRTOS/Source/event_groups.c

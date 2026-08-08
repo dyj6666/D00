@@ -18,4 +18,9 @@
 #define VAR_ID_LA_CH0       0x7002
 #define VAR_ID_LA_CH3       0x7003
 
+/* 0x8xxx: EthApp */
+#define VAR_ID_ETH_LINK     0x8001
+#define VAR_ID_ETH_RX       0x8002
+#define VAR_ID_ETH_TX       0x8003
+
 #endif

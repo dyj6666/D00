@@ -16,6 +16,7 @@
 #include "bsp_touch.h"
 #include "buzzer_app.h"
 #include "imu_svc.h"
+#include "eth_app.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -46,6 +47,7 @@ static void cmd_la_dma_start(const char *args);
 static void cmd_la_dma_stop(const char *args);
 static void cmd_la_dump(const char *args);
 static void cmd_la_dma_stat(const char *args);
+static void cmd_net(const char *args);
 static void cmd_la_info(const char *args);
 static void cmd_la_state(const char *args);
 static void cmd_la_peek(const char *args);
@@ -59,6 +61,95 @@ static void cmd_sg_i2c_stop(const char *args);
 static void cmd_sg_i2c_complex(const char *args);
 static void cmd_ota_rbtest(const char *args);
 static void cmd_eb_stress(const char *args);
+static void cmd_net(const char *args)
+{
+    EthApp_RefreshStatus();
+    const eth_status_t *st = EthApp_GetStatus();
+    if (args != NULL && strncmp(args, "ping", 4) == 0) {
+        const char *ip = args + 4;
+        while (*ip == ' ' || *ip == '\t') ip++;
+        if (*ip == '\0') {
+            LOG_Printf("Usage: net ping <ip>\r\n");
+            return;
+        }
+        LOG_Printf("PING %s (timeout 2000ms)...\r\n", ip);
+        int rtt = EthApp_Ping(ip, 2000);
+        if (rtt >= 0) {
+            LOG_Printf("Reply from %s: time=%dms\r\n", ip, rtt);
+        } else {
+            LOG_Printf("No reply from %s (err=%d)\r\n", ip, rtt);
+        }
+        return;
+    }
+    if (args != NULL && strncmp(args, "ip ", 3) == 0) {
+        const char *ip = args + 3;
+        while (*ip == ' ' || *ip == '\t') ip++;
+        if (*ip == '\0') {
+            LOG_Printf("Usage: net ip <a.b.c.d>\r\n");
+            return;
+        }
+        if (EthApp_SetStaticIP(ip) == 0) {
+            LOG_Printf("IP set to %s/24 (no gw)\r\n", ip);
+        } else {
+            LOG_Printf("Invalid IP: %s\r\n", ip);
+        }
+        return;
+    }    if (args != NULL && strncmp(args, "udp ", 4) == 0) {
+        const char *p = args + 4;
+        while (*p == ' ' || *p == '\t') p++;
+        char ip[32];
+        const char *sp = p;
+        while (*sp && *sp != ' ' && *sp != '\t') sp++;
+        size_t ip_len = (size_t)(sp - p);
+        if (ip_len == 0 || ip_len >= sizeof(ip)) {
+            LOG_Printf("Usage: net udp <ip> <port> <hex>\r\n");
+            return;
+        }
+        memcpy(ip, p, ip_len);
+        ip[ip_len] = '\0';
+        p = sp;
+        while (*p == ' ' || *p == '\t') p++;
+        char *endp = NULL;
+        unsigned long port = strtoul(p, &endp, 10);
+        if (endp == p) {
+            LOG_Printf("Usage: net udp <ip> <port> <hex>\r\n");
+            return;
+        }
+        p = endp;
+        while (*p == ' ' || *p == '\t') p++;
+        uint8_t buf[64];
+        uint16_t blen = 0;
+        while (isxdigit((unsigned char)p[0]) && isxdigit((unsigned char)p[1])) {
+            unsigned int v = 0;
+            sscanf(p, "%2x", &v);
+            if (blen < sizeof(buf)) buf[blen++] = (uint8_t)v;
+            p += 2;
+        }
+        int r = EthApp_UdpSend(ip, (uint16_t)port, buf, blen);
+        LOG_Printf("UDP %s:%lu len=%u -> %d\r\n", ip, port, (unsigned)blen, r);
+        return;
+    }    if (args != NULL && strncmp(args, "dbg ", 4) == 0) {
+        if (strcmp(args + 4, "1") == 0 || strcmp(args + 4, " on") == 0 ||
+            strcmp(args + 4, "on") == 0) {
+            EthApp_SetTxDbg(1);
+            LOG_Printf("TX debug ON\r\n");
+        } else {
+            EthApp_SetTxDbg(0);
+            LOG_Printf("TX debug OFF\r\n");
+        }
+        return;
+    }    LOG_Printf("=== ETH ===\r\n");
+    LOG_Printf("  Link: %s\r\n", st->link_up ? "UP" : "DOWN");
+    if (st->link_up) {
+        LOG_Printf("  IP  : %u.%u.%u.%u\r\n", st->ip[0], st->ip[1], st->ip[2], st->ip[3]);
+        LOG_Printf("  GW  : %u.%u.%u.%u\r\n", st->gw[0], st->gw[1], st->gw[2], st->gw[3]);
+        LOG_Printf("  MAC : %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                   st->mac[0], st->mac[1], st->mac[2], st->mac[3], st->mac[4], st->mac[5]);
+        LOG_Printf("  RX  : %lu packets\r\n", (unsigned long)st->rx_packets);
+        LOG_Printf("  TX  : %lu packets\r\n", (unsigned long)st->tx_packets);
+        LOG_Printf("  UP  : %lu s\r\n", (unsigned long)st->link_uptime_s);
+    }
+}
 static void cmd_lcd(const char *args);
 static void cmd_touch(const char *args);
 static void cmd_beep(const char *args);
@@ -86,7 +177,8 @@ static const cmd_entry_t cmd_table[] = {
     {"la_info",      "LA info", cmd_la_info},
     {"la_state",     "LA state", cmd_la_state},
     {"la_peek",      "Peek sample at index", cmd_la_peek},
-    {"sg_uart_start","UART generator <baud> <text> <ms>", cmd_sg_uart_start},
+    {"sg_uart_start", "UART generator <baud> <text> <ms>", cmd_sg_uart_start},
+    {"net",          "ETH status / ping <ip>", cmd_net},
     {"sg_uart_stop", "Stop UART generator", cmd_sg_uart_stop},
     {"sg_uart_hex",  "UART hex frame generator", cmd_sg_uart_hex},
     {"sg_spi_start", "SPI generator <hex> <ms>", cmd_sg_spi_start},

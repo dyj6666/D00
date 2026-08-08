@@ -4,6 +4,7 @@
 #include "touch_svc.h"
 #include "bsp_touch.h"
 #include "imu_svc.h"
+#include "eth_app.h"
 #include "event_bus.h"
 #include "app_config.h"
 #include "data_link.h"
@@ -302,6 +303,48 @@ static void lcd_bus_draw(void)
     lcd_page_footer("KEY: NEXT PAGE");
 }
 
+/* ================= NET 页（以太网链路/IP/流量） ================= */
+static void lcd_net_refresh(void)
+{
+    char buf[24];
+    EthApp_RefreshStatus();
+    const eth_status_t *st = EthApp_GetStatus();
+    BSP_LCD_ShowString(8, 36, "Link", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(60, 36, st->link_up ? "UP" : "DOWN",
+                       st->link_up ? BSP_LCD_COLOR_GREEN : BSP_LCD_COLOR_RED,
+                       BSP_LCD_FONT_16);
+    if (st->link_up) {
+        snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+                 st->ip[0], st->ip[1], st->ip[2], st->ip[3]);
+    } else {
+        snprintf(buf, sizeof(buf), "-.-.-.-");
+    }
+    lcd_val(92, buf, BSP_LCD_COLOR_CYAN);
+    snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+             st->mac[0], st->mac[1], st->mac[2],
+             st->mac[3], st->mac[4], st->mac[5]);
+    lcd_val(118, buf, BSP_LCD_COLOR_YELLOW);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)st->rx_packets);
+    lcd_val(144, buf, BSP_LCD_COLOR_WHITE);
+    snprintf(buf, sizeof(buf), "%lu", (unsigned long)st->tx_packets);
+    lcd_val(170, buf, BSP_LCD_COLOR_WHITE);
+    snprintf(buf, sizeof(buf), "%lus", (unsigned long)st->link_uptime_s);
+    lcd_val(196, buf, BSP_LCD_COLOR_GREEN);
+}
+
+static void lcd_net_draw(void)
+{
+    lcd_page_clear_content();
+    lcd_page_header("NET");
+    BSP_LCD_ShowString(8, 92, "IP", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 118, "MAC", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 144, "RX", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 170, "TX", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 196, "Uptime", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_net_refresh();
+    lcd_page_footer("SWIPE: NEXT PAGE");
+}
+
 /* ================= TOUCH 页（触摸测试/调校观察） ================= */
 static const char *lcd_touch_state_name(uint8_t st)
 {
@@ -559,6 +602,7 @@ static const lcd_ui_page_t lcd_pages[] = {
     { "HOME",   lcd_home_draw,   lcd_home_refresh,   NULL,            0 },
     { "SYSTEM", lcd_system_draw, lcd_system_refresh, lcd_system_touch, 0 },
     { "BUS",    lcd_bus_draw,    lcd_bus_refresh,    NULL,            0 },
+    { "NET",    lcd_net_draw,    lcd_net_refresh,    NULL,            0 },
     { "TOUCH",  lcd_touch_draw,  lcd_touch_refresh,  lcd_touch_event, 0 },
     { "IMU",    lcd_imu_draw,    lcd_imu_refresh,    NULL,            10 },
 };

@@ -2097,6 +2097,11 @@
               <FileType>1</FileType>
               <FilePath>..\Application\buzzer_app.c</FilePath>
             </File>
+            <File>
+              <FileName>eth_app.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Application\eth_app.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

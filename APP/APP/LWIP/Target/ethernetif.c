@@ -27,7 +27,8 @@
 #include "lwip/ethip6.h"
 #include "ethernetif.h"
 /* USER CODE BEGIN Include for User BSP */
-
+#include "eth_app.h"   /* 帧计数钩子 */
+#include "eth_custom_phy_interface.h"   /* USER_PHY（YT8512C） */
 /* USER CODE END Include for User BSP */
 #include <string.h>
 #include "cmsis_os.h"
@@ -35,6 +36,19 @@
 
 /* Within 'USER CODE' section, code will be kept by default at each generation */
 /* USER CODE BEGIN 0 */
+#include <stdio.h>
+
+/* PHY 对象与总线上下文（函数定义见 PHI IO Functions 区） */
+user_phy_Object_t  user_phy;
+user_phy_IOCtx_t   user_phy_io_ctx;
+
+static int32_t ETH_PHY_IO_Init(void);
+static int32_t ETH_PHY_IO_DeInit(void);
+static int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr,
+                                  uint32_t *pRegVal);
+static int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr,
+                                   uint32_t RegVal);
+static int32_t ETH_PHY_IO_GetTick(void);
 
 /* USER CODE END 0 */
 
@@ -132,6 +146,7 @@ void pbuf_free_custom(struct pbuf *p);
   */
 void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
+  EthApp_CountRx();
   osSemaphoreRelease(RxPktSemaphore);
 }
 /**
@@ -141,6 +156,7 @@ void HAL_ETH_RxCpltCallback(ETH_HandleTypeDef *handlerEth)
   */
 void HAL_ETH_TxCpltCallback(ETH_HandleTypeDef *handlerEth)
 {
+  EthApp_CountTx();
   osSemaphoreRelease(TxPktSemaphore);
 }
 /**
@@ -258,6 +274,15 @@ static void low_level_init(struct netif *netif)
   {
 /* USER CODE BEGIN low_level_init Code 2 for User BSP */
 
+  /* PHY 总线注册 + 初始化（YT8512C，地址 0；扫描失败由链路线程持续重试） */
+  user_phy_io_ctx.Init     = ETH_PHY_IO_Init;
+  user_phy_io_ctx.DeInit   = ETH_PHY_IO_DeInit;
+  user_phy_io_ctx.ReadReg  = ETH_PHY_IO_ReadReg;
+  user_phy_io_ctx.WriteReg = ETH_PHY_IO_WriteReg;
+  user_phy_io_ctx.GetTick  = ETH_PHY_IO_GetTick;
+  USER_PHY_RegisterBusIO(&user_phy, &user_phy_io_ctx);
+  USER_PHY_Init(&user_phy);
+
 /* USER CODE END low_level_init Code 2 for User BSP */
 
   }
@@ -294,6 +319,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   struct pbuf *q = NULL;
   err_t errval = ERR_OK;
   ETH_BufferTypeDef Txbuffer[ETH_TX_DESC_CNT] = {0};
+  uint32_t tx_total = 0U;
 
   memset(Txbuffer, 0 , ETH_TX_DESC_CNT*sizeof(ETH_BufferTypeDef));
 
@@ -304,6 +330,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 
     Txbuffer[i].buffer = q->payload;
     Txbuffer[i].len = q->len;
+    tx_total += q->len;
 
     if(i>0)
     {
@@ -321,6 +348,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   TxConfig.Length = p->tot_len;
   TxConfig.TxBuffer = Txbuffer;
   TxConfig.pData = p;
+  EthApp_TxDbg(tx_total, (const uint8_t *)Txbuffer[0].buffer);
 
   pbuf_ref(p);
 
@@ -521,6 +549,36 @@ u32_t sys_now(void)
 
 /* USER CODE BEGIN PHI IO Functions for User BSP */
 
+/* 时钟/GPIO 已由 HAL_ETH_MspInit 完成，此处仅提供 MDIO 读写 */
+static int32_t ETH_PHY_IO_Init(void)
+{
+  return 0;
+}
+
+static int32_t ETH_PHY_IO_DeInit(void)
+{
+  return 0;
+}
+
+static int32_t ETH_PHY_IO_ReadReg(uint32_t DevAddr, uint32_t RegAddr,
+                                  uint32_t *pRegVal)
+{
+  return (HAL_ETH_ReadPHYRegister(&heth, DevAddr, RegAddr, pRegVal) == HAL_OK)
+             ? 0 : -1;
+}
+
+static int32_t ETH_PHY_IO_WriteReg(uint32_t DevAddr, uint32_t RegAddr,
+                                   uint32_t RegVal)
+{
+  return (HAL_ETH_WritePHYRegister(&heth, DevAddr, RegAddr, RegVal) == HAL_OK)
+             ? 0 : -1;
+}
+
+static int32_t ETH_PHY_IO_GetTick(void)
+{
+  return (int32_t)HAL_GetTick();
+}
+
 /* USER CODE END PHI IO Functions for User BSP */
 
 /**
@@ -531,6 +589,8 @@ void ethernet_link_thread(void* argument)
 {
 
 /* USER CODE BEGIN ETH link init */
+  struct netif *netif = (struct netif *)argument;
+  uint32_t link_prev = 0;   /* 0 = DOWN */
 
 /* USER CODE END ETH link init */
 
@@ -538,6 +598,24 @@ void ethernet_link_thread(void* argument)
   {
 
 /* USER CODE BEGIN ETH link Thread core code for User BSP */
+    int32_t st = USER_PHY_GetLinkState(&user_phy);
+    uint32_t link_now =
+        (st >= USER_PHY_STATUS_100MBITS_FULLDUPLEX &&
+         st <= USER_PHY_STATUS_10MBITS_HALFDUPLEX) ? 1u : 0u;
+    if (link_now != link_prev) {
+      if (link_now) {
+        if (HAL_ETH_Start_IT(&heth) != HAL_OK) {
+          printf("ETH: MAC start failed\r\n");
+        }
+        netif_set_link_up(netif);
+        printf("ETH: link UP (PHY st=%ld)\r\n", (long)st);
+      } else {
+        netif_set_link_down(netif);
+        HAL_ETH_Stop_IT(&heth);
+        printf("ETH: link DOWN\r\n");
+      }
+      link_prev = link_now;
+    }
 
 /* USER CODE END ETH link Thread core code for User BSP */
 

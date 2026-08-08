@@ -1424,3 +1424,40 @@ auto-stop）全部按设计工作。
 - **验证**：编译 0 Error / 0 Warning；v162 OTA 全链路成功（BOOT phase
   2→7 全绿）；系统健康（事件总线 0 丢失、IWDG 正常）。任务排序稳定性
   与触摸滚动待用户目视确认。
+
+### 12.74 ETH 极致集成 + 内存整体优化（v163~v178）
+- **内存优化（先行，v163）**：
+  - FreeRTOS 堆(35,840B)+LA 预触发缓冲(6,144B) 移入 **CCM(64KB)**——
+    堆分配仅用于任务栈/FIFO/队列（CPU-only，DMA 缓冲全部静态），安全；
+    scatter/ld 新增 `.ccmram` 区（zero_init，避免 RW 镜像膨胀）；
+  - LwIP 池调优：MEM 12KB（TCP 发送零拷贝）、PBUF_POOL 8、TCP_WND/SND_BUF
+    8×MSS、TCP_SEG 64、ARP_QUEUE 16；`LWIP_RAW=1`、`LWIP_SOCKET=0`；
+  - 效果：**SRAM 占用 88.7KB→53.6KB（省 ~35KB，余量 ~76KB）**，
+    CCM 用 42KB；Flash 173.5KB（OTA 限 232KB 内）。
+- **ETH 应用层（v163~v165）**：`EthApp` 模块（模块注册表 prio 65）：
+  链路/IP/MAC/RX-TX 帧计数、变量注册（eth_link/eth_rx/eth_tx）；
+  `net`/`net ping`/`net ip`/`net udp`/`net dbg` shell 命令；LCD **NET 页**；
+  sysmon ETH 监控项；lwip.c 链路回调钩子；ethernetif 帧计数钩子。
+- **ETH 硬件链路排障记录（v166~v178，全部实机定位）**：
+  1. **RMII TX 引脚**：探索者V3 的 ETH_TX_EN/TXD0/TXD1 在 **PG11/13/14**，
+     CubeMX 默认 PB11-13 不接 PHY → 数据面全断（MDIO 独立故链路仍协商）；
+     .ioc + MspInit 修正；
+  2. **HAL_ETH_Start→Start_IT**：零拷贝模板必须中断模式，否则 RX 永不触发回调；
+  3. **CHECKSUM_GEN_ICMP=1**：F4 MAC 只卸载 IP/UDP/TCP，ICMP 校验和必须软件算；
+  4. **raw 回调载荷偏移**：lwIP raw_input 在推进 IP 头之前调用回调——
+     回显/ping 匹配必须自己 `pbuf_remove_header`（导致回显不匹配、
+     板端 ping 永远超时的元凶）；
+  5. **tcpip_thread 栈 1024→2048**：raw 回调（回显）在 tcpip 线程执行，
+     1024B 会栈溢出（err 系统捕获 #6 Stack Overflow）；
+  6. **ping raw 回调不能吞包**：非匹配 ICMP 必须 return 0 放行给协议栈，
+     否则 icmp_input 收不到 echo 请求、板子不再回 ping；
+  7. UDP 回显服务（端口 7777）用于双向 RTT/吞吐验证。
+- **实机验证（板↔电脑 USB 网卡，静态 192.168.10.x）**：
+  - 链路 100M 全双工（PHY st=2）；ARP 双向；帧校验和逐字节验算全对；
+  - **UDP 回显 30/30（40B，RTT 1.44~2.90ms 均 1.69ms）+ 60/60（1400B，
+    RTT 均 1.89ms，零丢包）**；PC 收到板端主动 UDP；
+  - 板↔电脑 **ICMP 双向仍超时**：防火墙三配置文件全 OFF、无 WFP ICMP
+    过滤、UDP 正常——判定为这台电脑系统级 ICMP 策略（GPO/安全中心/
+    网卡驱动）问题，与固件无关（板端 ICMP 回复帧已逐字节验证合法）。
+- **结论**：ETH（链路/收发/诊断/可视化）与内存优化全部落地并实证，
+  可提交。后续 TCP/UDP 服务开发按需给电脑加放行规则即可。

@@ -30,6 +30,8 @@
 
 /* USER CODE BEGIN 0 */
 
+#include "eth_app.h"   /* 链路状态钩子 */
+
 /* USER CODE END 0 */
 /* Private function prototypes -----------------------------------------------*/
 static void ethernet_link_status_updated(struct netif *netif);
@@ -113,11 +115,13 @@ static void ethernet_link_status_updated(struct netif *netif)
   if (netif_is_up(netif))
   {
 /* USER CODE BEGIN 5 */
+  EthApp_SetLinkState(1);   /* 链路建立：通知应用层 */
 /* USER CODE END 5 */
   }
   else /* netif is down */
   {
 /* USER CODE BEGIN 6 */
+  EthApp_SetLinkState(0);   /* 链路断开：通知应用层 */
 /* USER CODE END 6 */
   }
 }

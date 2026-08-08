@@ -22,7 +22,9 @@ void LA_RegisterVariables(void)
 }
 
 /* --------------------- 时间戳模式（EXTI）相关 --------------------- */
-static LA_SamplePoint pre_trigger_buf[PRE_TRIGGER_DEPTH];
+/* 预触发环形缓冲：CPU-only，放 CCM（主 SRAM 让给 DMA/ETH） */
+static LA_SamplePoint pre_trigger_buf[PRE_TRIGGER_DEPTH]
+    __attribute__((section(".ccmram"), zero_init));
 static volatile uint32_t ts_overflow = 0;
 static volatile LA_SampleMode current_mode = LA_MODE_IDLE;
 static volatile uint32_t pre_trigger_idx = 0;

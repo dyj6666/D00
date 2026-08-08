@@ -95,11 +95,12 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef *heth)
     __HAL_RCC_GPIOA_CLK_ENABLE();
     __HAL_RCC_GPIOB_CLK_ENABLE();
     __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOG_CLK_ENABLE();
 
-    /* RMII 引脚（AF11，100MHz）：
+    /* RMII 引脚（AF11，100MHz；探索者V3 的 TX 在 PG11/13/14，非 PB11-13）：
      * PA1=REF_CLK  PA2=MDIO  PA7=CRS_DV
      * PC1=MDC      PC4=RXD0  PC5=RXD1
-     * PB11=TX_EN   PB12=TXD0 PB13=TXD1 */
+     * PG11=TX_EN   PG13=TXD0 PG14=TXD1 */
     GPIO_InitStruct.Pin = GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_7;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -107,8 +108,8 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef *heth)
     GPIO_InitStruct.Alternate = GPIO_AF11_ETH;
     HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-    GPIO_InitStruct.Pin = GPIO_PIN_11 | GPIO_PIN_12 | GPIO_PIN_13;
-    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+    GPIO_InitStruct.Pin = GPIO_PIN_11 | GPIO_PIN_13 | GPIO_PIN_14;
+    HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
     GPIO_InitStruct.Pin = GPIO_PIN_1 | GPIO_PIN_4 | GPIO_PIN_5;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
