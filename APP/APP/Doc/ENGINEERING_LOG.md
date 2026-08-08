@@ -900,3 +900,15 @@ auto-stop）全部按设计工作。
   （正确性优先）；字符连续写已验证可靠保留。
 - **实测（v115）**：clear 20.6ms / fill 1.35ms(5000px 优化版) /
   char16 35µs / string 2.23ms；v117 面板完整、系统零回归。
+
+### 12.43 LCD 整合为统一 BSP 接口（bsp_lcd）
+- **架构**：新增 `BSP/bsp_lcd.{c,h}` —— 统一 `BSP_LCD_*` 接口
+  （Init/GetId/GetWidth/GetHeight/SetOrient/ScanDir/Clear/Fill/
+   Draw*/Show*/Backlight/Bench），与 bsp_gpio/bsp_uart 同风格；
+  官方多 IC 驱动（BSP/LCD/，含 ST7789 识别与初始化）保留为内部底层，
+  由 bsp_lcd.c 封装。
+- **收益**：应用层（lcd_app/shell）只依赖 `bsp_lcd.h`，屏幕更换/底层升级
+  不影响上层；颜色宏统一 `BSP_LCD_COLOR_*`，字符字体枚举 `BSP_LCD_FONT_*`。
+- **验证**：lcd_app 三页面板经 BSP_LCD 接口工作正常；
+  `lcd bench`（BSP_LCD_Bench）性能数据与封装前一致
+  （clear 20.9ms / char16 35µs / string 2.23ms）；编译 0 Error 0 Warning。

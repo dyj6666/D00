@@ -2265,6 +2265,11 @@
               <FileType>1</FileType>
               <FilePath>..\BSP\LCD\lcd.c</FilePath>
             </File>
+            <File>
+              <FileName>bsp_lcd.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_lcd.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

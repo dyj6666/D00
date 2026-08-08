@@ -1,5 +1,5 @@
 #include "lcd_app.h"
-#include "LCD/lcd.h"
+#include "bsp_lcd.h"
 #include "event_bus.h"
 #include "app_config.h"
 #include "data_link.h"
@@ -11,7 +11,7 @@
 #include <stdio.h>
 
 /* ================================================================
- * 板载 LCD 系统信息面板（官方 lcd 驱动，竖屏 240x320）
+ * 板载 LCD 系统信息面板（基于 BSP_LCD 统一接口）
  *   - 三页：HOME(版本/CPU/堆) / SYSTEM(任务栈) / BUS(事件+HOSTLINK)
  *   - 按键短按切换页面（全屏重绘），1s 定时只刷新动态数值（无闪烁）
  * ================================================================ */
@@ -24,37 +24,36 @@ static uint8_t lcd_ready = 0;
 static uint32_t lcd_run_prev = 0, lcd_idle_prev = 0;
 static uint8_t  lcd_cpu_pct = 0;
 
-static uint16_t lcd_w(void) { return lcddev.width; }
-static uint16_t lcd_h(void) { return lcddev.height; }
-
 static void lcd_page_home_values(void);
 static void lcd_page_bus_values(void);
 
-/* ---------- 文本助手（官方无背景色参数，用全局背景色） ---------- */
+/* ---------- 文本助手 ---------- */
 static void lcd_text(uint16_t x, uint16_t y, const char *s,
-                     uint16_t color, uint8_t size)
+                     uint16_t color, bsp_lcd_font_t font)
 {
-    lcd_show_string(x, y, lcd_w(), lcd_h(), size, (char *)s, color);
+    BSP_LCD_ShowString(x, y, s, color, font);
 }
 
 /* ---------- 页眉 / 页脚 ---------- */
 static void lcd_header(const char *title)
 {
-    uint16_t w = lcd_w();
-    lcd_fill(0, 0, (uint16_t)(w - 1), 23, BLUE);
-    lcd_text(4, 4, title, WHITE, 16);
-    lcd_text((uint16_t)(w - 36), 4, "D00", YELLOW, 16);
+    uint16_t w = BSP_LCD_GetWidth();
+    BSP_LCD_Fill(0, 0, (uint16_t)(w - 1), 23, BSP_LCD_COLOR_BLUE);
+    lcd_text(4, 4, title, BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_16);
+    lcd_text((uint16_t)(w - 36), 4, "D00", BSP_LCD_COLOR_YELLOW,
+             BSP_LCD_FONT_16);
 }
 
 static void lcd_footer(uint8_t page)
 {
-    uint16_t w = lcd_w();
-    uint16_t h = lcd_h();
+    uint16_t w = BSP_LCD_GetWidth();
+    uint16_t h = BSP_LCD_GetHeight();
     char bar[24];
     snprintf(bar, sizeof(bar), "KEY: PAGE %u/%u", page + 1, LCD_PAGE_COUNT);
-    lcd_fill(0, (uint16_t)(h - 12), (uint16_t)(w - 1), (uint16_t)(h - 1),
-             GRAY);
-    lcd_text(4, (uint16_t)(h - 11), bar, WHITE, 8);
+    BSP_LCD_Fill(0, (uint16_t)(h - 12), (uint16_t)(w - 1), (uint16_t)(h - 1),
+                 BSP_LCD_COLOR_GRAY);
+    lcd_text(4, (uint16_t)(h - 11), bar, BSP_LCD_COLOR_WHITE,
+             BSP_LCD_FONT_12);
 }
 
 /* ---------- CPU 差分 ---------- */
@@ -89,13 +88,13 @@ static void lcd_page_home_values(void)
     uint32_t uptime = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 
     snprintf(buf, sizeof(buf), "%7lus", (unsigned long)(uptime / 1000u));
-    lcd_text(100, 116, buf, WHITE, 16);
+    lcd_text(100, 116, buf, BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_16);
     snprintf(buf, sizeof(buf), "%3u%%", lcd_cpu_pct);
-    lcd_text(100, 142, buf, GREEN, 16);
+    lcd_text(100, 142, buf, BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
     snprintf(buf, sizeof(buf), "%7luB", (unsigned long)xPortGetFreeHeapSize());
-    lcd_text(100, 168, buf, GREEN, 16);
+    lcd_text(100, 168, buf, BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
     snprintf(buf, sizeof(buf), "%3lu", (unsigned long)uxTaskGetNumberOfTasks());
-    lcd_text(100, 194, buf, WHITE, 16);
+    lcd_text(100, 194, buf, BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_16);
 }
 
 static void lcd_page_home_frame(void)
@@ -103,16 +102,17 @@ static void lcd_page_home_frame(void)
     uint32_t ver = *(volatile uint32_t *)OTA_APP_VERSION_ADDR;
     char buf[24];
 
-    lcd_text(8, 36, "D00 Platform", YELLOW, 16);
-    lcd_text(8, 58, "STM32F407 Industrial", CYAN, 12);
-    lcd_text(8, 94, "Firmware", GRAY, 12);
-    lcd_text(8, 120, "Uptime", GRAY, 12);
-    lcd_text(8, 146, "CPU", GRAY, 12);
-    lcd_text(8, 172, "Heap", GRAY, 12);
-    lcd_text(8, 198, "Tasks", GRAY, 12);
+    lcd_text(8, 36, "D00 Platform", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_16);
+    lcd_text(8, 58, "STM32F407 Industrial", BSP_LCD_COLOR_CYAN,
+             BSP_LCD_FONT_12);
+    lcd_text(8, 94, "Firmware", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_text(8, 120, "Uptime", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_text(8, 146, "CPU", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_text(8, 172, "Heap", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_text(8, 198, "Tasks", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
 
     snprintf(buf, sizeof(buf), "v%lu", (unsigned long)ver);
-    lcd_text(100, 90, buf, WHITE, 16);
+    lcd_text(100, 90, buf, BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_16);
     lcd_page_home_values();
 }
 
@@ -125,16 +125,20 @@ static void lcd_page_system_draw(void)
     UBaseType_t n = uxTaskGetSystemState(arr, LCD_MAX_TASKS, &total);
     if (n > 12) n = 12;
 
-    lcd_text(4, 28, "TASK", YELLOW, 8);
-    lcd_text(130, 28, "STACK", YELLOW, 8);
-    lcd_text(210, 28, "PRIO", YELLOW, 8);
+    lcd_text(4, 28, "TASK", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
+    lcd_text(130, 28, "STACK", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
+    lcd_text(210, 28, "PRIO", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
 
     for (UBaseType_t i = 0; i < n; i++) {
         uint16_t y = (uint16_t)(40 + i * 20);
-        lcd_fill(4, y, (uint16_t)(lcd_w() - 5), (uint16_t)(y + 15), BLACK);
-        lcd_text(4, y, arr[i].pcTaskName, WHITE, 8);
-        lcd_show_num(130, y, arr[i].usStackHighWaterMark, 4, 8, GREEN);
-        lcd_show_num(210, y, arr[i].uxCurrentPriority, 2, 8, CYAN);
+        BSP_LCD_Fill(4, y, (uint16_t)(BSP_LCD_GetWidth() - 5),
+                     (uint16_t)(y + 15), BSP_LCD_COLOR_BLACK);
+        lcd_text(4, y, arr[i].pcTaskName, BSP_LCD_COLOR_WHITE,
+                 BSP_LCD_FONT_12);
+        BSP_LCD_ShowNum(130, y, arr[i].usStackHighWaterMark, 4,
+                        BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_12);
+        BSP_LCD_ShowNum(210, y, arr[i].uxCurrentPriority, 2,
+                        BSP_LCD_COLOR_CYAN, BSP_LCD_FONT_12);
     }
     vPortFree(arr);
 }
@@ -144,27 +148,27 @@ static void lcd_page_bus_values(void)
 {
     char buf[24];
     snprintf(buf, sizeof(buf), "%10lu", (unsigned long)EventBus_GetLostCount());
-    lcd_text(100, 52, buf, WHITE, 16);
+    lcd_text(100, 52, buf, BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_16);
     snprintf(buf, sizeof(buf), "%5lu/%lu", (unsigned long)EventBus_GetQueueCount(),
              (unsigned long)EventBus_GetPoolFreeCount());
-    lcd_text(100, 80, buf, WHITE, 16);
+    lcd_text(100, 80, buf, BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_16);
     snprintf(buf, sizeof(buf), "%10lu", (unsigned long)DataLink_GetTxLostCount());
-    lcd_text(100, 142, buf, WHITE, 16);
+    lcd_text(100, 142, buf, BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_16);
     snprintf(buf, sizeof(buf), "%10lu", (unsigned long)DataLink_GetTxErrorCount());
-    lcd_text(100, 170, buf, WHITE, 16);
+    lcd_text(100, 170, buf, BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_16);
     snprintf(buf, sizeof(buf), "%10lu", (unsigned long)DataLink_GetCmdLostCount());
-    lcd_text(100, 198, buf, WHITE, 16);
+    lcd_text(100, 198, buf, BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_16);
 }
 
 static void lcd_page_bus_frame(void)
 {
-    lcd_text(4, 28, "EVENT BUS", YELLOW, 16);
-    lcd_text(4, 56, "Lost", GRAY, 12);
-    lcd_text(4, 84, "Queue/Pool", GRAY, 12);
-    lcd_text(4, 118, "HOSTLINK", YELLOW, 16);
-    lcd_text(4, 146, "TX lost", GRAY, 12);
-    lcd_text(4, 174, "TX err", GRAY, 12);
-    lcd_text(4, 202, "Cmd lost", GRAY, 12);
+    lcd_text(4, 28, "EVENT BUS", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_16);
+    lcd_text(4, 56, "Lost", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_text(4, 84, "Queue/Pool", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_text(4, 118, "HOSTLINK", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_16);
+    lcd_text(4, 146, "TX lost", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_text(4, 174, "TX err", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_text(4, 202, "Cmd lost", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
     lcd_page_bus_values();
 }
 
@@ -174,7 +178,9 @@ static void lcd_draw_page(void)
     static const char *titles[LCD_PAGE_COUNT] = {
         "HOME", "SYSTEM", "BUS"
     };
-    lcd_fill(0, 24, (uint16_t)(lcd_w() - 1), (uint16_t)(lcd_h() - 13), BLACK);
+    BSP_LCD_Fill(0, 24, (uint16_t)(BSP_LCD_GetWidth() - 1),
+                 (uint16_t)(BSP_LCD_GetHeight() - 13),
+                 BSP_LCD_COLOR_BLACK);
     lcd_header(titles[lcd_page]);
     if (lcd_page == 0) lcd_page_home_frame();
     else if (lcd_page == 1) lcd_page_system_draw();
@@ -210,13 +216,9 @@ static void lcd_on_key(const message_t *msg)
 /* ---------- 初始化 ---------- */
 void LcdApp_Init(void)
 {
-    g_back_color = BLACK;      /* 官方驱动全局背景色 */
-    lcd_init();
-    lcd_display_dir(0);        /* 竖屏（官方已验证） */
-    LCD_BL(1);
-    lcd_clear(BLACK);
+    uint16_t id = BSP_LCD_Init();
     LOG_Printf("[APP] LCD  : id=0x%04X, %ux%u\r\n",
-               lcddev.id, lcddev.width, lcddev.height);
+               id, BSP_LCD_GetWidth(), BSP_LCD_GetHeight());
 
     lcd_ready = 1;
     lcd_update_cpu();
