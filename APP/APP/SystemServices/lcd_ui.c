@@ -135,6 +135,15 @@ static void ui_handle_touch(const touch_svc_state_t *ts)
         {
             if (ts->max_dx > UI_SWIPE_DIST && ts->max_dx > ts->max_dy) {
                 LcdUI_NextPage();   /* 滑动切页 */
+            } else if (ts->max_dy > UI_SWIPE_DIST && ts->max_dy > ts->max_dx) {
+                /* 纵向滑动 → 页面滚动回调（SYSTEM 任务列表上下查看） */
+                uint8_t evt = (ts->up_y < ts->down_y) ? TOUCH_EVT_SWIPE_UP
+                                                      : TOUCH_EVT_SWIPE_DOWN;
+                if (ui_page_cur < ui_page_count &&
+                    ui_pages[ui_page_cur] != NULL &&
+                    ui_pages[ui_page_cur]->touch != NULL) {
+                    ui_pages[ui_page_cur]->touch(evt, ts->up_x, ts->up_y);
+                }
             } else if (ui_page_cur < ui_page_count &&
                        ui_pages[ui_page_cur] != NULL &&
                        ui_pages[ui_page_cur]->touch != NULL) {

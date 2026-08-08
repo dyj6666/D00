@@ -17,6 +17,8 @@ typedef enum {
     TOUCH_EVT_MOVE,
     TOUCH_EVT_UP,
     TOUCH_EVT_TAP,      /* UI 层合成的轻点事件（非滑动释放时） */
+    TOUCH_EVT_SWIPE_UP, /* UI 层合成的纵向滑动：手指上滑（查看更靠后条目） */
+    TOUCH_EVT_SWIPE_DOWN, /* 手指下滑（返回靠前条目） */
 } touch_evt_t;
 
 typedef struct {

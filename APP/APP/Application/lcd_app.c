@@ -23,7 +23,7 @@
  *   - SYSTEM 1s 刷新只重画任务列表（行内先清后画），不整页重绘 → 无频闪
  * ================================================================ */
 
-#define LCD_MAX_TASKS    16
+#define LCD_MAX_TASKS    20
 #define LCD_VAL_RIGHT    150   /* 数值右对齐边线（FONT16，8px/字符） */
 
 static uint32_t lcd_run_prev = 0, lcd_idle_prev = 0;
@@ -32,6 +32,16 @@ static uint32_t lcd_cpu_last_ms = 0;
 /* 任务状态缓冲：静态分配，避免每秒 pvPortMalloc 的堆抖动与碎片化。
  * 仅在 LcdUI 渲染任务内使用（各页 refresh 串行执行），无并发风险。 */
 static TaskStatus_t s_lcd_tasks[LCD_MAX_TASKS];
+
+/* SYSTEM 页任务列表：固定行高 + 触摸纵向滚动（仅渲染任务访问） */
+#define SYS_ROWS_VISIBLE   12
+#define SYS_ROW_H          20
+#define SYS_LIST_Y0        40
+#define SYS_LIST_Y1        (SYS_LIST_Y0 + SYS_ROWS_VISIBLE * SYS_ROW_H) /* 280 */
+static int16_t s_sys_scroll = 0;       /* 已向下滚动的行数 */
+static int16_t s_sys_scroll_last = -1; /* -1 = 首次强制整区重绘 */
+static uint8_t s_sys_overflow = 0;     /* 任务数超过可视行数 */
+static uint8_t s_sys_total = 0;        /* 当前任务总数 */
 
 /* ---------- CPU 差分（固定 1s 采样窗口） ----------
  * 设计：
@@ -150,14 +160,17 @@ static void lcd_system_list(void)
 {
     uint32_t total = 0;
     UBaseType_t n = uxTaskGetSystemState(s_lcd_tasks, LCD_MAX_TASKS, &total);
-    if (n > 12) n = 12;
-    /* 固定排序：优先级降序 + 名称，避免链表遍历顺序不稳定导致行跳动 */
+    s_sys_total = (uint8_t)n;
+
+    /* 固定排序：基础优先级降序 + 名称升序。
+     * 用 uxBasePriority 而非 uxCurrentPriority：互斥量优先级继承会临时
+     * 抬高持有者当前优先级，导致顺序每帧跳动；基础优先级恒稳定。 */
     for (UBaseType_t i = 1; i < n; i++) {
         TaskStatus_t key = s_lcd_tasks[i];
         int j = (int)i - 1;
         while (j >= 0 &&
-               (s_lcd_tasks[j].uxCurrentPriority < key.uxCurrentPriority ||
-                (s_lcd_tasks[j].uxCurrentPriority == key.uxCurrentPriority &&
+               (s_lcd_tasks[j].uxBasePriority < key.uxBasePriority ||
+                (s_lcd_tasks[j].uxBasePriority == key.uxBasePriority &&
                  strcmp(s_lcd_tasks[j].pcTaskName, key.pcTaskName) > 0))) {
             s_lcd_tasks[j + 1] = s_lcd_tasks[j];
             j--;
@@ -165,21 +178,73 @@ static void lcd_system_list(void)
         s_lcd_tasks[j + 1] = key;
     }
 
+    /* 滚动范围钳位 */
+    s_sys_overflow = (n > SYS_ROWS_VISIBLE);
+    int16_t max_scroll = s_sys_overflow ? (int16_t)(n - SYS_ROWS_VISIBLE) : 0;
+    if (s_sys_scroll > max_scroll) s_sys_scroll = max_scroll;
+    if (s_sys_scroll < 0) s_sys_scroll = 0;
+
+    /* 滚动位置变化 → 整区清一次，杜绝行残影 */
+    if (s_sys_scroll != s_sys_scroll_last) {
+        BSP_LCD_Fill(4, SYS_LIST_Y0, (uint16_t)(BSP_LCD_GetWidth() - 5),
+                     (uint16_t)(SYS_LIST_Y1 - 1), BSP_LCD_COLOR_BLACK);
+        s_sys_scroll_last = s_sys_scroll;
+    }
+
     BSP_LCD_ShowString(4, 28, "TASK", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
     BSP_LCD_ShowString(130, 28, "STACK", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
     BSP_LCD_ShowString(210, 28, "PRIO", BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
 
-    for (UBaseType_t i = 0; i < n; i++) {
-        uint16_t y = (uint16_t)(40 + i * 20);
+    for (uint8_t i = 0; i < SYS_ROWS_VISIBLE; i++) {
+        uint16_t y = (uint16_t)(SYS_LIST_Y0 + i * SYS_ROW_H);
         /* 行内先清后画：只刷新本行，不整页重绘（无频闪） */
         BSP_LCD_Fill(4, y, (uint16_t)(BSP_LCD_GetWidth() - 5),
                      (uint16_t)(y + 15), BSP_LCD_COLOR_BLACK);
-        BSP_LCD_ShowString(4, y, s_lcd_tasks[i].pcTaskName, BSP_LCD_COLOR_WHITE,
+        int16_t idx = (int16_t)(s_sys_scroll + i);
+        if (idx >= (int16_t)n) continue;   /* 滚动到底后清空剩余行 */
+        BSP_LCD_ShowString(4, y, s_lcd_tasks[idx].pcTaskName,
+                           BSP_LCD_COLOR_WHITE,
                            BSP_LCD_FONT_12);
-        BSP_LCD_ShowNum(130, y, s_lcd_tasks[i].usStackHighWaterMark, 4,
+        BSP_LCD_ShowNum(130, y, s_lcd_tasks[idx].usStackHighWaterMark, 4,
                         BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_12);
-        BSP_LCD_ShowNum(210, y, s_lcd_tasks[i].uxCurrentPriority, 2,
+        BSP_LCD_ShowNum(210, y, s_lcd_tasks[idx].uxBasePriority, 2,
                         BSP_LCD_COLOR_CYAN, BSP_LCD_FONT_12);
+    }
+
+    /* 右侧滚动条（仅溢出时显示）：轨道 + 比例滑块 */
+    if (s_sys_overflow) {
+        uint16_t track_h = (uint16_t)(SYS_LIST_Y1 - SYS_LIST_Y0);
+        uint16_t thumb_h = (uint16_t)((uint32_t)SYS_ROWS_VISIBLE *
+                                      track_h / n);
+        if (thumb_h < 12) thumb_h = 12;
+        uint16_t thumb_y = (uint16_t)(SYS_LIST_Y0 +
+                          (uint32_t)s_sys_scroll * (track_h - thumb_h) /
+                          max_scroll);
+        BSP_LCD_Fill(235, SYS_LIST_Y0, 238, (uint16_t)(SYS_LIST_Y1 - 1),
+                     BSP_LCD_COLOR_LGRAY);
+        BSP_LCD_Fill(235, thumb_y, 238,
+                     (uint16_t)(thumb_y + thumb_h - 1),
+                     BSP_LCD_COLOR_WHITE);
+    } else {
+        BSP_LCD_Fill(235, SYS_LIST_Y0, 238, (uint16_t)(SYS_LIST_Y1 - 1),
+                     BSP_LCD_COLOR_BLACK);
+    }
+}
+
+/* SYSTEM 页触摸：纵向滑动滚动任务列表（渲染任务上下文，直接重绘） */
+static void lcd_system_touch(uint8_t evt, uint16_t x, uint16_t y)
+{
+    (void)x;
+    (void)y;
+    int16_t max_scroll = s_sys_overflow
+                             ? (int16_t)(s_sys_total - SYS_ROWS_VISIBLE)
+                             : 0;
+    if (evt == TOUCH_EVT_SWIPE_UP && s_sys_scroll < max_scroll) {
+        s_sys_scroll++;
+        lcd_system_list();
+    } else if (evt == TOUCH_EVT_SWIPE_DOWN && s_sys_scroll > 0) {
+        s_sys_scroll--;
+        lcd_system_list();
     }
 }
 
@@ -187,8 +252,11 @@ static void lcd_system_draw(void)
 {
     lcd_page_clear_content();
     lcd_page_header("SYSTEM");
+    s_sys_scroll = 0;          /* 进入页面从顶部开始 */
+    s_sys_scroll_last = -1;
     lcd_system_list();
-    lcd_page_footer("KEY: NEXT PAGE");
+    lcd_page_footer(s_sys_overflow ? "SWIPE UP/DOWN: SCROLL | KEY: NEXT"
+                                   : "KEY: NEXT PAGE");
 }
 
 static void lcd_system_refresh(void)
@@ -489,7 +557,7 @@ static void lcd_imu_draw(void)
 /* ================= 页面注册 ================= */
 static const lcd_ui_page_t lcd_pages[] = {
     { "HOME",   lcd_home_draw,   lcd_home_refresh,   NULL,            0 },
-    { "SYSTEM", lcd_system_draw, lcd_system_refresh, NULL,            0 },
+    { "SYSTEM", lcd_system_draw, lcd_system_refresh, lcd_system_touch, 0 },
     { "BUS",    lcd_bus_draw,    lcd_bus_refresh,    NULL,            0 },
     { "TOUCH",  lcd_touch_draw,  lcd_touch_refresh,  lcd_touch_event, 0 },
     { "IMU",    lcd_imu_draw,    lcd_imu_refresh,    NULL,            10 },
