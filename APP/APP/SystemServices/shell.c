@@ -19,7 +19,8 @@
 typedef void (*cmd_func_t)(const char *args);
 
 typedef struct {
-    const char *name;
+    const char *name;    /* 命令名 */
+    const char *brief;   /* 用途说明（help 显示） */
     cmd_func_t  func;
 } cmd_entry_t;
 
@@ -57,43 +58,150 @@ static void cmd_crash(const char *args);
 #endif
 
 static const cmd_entry_t cmd_table[] = {
-    {"help",         cmd_help},
-    {"info",         cmd_info},
-    {"reset",        cmd_reset},
-    {"led",          cmd_led},
-    {"taskstats",    cmd_taskstats},
-    {"ota",          cmd_ota},
-    {"sysmon",       cmd_sysmon},
-    {"la_start",     cmd_la_start},
-    {"la_stop",      cmd_la_stop},
-    {"la_first",     cmd_la_first},
-    {"la_trig",      cmd_la_trig},
-    {"la_dma_start", cmd_la_dma_start},
-    {"la_dma_stop",  cmd_la_dma_stop},
-    {"la_dump",      cmd_la_dump},
-    {"la_dma_stat",  cmd_la_dma_stat},
-    {"la_dma_buf",   cmd_la_dma_buf},
-    {"la_info",      cmd_la_info},
-    {"la_state",     cmd_la_state},
-    {"la_peek",      cmd_la_peek},
-    {"sg_uart_start", cmd_sg_uart_start},
-    {"sg_uart_stop",  cmd_sg_uart_stop},
-    {"sg_uart_hex",   cmd_sg_uart_hex},
-    {"sg_spi_start",  cmd_sg_spi_start},
-    {"sg_spi_stop",   cmd_sg_spi_stop},
-    {"sg_i2c_start",  cmd_sg_i2c_start},
-    {"sg_i2c_stop",   cmd_sg_i2c_stop},
-    {"sg_i2c_complex", cmd_sg_i2c_complex},
-    {"ota_rbtest",     cmd_ota_rbtest},
-    {"eb_stress",      cmd_eb_stress},
+    {"help",         "Show command help", cmd_help},
+    {"info",         "System info (version/kernel/tasks)", cmd_info},
+    {"reset",        "Software reset", cmd_reset},
+    {"led",          "LED control (on/off/toggle/blink)", cmd_led},
+    {"taskstats",    "Task list & stack usage", cmd_taskstats},
+    {"ota",          "Enter BOOT upgrade mode", cmd_ota},
+    {"sysmon",       "System monitor report", cmd_sysmon},
+    {"la_start",     "LA start (timestamp mode)", cmd_la_start},
+    {"la_stop",      "LA stop", cmd_la_stop},
+    {"la_first",     "Show first sample", cmd_la_first},
+    {"la_trig",      "Configure trigger", cmd_la_trig},
+    {"la_dma_start", "Start DMA sampling <rate>", cmd_la_dma_start},
+    {"la_dma_stop",  "Stop DMA sampling", cmd_la_dma_stop},
+    {"la_dump",      "Export samples <count>", cmd_la_dump},
+    {"la_dma_stat",  "DMA sampling stats", cmd_la_dma_stat},
+    {"la_dma_buf",   "Switch buffer <sram|iram>", cmd_la_dma_buf},
+    {"la_info",      "LA info", cmd_la_info},
+    {"la_state",     "LA state", cmd_la_state},
+    {"la_peek",      "Peek sample at index", cmd_la_peek},
+    {"sg_uart_start","UART generator <baud> <text> <ms>", cmd_sg_uart_start},
+    {"sg_uart_stop", "Stop UART generator", cmd_sg_uart_stop},
+    {"sg_uart_hex",  "UART hex frame generator", cmd_sg_uart_hex},
+    {"sg_spi_start", "SPI generator <hex> <ms>", cmd_sg_spi_start},
+    {"sg_spi_stop",  "Stop SPI generator", cmd_sg_spi_stop},
+    {"sg_i2c_start", "I2C generator <addr> <hex> <ms>", cmd_sg_i2c_start},
+    {"sg_i2c_stop",  "Stop I2C generator", cmd_sg_i2c_stop},
+    {"sg_i2c_complex","I2C complex frame demo", cmd_sg_i2c_complex},
+    {"ota_rbtest",   "OTA rollback self-test (danger)", cmd_ota_rbtest},
+    {"eb_stress",    "Event bus stress <n> <payload> <mode>", cmd_eb_stress},
 #if CRASH_INJECT_ENABLE
-    {"crash",          cmd_crash},
+    {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", cmd_crash},
 #endif
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
 static char cmd_line[SHELL_LINE_MAX];
 static int  cmd_len = 0;
+
+/* ---------- 历史记录（环形，上下键浏览） ---------- */
+#define SHELL_HISTORY_MAX   8
+static char shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];
+static int  shell_hist_count = 0;
+static int  shell_hist_pos = -1;      /* -1 = 正在编辑新行 */
+
+/* ---------- ESC 序列状态机（方向键） ---------- */
+static int shell_esc_state = 0;       /* 0=普通 1=收到ESC 2=收到ESC[ */
+
+static void shell_prompt(void)
+{
+    LOG_Printf("D00> ");
+}
+
+/* 清空当前编辑行（\r + 空格覆盖 + \r，不依赖 ANSI，串口助手兼容） */
+static void shell_clear_line(void)
+{
+    LOG_Printf("\r%-*s\r", SHELL_LINE_MAX, "");
+}
+
+static void shell_redraw(void)
+{
+    shell_clear_line();
+    shell_prompt();
+    if (cmd_len > 0) {
+        LOG_Printf("%s", cmd_line);
+    }
+}
+
+/* 当前行入历史（去重；满则丢弃最旧） */
+static void shell_history_save(void)
+{
+    if (cmd_len == 0) return;
+    if (shell_hist_count > 0 &&
+        strcmp(shell_history[shell_hist_count - 1], cmd_line) == 0) {
+        return;
+    }
+    if (shell_hist_count < SHELL_HISTORY_MAX) {
+        strcpy(shell_history[shell_hist_count], cmd_line);
+        shell_hist_count++;
+    } else {
+        memmove(shell_history[0], shell_history[1],
+                (SHELL_HISTORY_MAX - 1) * SHELL_LINE_MAX);
+        strcpy(shell_history[SHELL_HISTORY_MAX - 1], cmd_line);
+    }
+}
+
+static void shell_history_nav(int dir)   /* -1 上一条, +1 下一条 */
+{
+    if (shell_hist_count == 0) return;
+    if (dir < 0) {
+        if (shell_hist_pos < 0) {
+            shell_hist_pos = shell_hist_count - 1;
+        } else if (shell_hist_pos > 0) {
+            shell_hist_pos--;
+        } else {
+            return;
+        }
+    } else {
+        if (shell_hist_pos < 0) return;
+        shell_hist_pos++;
+        if (shell_hist_pos >= shell_hist_count) {
+            shell_hist_pos = -1;
+            cmd_len = 0;
+            cmd_line[0] = '\0';
+            shell_redraw();
+            return;
+        }
+    }
+    strcpy(cmd_line, shell_history[shell_hist_pos]);
+    cmd_len = (int)strlen(cmd_line);
+    shell_redraw();
+}
+
+/* Tab 命令补全：唯一匹配补全，多匹配列出候选 */
+static void shell_complete(void)
+{
+    int wlen = 0;
+    while (wlen < cmd_len && !isspace((unsigned char)cmd_line[wlen])) {
+        wlen++;
+    }
+    if (wlen == 0 || wlen < cmd_len) return;   /* 空行或已有参数不补全 */
+
+    int match_count = 0;
+    int match_idx = -1;
+    for (size_t i = 0; i < CMD_COUNT; i++) {
+        if (strncmp(cmd_table[i].name, cmd_line, (size_t)wlen) == 0) {
+            match_count++;
+            match_idx = (int)i;
+        }
+    }
+    if (match_count == 1) {
+        strcpy(cmd_line, cmd_table[match_idx].name);
+        cmd_len = (int)strlen(cmd_line);
+        shell_redraw();
+    } else if (match_count > 1) {
+        LOG_Printf("\r\n");
+        for (size_t i = 0; i < CMD_COUNT; i++) {
+            if (strncmp(cmd_table[i].name, cmd_line, (size_t)wlen) == 0) {
+                LOG_Printf("  %-16s %s\r\n", cmd_table[i].name,
+                           cmd_table[i].brief);
+            }
+        }
+        shell_redraw();
+    }
+}
 
 /* ================== 命令执行 ================== */
 static void shell_execute(void)
@@ -126,34 +234,57 @@ static void shell_execute(void)
     if (p) {
         p->func(args);
     } else {
-        LOG_Printf("Unknown command: %s\r\n", cmd);
+        LOG_Printf("Unknown command: %s (type 'help' for list)\r\n", cmd);
     }
 }
 
 /* 处理每个接收字符 */
 void Shell_ProcessChar(uint8_t ch)
 {
+    /* ESC 序列状态机（方向键） */
+    if (shell_esc_state == 1) {
+        shell_esc_state = (ch == '[') ? 2 : 0;
+        return;
+    }
+    if (shell_esc_state == 2) {
+        if (ch == 'A') shell_history_nav(-1);   /* 上键 */
+        else if (ch == 'B') shell_history_nav(1); /* 下键 */
+        shell_esc_state = 0;
+        return;
+    }
+    if (ch == 0x1B) {
+        shell_esc_state = 1;
+        return;
+    }
+
     if (ch == '\r' || ch == '\n') {
-        /* 回车执行：先换行，执行，再空一行分隔下一次输入 */
+        /* 回车执行：换行 → 存历史 → 执行 → 分隔行 → 提示符 */
         LOG_Printf("\r\n");
+        shell_history_save();
         shell_execute();
-        LOG_Printf("\r\n");
         cmd_len = 0;
         cmd_line[0] = '\0';
+        shell_hist_pos = -1;
+        LOG_Printf("\r\n");
+        shell_prompt();
+        return;
+    }
+
+    if (ch == '\t') {
+        shell_complete();
         return;
     }
 
     if (ch == 127 || ch == 8) {
-        /* 退格 */
         if (cmd_len > 0) {
             cmd_len--;
+            cmd_line[cmd_len] = '\0';
             LOG_Printf("\b \b");
         }
         return;
     }
 
     if (ch >= 32 && ch <= 126) {
-        /* 可打印字符：回显并缓存 */
         if (cmd_len < SHELL_LINE_MAX - 1) {
             cmd_line[cmd_len++] = (char)ch;
             cmd_line[cmd_len] = '\0';
@@ -165,6 +296,7 @@ void Shell_ProcessChar(uint8_t ch)
 void ShellTaskFunction(void)
 {
     StreamBufferHandle_t rx = LOG_GetRxStream();
+    shell_prompt();   /* 初始提示符 */
     for (;;) {
         uint8_t ch;
         if (xStreamBufferReceive(rx, &ch, 1, portMAX_DELAY) > 0) {
@@ -176,11 +308,24 @@ void ShellTaskFunction(void)
 /* ================== 命令实现 ================== */
 static void cmd_help(const char *args)
 {
-    (void)args;
-    LOG_Printf("Available commands:\r\n");
-    for (size_t i = 0; i < CMD_COUNT; i++) {
-        LOG_Printf("  %s\r\n", cmd_table[i].name);
+    if (args != NULL && *args != '\0') {
+        /* help <cmd>：显示单命令说明 */
+        for (size_t i = 0; i < CMD_COUNT; i++) {
+            if (strcmp(cmd_table[i].name, args) == 0) {
+                LOG_Printf("%s - %s\r\n", cmd_table[i].name,
+                           cmd_table[i].brief);
+                return;
+            }
+        }
+        LOG_Printf("Unknown command: %s\r\n", args);
+        return;
     }
+    LOG_Printf("Available commands:\r\n");
+    LOG_Printf("  %-16s %s\r\n", "----------------", "----------------");
+    for (size_t i = 0; i < CMD_COUNT; i++) {
+        LOG_Printf("  %-16s %s\r\n", cmd_table[i].name, cmd_table[i].brief);
+    }
+    LOG_Printf("Tip: Tab = complete, Up/Down = history\r\n");
 }
 
 static void cmd_info(const char *args)
@@ -189,6 +334,7 @@ static void cmd_info(const char *args)
     LOG_Printf("STM32F407ZGT6 @ 168MHz\r\n");
     LOG_Printf("FreeRTOS %s\r\n", tskKERNEL_VERSION_NUMBER);
     LOG_Printf("Tasks: %ld\r\n", uxTaskGetNumberOfTasks());
+    LOG_Printf("Free heap: %lu bytes\r\n", (unsigned long)xPortGetFreeHeapSize());
 }
 
 static void cmd_reset(const char *args)
