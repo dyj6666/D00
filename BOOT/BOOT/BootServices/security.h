@@ -21,6 +21,14 @@ typedef struct {
 
 #define OTA_HEADER_SIZE   sizeof(ota_header_t)
 #define OTA_SIGN_SIZE     64
+/* 安全验证结果码（供上位机状态帧精确诊断） */
+#define SEC_ERR_MAGIC      -1
+#define SEC_ERR_CHIP       -2
+#define SEC_ERR_REPLAY     -3
+#define SEC_ERR_SHA        -4
+#define SEC_ERR_ECDSA      -5
+#define SEC_ERR_ROLLBACK   -6
+
 /* 解密函数，由 main.c 调用 */
 bool aes_ctr_decrypt_to_flash(uint32_t src_addr, uint32_t len,
                               const uint8_t *key, const uint8_t *iv16,
@@ -28,9 +36,10 @@ bool aes_ctr_decrypt_to_flash(uint32_t src_addr, uint32_t len,
 
 /* 固定 AES 密钥（测试用，后续改为 UID 派生） */
 extern const uint8_t AES_KEY[32];
-/* 安全处理入口 */
-bool security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
-                                 uint32_t current_version, uint32_t last_build_no);
+/* 安全处理入口：返回 0=成功，负值=SEC_ERR_*（具体失败原因） */
+int32_t security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
+                                    uint32_t current_version,
+                                    uint32_t last_build_no);
 /**
  * @brief  使用芯片 UID 派生 256 位 AES 密钥
  * @note   与上位机使用相同的盐值

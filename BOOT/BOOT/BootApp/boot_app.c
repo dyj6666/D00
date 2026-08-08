@@ -235,10 +235,12 @@ static bool boot_apply_download(bool emit_status)
            (unsigned long)current_version, (unsigned long)param.last_build_no);
 
     uint32_t app_size = 0;
-    if (!security_verify_and_decrypt(DOWNLOAD_BASE_ADDR, &app_size,
-                                     current_version, param.last_build_no)) {
-        printf("Security verification failed!\r\n");
-        boot_status_send(BOOT_ST_FAIL, 1);
+    int32_t sec = security_verify_and_decrypt(DOWNLOAD_BASE_ADDR, &app_size,
+                                              current_version,
+                                              param.last_build_no);
+    if (sec != 0) {
+        printf("Security verification failed! err=%ld\r\n", (long)sec);
+        boot_status_send(BOOT_ST_FAIL, (uint8_t)(-sec));
         return false;
     }
 

@@ -1504,3 +1504,50 @@ auto-stop）全部按设计工作。
   推送、stream off 正常退出；任务增至 17（+TcpSvc+TcpCli），堆 12.6KB。
 - **连接方式**：`python`/`nc`/`telnet 192.168.10.10 9000` 即可操作；
   后续 TCP 应用（HTTP/MQTT 等）按此框架扩展。
+
+### 12.77 ETH 抓帧通道 + EthLab 上位机（v187~v191）
+- **背景/问题**：初版上位机走 TCP 控制台 `net dbg all` 提取 TX/RX 帧，
+  但 `EthApp_TxDbg/RxDbg` 的帧行实际打到**串口 LOG**，TCP 连接永远收不到
+  帧 → 帧表恒为 0。根因：抓帧输出通道与解析通道错位。
+- **固件侧（v191）**：新增**独立 UDP 抓帧通道（端口 7778）**：
+  - `net cap on`：TCP 控制台把**对端 IP** 记为目标，此后每个 TX/RX
+    帧封装为 UDP 发往 `对端:7778`（载荷 `dir(1) flags(1) orig_len(2,BE)
+    raw[]`，dir=1 TX/2 RX，flags bit0=截断，>1468B 截断防 IP 分片）；
+  - 实现要点：3 槽静态环 + `tcpip_callback` 投递（RX 钩子在 eth 输入任务、
+    TX 钩子在 tcpip 线程，全部经 tcpip 线程发送保证线程安全）；
+    `s_cap_sending` 标志防自抓环（抓帧包自身不进捕获流）；
+    计数器 cap_sent/cap_drop 随 `net` 命令可查；
+  - 钩子：RX `HAL_ETH_RxLinkCallback`（连续缓冲直拷）、TX
+    `low_level_output`（`pbuf_copy_partial` 全链拷贝）；
+  - 串口 shell 同步支持 `net cap on <ip>` / `net cap off`；
+    固件 ZI +4.4KB（3×1472B 槽），编译 0 Error/0 Warning。
+- **上位机侧（HOST/EthLab 重构，PyQt5）**：
+  - **TCP 控制台**：命令/历史/快捷按钮/遥测流；连接后自动 `net cap on`；
+  - **实时抓包**：UDP 7778 监听 + 帧列表（时间/方向/长度/源/目的/协议/
+    摘要）、协议过滤、关键字搜索（含 hex）、暂停/自动滚动/上限、截断标注；
+  - **逐字节协议结构图**（ByteView）：整帧按字段着色，Ctrl+滚轮缩放、
+    悬停/点击看字段详情，配合字段树（偏移/长度/值/说明）与 Hex 视图；
+  - **解码引擎**：Ethernet II/802.1Q VLAN/ARP/IPv4/IPv6/ICMP/TCP/UDP
+    字段级解析 + IPv4/TCP/UDP/ICMP 校验和逐帧验算 + TCP 选项解析；
+  - **统计**：按协议计数、TX/RX、校验和错误、帧率/吞吐实时曲线；
+  - **捕获管理**：保存/加载 JSON、导出标准 PCAP（Wireshark 可开）、
+    离线粘贴解析；**UDP 回显测试**（7777，成功率 + RTT min/avg/max）。
+- **排障记录**：
+  1. **帧行不上 TCP**：`LOG_Printf` 只发串口 → 定案独立 UDP 通道；
+  2. **QThread 信号收不到**：`CaptureListener` 是 QThread，数据经队列
+     信号投递，必须跑 Qt 事件循环（`processEvents`/`exec_`）才进面板；
+  3. **L4 校验和误报 FAIL**：以太网短帧尾部有 padding（60B 下限），
+     TCP/ICMP 校验和把 padding 算进去了 → 按 IP 总长度截取 L4 段修复，
+     实机 TCP/UDP/ARP 33 帧校验错误归零；
+  4. **OTA 反复 SEC_ERR_REPLAY**：板端 `last_build_no=229`，且 OTA 代理
+     按 version+size 命中旧会话**续传**（下载区头部仍是 build 62 包）→
+     校验永远失败；对策：换 v191 强制全新下载 + build 230 越过重放线；
+  5. 历史遗留 `[CRASH] #7 shellTask Stack Overflow`（PC=0，记录不完整，
+     非本次引入），待后续专项排查。
+- **实机验证（板 192.168.10.50 ↔ 电脑 .201，v191 OTA 全流程
+  phase 2→7 通过 + 启动确认）**：`net cap on` 指向对端正确；UDP 回显
+  14/14 零丢包（RTT 1.00~2.54ms）；EthLab 实收 **33 帧**（16 TX/17 RX，
+  含 1 ARP/4 TCP/28 UDP），UDP/TCP 校验和逐帧 OK；帧列表/字节结构图/
+  字段树/统计/PCAP 导出全部联调通过；`net` 显示 CAP SENT/DROP 计数。
+- **结论**：ETH 上位机（控制台 + 抓包 + 协议可视化 + 统计 + 测试工具）
+  与固件抓帧通道端到端打通，本轮重大验证通过，可提交。

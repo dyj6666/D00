@@ -16,6 +16,7 @@
 #include "lwip/api.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
+#include "lwip/ip_addr.h"
 #include "logger.h"
 #include "event_bus.h"
 #include "data_link.h"
@@ -89,6 +90,7 @@ static void tcp_cmd_help(struct netconn *conn)
               "sysmon     system monitor\r\n"
               "taskstats  task list & stack usage\r\n"
               "net        ethernet status\r\n"
+              "net cap    live capture to EthLab (UDP 7778)\r\n"
               "led <on|off|toggle>\r\n"
               "beep <ms>\r\n"
               "mpu        IMU status\r\n"
@@ -154,13 +156,83 @@ static void tcp_cmd_taskstats(struct netconn *conn)
     vPortFree(arr);
 }
 
-static void tcp_cmd_net(struct netconn *conn)
+static void tcp_cmd_net(struct netconn *conn, const char *args)
 {
+    if (strncmp(args, "cap ", 4) == 0 || strcmp(args, "cap") == 0) {
+        const char *m = args + 4;
+        while (*m == ' ') {
+            m++;
+        }
+        if (strcmp(m, "on") == 0 || strcmp(m, "all") == 0 ||
+            strcmp(m, "1") == 0) {
+            ip_addr_t peer;
+            u16_t peer_port = 0;
+            if (netconn_peer(conn, &peer, &peer_port) != ERR_OK) {
+                svc_write(conn, "cap: cannot read peer addr\r\n");
+                return;
+            }
+            EthApp_SetCapturePeer(ip_2_ip4(&peer));
+            EthApp_SetCapture(1);
+            svc_writef(conn, "CAPTURE ON -> %s:7778\r\n",
+                       ipaddr_ntoa(&peer));
+        } else if (strcmp(m, "off") == 0 || strcmp(m, "0") == 0) {
+            EthApp_SetCapture(0);
+            svc_write(conn, "CAPTURE OFF\r\n");
+        } else {
+            EthApp_RefreshStatus();
+            const eth_status_t *st = EthApp_GetStatus();
+            (void)st;
+            svc_writef(conn,
+                       "CAPTURE %s | SENT %lu DROP %lu | link %s %u.%u.%u.%u\r\n"
+                       "Usage: net cap <on|off>\r\n",
+                       EthApp_GetCaptureOn() ? "ON" : "OFF",
+                       (unsigned long)EthApp_GetCapSent(),
+                       (unsigned long)EthApp_GetCapDrop(),
+                       st->link_up ? "UP" : "DOWN",
+                       st->ip[0], st->ip[1], st->ip[2], st->ip[3]);
+        }
+        return;
+    }
+    if (strncmp(args, "dbg ", 4) == 0 || strcmp(args, "dbg") == 0) {
+        const char *m = args + 4;
+        while (*m == ' ') {
+            m++;
+        }
+        if (strcmp(m, "all") == 0 || strcmp(m, "tx") == 0 ||
+            strcmp(m, "1") == 0 || strcmp(m, "on") == 0) {
+            EthApp_SetTxDbg(1);
+            EthApp_SetRxDbg(strcmp(m, "all") == 0 ? 1 : 0);
+            svc_writef(conn, "TX debug ON%s\r\n",
+                       strcmp(m, "all") == 0 ? ", RX debug ON" : "");
+        } else if (strcmp(m, "rx") == 0) {
+            EthApp_SetTxDbg(0);
+            EthApp_SetRxDbg(1);
+            svc_write(conn, "RX debug ON\r\n");
+        } else {
+            EthApp_SetTxDbg(0);
+            EthApp_SetRxDbg(0);
+            svc_write(conn, "frame debug OFF\r\n");
+        }
+        return;
+    }
+    if (strncmp(args, "ip ", 3) == 0) {
+        const char *ip = args + 3;
+        while (*ip == ' ') {
+            ip++;
+        }
+        if (EthApp_SetStaticIP(ip) == 0) {
+            svc_writef(conn, "IP set to %s/24\r\n", ip);
+        } else {
+            svc_write(conn, "Invalid IP\r\n");
+        }
+        return;
+    }
     EthApp_RefreshStatus();
     const eth_status_t *st = EthApp_GetStatus();
     svc_writef(conn,
                "Link %s | IP %u.%u.%u.%u | GW %u.%u.%u.%u\r\n"
-               "MAC %02X:%02X:%02X:%02X:%02X:%02X | RX %lu TX %lu | UP %lus\r\n",
+               "MAC %02X:%02X:%02X:%02X:%02X:%02X | RX %lu TX %lu | UP %lus\r\n"
+               "CAP %s | SENT %lu DROP %lu\r\n",
                st->link_up ? "UP" : "DOWN",
                st->ip[0], st->ip[1], st->ip[2], st->ip[3],
                st->gw[0], st->gw[1], st->gw[2], st->gw[3],
@@ -168,7 +240,10 @@ static void tcp_cmd_net(struct netconn *conn)
                st->mac[3], st->mac[4], st->mac[5],
                (unsigned long)st->rx_packets,
                (unsigned long)st->tx_packets,
-               (unsigned long)st->link_uptime_s);
+               (unsigned long)st->link_uptime_s,
+               EthApp_GetCaptureOn() ? "ON" : "OFF",
+               (unsigned long)EthApp_GetCapSent(),
+               (unsigned long)EthApp_GetCapDrop());
 }
 
 static void tcp_cmd_led(struct netconn *conn, const char *arg)
@@ -247,7 +322,7 @@ static void tcp_dispatch(struct netconn *conn, const char *line, uint8_t *stream
     } else if (strcmp(cmd, "taskstats") == 0) {
         tcp_cmd_taskstats(conn);
     } else if (strcmp(cmd, "net") == 0) {
-        tcp_cmd_net(conn);
+        tcp_cmd_net(conn, rest);
     } else if (strcmp(cmd, "led") == 0) {
         tcp_cmd_led(conn, rest);
     } else if (strcmp(cmd, "beep") == 0) {

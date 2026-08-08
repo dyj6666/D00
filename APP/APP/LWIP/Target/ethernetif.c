@@ -352,6 +352,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
   TxConfig.TxBuffer = Txbuffer;
   TxConfig.pData = p;
   EthApp_TxDbg(tx_total, (const uint8_t *)Txbuffer[0].buffer);
+  EthApp_CapFrameP(1, p);   /* 实时抓帧通道（EthLab net cap on，tcpip 线程安全） */
 
   pbuf_ref(p);
 
@@ -651,6 +652,9 @@ void HAL_ETH_RxAllocateCallback(uint8_t **buff)
 void HAL_ETH_RxLinkCallback(void **pStart, void **pEnd, uint8_t *buff, uint16_t Length)
 {
 /* USER CODE BEGIN HAL ETH RxLinkCallback */
+
+  EthApp_RxDbg(Length, buff);   /* RX 帧抓取（配合上位机协议解析，net dbg rx/all） */
+  EthApp_CapFrame(2, buff, Length);  /* 实时抓帧通道（EthLab net cap on） */
 
   struct pbuf **ppStart = (struct pbuf **)pStart;
   struct pbuf **ppEnd = (struct pbuf **)pEnd;

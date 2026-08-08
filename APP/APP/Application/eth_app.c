@@ -21,6 +21,8 @@
 #include "lwip/err.h"
 #include "lwip/tcpip.h"
 #include "cmsis_os2.h"
+#include "FreeRTOS.h"
+#include "task.h"
 #include "logger.h"
 #include "var_manager.h"
 #include "var_ids.h"
@@ -30,6 +32,203 @@ extern struct netif gnetif;   /* lwip.c 全局网络接口 */
 static eth_status_t s_eth;
 static uint32_t s_link_start_ms = 0;
 static volatile uint8_t s_tx_dbg = 0;
+static volatile uint8_t s_rx_dbg = 0;
+
+/* ---------------- 实时抓帧通道（EthLab UDP :7778） ---------------- */
+#define ETH_CAP_PORT   7778
+#define ETH_CAP_MAX    1468    /* MTU1500 - IP20 - UDP8 - 帧头4，保证不分片 */
+#define ETH_CAP_SLOTS  3
+
+typedef struct {
+    uint8_t  dir;            /* 1=TX 2=RX */
+    uint8_t  flags;          /* bit0: 截断 */
+    uint16_t orig_len;       /* 原始帧长（大端写入） */
+    uint8_t  data[ETH_CAP_MAX];
+} eth_cap_slot_t;
+
+static eth_cap_slot_t s_cap_slots[ETH_CAP_SLOTS];
+static struct raw_pcb *s_cap_pcb = NULL;
+static ip4_addr_t s_cap_peer;
+static volatile uint8_t s_cap_on = 0;
+static volatile uint8_t s_cap_pending = 0;   /* tcpip 回调在途数 */
+static volatile uint8_t s_cap_sending = 0;   /* 正在发送抓帧包（防自抓环） */
+static volatile uint8_t s_cap_next = 0;
+static volatile uint32_t s_cap_sent = 0;
+static volatile uint32_t s_cap_drop = 0;
+
+/* tcpip 线程内执行：组 UDP 抓帧包并发送，完成后归还槽位 */
+static void eth_cap_send_cb(void *arg)
+{
+    uint8_t idx = (uint8_t)(uintptr_t)arg;
+    const eth_cap_slot_t *sl = &s_cap_slots[idx];
+    u16_t plen = (u16_t)(4u + sl->orig_len);
+    struct pbuf *p = pbuf_alloc(PBUF_IP, (u16_t)(8u + plen), PBUF_RAM);
+
+    if (p == NULL) {
+        s_cap_drop++;
+    } else {
+        uint8_t *u = (uint8_t *)p->payload;
+        u[0] = (uint8_t)(ETH_CAP_PORT >> 8);
+        u[1] = (uint8_t)(ETH_CAP_PORT & 0xFF);
+        u[2] = (uint8_t)(ETH_CAP_PORT >> 8);
+        u[3] = (uint8_t)(ETH_CAP_PORT & 0xFF);
+        u[4] = (uint8_t)((8u + plen) >> 8);
+        u[5] = (uint8_t)((8u + plen) & 0xFF);
+        u[6] = 0;                       /* IPv4 允许 checksum=0 */
+        u[7] = 0;
+        u[8]  = sl->dir;
+        u[9]  = sl->flags;
+        u[10] = (uint8_t)(sl->orig_len >> 8);
+        u[11] = (uint8_t)(sl->orig_len & 0xFF);
+        memcpy(u + 12, sl->data, sl->orig_len);
+
+        ip_addr_t dst;
+        ip_addr_copy_from_ip4(dst, s_cap_peer);
+        s_cap_sending = 1;              /* 防自抓环：发送期间忽略 TX 钩子 */
+        if (raw_sendto(s_cap_pcb, p, &dst) == ERR_OK) {
+            s_cap_sent++;
+        } else {
+            s_cap_drop++;
+        }
+        s_cap_sending = 0;
+        pbuf_free(p);
+    }
+
+    portENTER_CRITICAL();
+    if (s_cap_pending > 0) {
+        s_cap_pending--;
+    }
+    portEXIT_CRITICAL();
+}
+
+/* 公共填槽入口：拷贝帧数据并投递到 tcpip 线程发送 */
+static void eth_cap_fill(uint8_t dir, const uint8_t *buf, uint32_t len,
+                         uint8_t truncated)
+{
+    uint8_t idx;
+
+    if (!s_cap_on || buf == NULL || len == 0 || s_cap_sending) {
+        return;
+    }
+    if (s_cap_pcb == NULL || ip4_addr_isany(&s_cap_peer)) {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+    if (s_cap_pending >= ETH_CAP_SLOTS) {
+        s_cap_drop++;
+        taskEXIT_CRITICAL();
+        return;
+    }
+    idx = s_cap_next;
+    s_cap_next = (uint8_t)((s_cap_next + 1u) % ETH_CAP_SLOTS);
+    s_cap_pending++;
+    taskEXIT_CRITICAL();
+
+    eth_cap_slot_t *sl = &s_cap_slots[idx];
+    uint32_t n = (len <= ETH_CAP_MAX) ? len : ETH_CAP_MAX;
+    sl->dir = dir;
+    sl->flags = truncated ? 1u : 0u;
+    sl->orig_len = (uint16_t)len;
+    memcpy(sl->data, buf, n);
+
+    if (tcpip_callback(eth_cap_send_cb, (void *)(uintptr_t)idx) != ERR_OK) {
+        taskENTER_CRITICAL();
+        if (s_cap_pending > 0) {
+            s_cap_pending--;
+        }
+        taskEXIT_CRITICAL();
+        s_cap_drop++;
+    }
+}
+
+int EthApp_SetCapturePeer(const void *peer4)
+{
+    const ip4_addr_t *p = (const ip4_addr_t *)peer4;
+    if (p == NULL) {
+        return -1;
+    }
+    s_cap_peer = *p;
+    if (s_cap_pcb == NULL) {
+        s_cap_pcb = raw_new(IP_PROTO_UDP);
+        if (s_cap_pcb == NULL) {
+            return -2;
+        }
+        raw_bind(s_cap_pcb, IP_ADDR_ANY);
+    }
+    return 0;
+}
+
+int EthApp_SetCapture(uint8_t on)
+{
+    s_cap_on = on ? 1u : 0u;
+    return 0;
+}
+
+uint8_t EthApp_GetCaptureOn(void)
+{
+    return s_cap_on;
+}
+
+uint32_t EthApp_GetCapSent(void)
+{
+    return s_cap_sent;
+}
+
+uint32_t EthApp_GetCapDrop(void)
+{
+    return s_cap_drop;
+}
+
+void EthApp_CapFrame(uint8_t dir, const uint8_t *buf, uint32_t len)
+{
+    eth_cap_fill(dir, buf, len, len > ETH_CAP_MAX);
+}
+
+void EthApp_CapFrameP(uint8_t dir, const void *pv)
+{
+    const struct pbuf *p = (const struct pbuf *)pv;
+    uint32_t len;
+
+    if (p == NULL || p->tot_len == 0) {
+        return;
+    }
+    len = (uint32_t)p->tot_len;
+    if (!s_cap_on || s_cap_sending) {
+        return;
+    }
+    if (s_cap_pcb == NULL || ip4_addr_isany(&s_cap_peer)) {
+        return;
+    }
+
+    uint8_t idx;
+    taskENTER_CRITICAL();
+    if (s_cap_pending >= ETH_CAP_SLOTS) {
+        s_cap_drop++;
+        taskEXIT_CRITICAL();
+        return;
+    }
+    idx = s_cap_next;
+    s_cap_next = (uint8_t)((s_cap_next + 1u) % ETH_CAP_SLOTS);
+    s_cap_pending++;
+    taskEXIT_CRITICAL();
+
+    eth_cap_slot_t *sl = &s_cap_slots[idx];
+    uint32_t n = (len <= ETH_CAP_MAX) ? len : ETH_CAP_MAX;
+    sl->dir = dir;
+    sl->flags = (n < len) ? 1u : 0u;
+    sl->orig_len = (uint16_t)len;
+    pbuf_copy_partial(p, sl->data, n, 0);
+
+    if (tcpip_callback(eth_cap_send_cb, (void *)(uintptr_t)idx) != ERR_OK) {
+        taskENTER_CRITICAL();
+        if (s_cap_pending > 0) {
+            s_cap_pending--;
+        }
+        taskEXIT_CRITICAL();
+        s_cap_drop++;
+    }
+}
 
 /* ---------------- ICMP ping（raw PCB + 信号量） ---------------- */
 static struct raw_pcb *s_ping_pcb = NULL;
@@ -290,6 +489,12 @@ int EthApp_SetTxDbg(uint8_t on)
     return 0;
 }
 
+int EthApp_SetRxDbg(uint8_t on)
+{
+    s_rx_dbg = on ? 1u : 0u;
+    return 0;
+}
+
 void EthApp_TxDbg(uint32_t len, const uint8_t *buf)
 {
     if (!s_tx_dbg || buf == NULL) {
@@ -297,6 +502,19 @@ void EthApp_TxDbg(uint32_t len, const uint8_t *buf)
     }
     uint32_t n = (len < 96u) ? len : 96u;
     LOG_Printf("TX %luB:", (unsigned long)len);
+    for (uint32_t i = 0; i < n; i++) {
+        LOG_Printf(" %02X", buf[i]);
+    }
+    LOG_Printf("\r\n");
+}
+
+void EthApp_RxDbg(uint32_t len, const uint8_t *buf)
+{
+    if (!s_rx_dbg || buf == NULL) {
+        return;
+    }
+    uint32_t n = (len < 96u) ? len : 96u;
+    LOG_Printf("RX %luB:", (unsigned long)len);
     for (uint32_t i = 0; i < n; i++) {
         LOG_Printf(" %02X", buf[i]);
     }

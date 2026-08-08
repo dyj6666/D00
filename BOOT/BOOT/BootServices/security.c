@@ -119,30 +119,31 @@ static bool ecdsa_verify(const uint8_t *pubkey, const uint8_t *hash, const uint8
 
 /**
  * @brief  安全验证（验签 + 版本检查），不执行 Flash 写入
- * @retval true  验证通过，*out_size 为原始固件大小
- *         false 验证失败
+ * @retval 0     验证通过，*out_size 为原始固件大小
+ *         负值  具体失败原因（SEC_ERR_*）
  */
-bool security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
-                               uint32_t current_version, uint32_t last_build_no) {
+int32_t security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
+                                    uint32_t current_version,
+                                    uint32_t last_build_no) {
     ota_header_t header;
     memcpy(&header, (void *)download_addr, sizeof(header));
     if (header.magic != 0x4F5441FE) {
         printf("[SEC] Magic mismatch!\r\n");
-        return false;
+        return SEC_ERR_MAGIC;
     }
 
     /* 芯片型号匹配：防止跨芯片烧录 */
     if (header.chip_id != (DBGMCU->IDCODE & 0xFFF)) {
         printf("[SEC] Chip mismatch! pkg=0x%04X dev=0x%04X\r\n",
                (unsigned)header.chip_id, (unsigned)(DBGMCU->IDCODE & 0xFFF));
-        return false;
+        return SEC_ERR_CHIP;
     }
 
     /* 防重放：构建号必须严格递增（参数区持久化 last_build_no） */
     if (last_build_no != 0 && header.build_no <= last_build_no) {
         printf("[SEC] Replay denied! build=%lu last=%lu\r\n",
                (unsigned long)header.build_no, (unsigned long)last_build_no);
-        return false;
+        return SEC_ERR_REPLAY;
     }
 
     uint32_t body_len = header.firmware_size;
@@ -150,22 +151,22 @@ bool security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
     uint8_t hash[32];
     if (!sw_sha256(download_addr, total_len, hash)) {
         printf("[SEC] SHA256 failed!\r\n");
-        return false;
+        return SEC_ERR_SHA;
     }
 
     uint8_t *sig = (uint8_t *)(download_addr + total_len);
     if (!ecdsa_verify(ECDSA_PUB_KEY, hash, sig) &&
         !ecdsa_verify(ECDSA_PUB_KEY_LEGACY, hash, sig)) {
         printf("[SEC] ECDSA verify failed!\r\n");
-        return false;
+        return SEC_ERR_ECDSA;
     }
 
     // 版本防回滚
     if (header.version < current_version) {
         printf("[SEC] Rollback denied! New:%lu, Current:%lu\r\n", header.version, current_version);
-        return false;
+        return SEC_ERR_ROLLBACK;
     }
 
     *out_size = body_len;
-    return true;
+    return 0;
 }

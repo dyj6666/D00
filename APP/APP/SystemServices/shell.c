@@ -18,6 +18,7 @@
 #include "imu_svc.h"
 #include "eth_app.h"
 #include "tcp_svc.h"
+#include "lwip/ip4_addr.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -96,7 +97,37 @@ static void cmd_net(const char *args)
             LOG_Printf("Invalid IP: %s\r\n", ip);
         }
         return;
-    }    if (args != NULL && strncmp(args, "udp ", 4) == 0) {
+    }
+    if (args != NULL && strncmp(args, "cap", 3) == 0) {
+        const char *m = args + 3;
+        while (*m == ' ' || *m == '\t') {
+            m++;
+        }
+        if (strncmp(m, "on", 2) == 0) {
+            const char *ip = m + 2;
+            while (*ip == ' ' || *ip == '\t') {
+                ip++;
+            }
+            ip4_addr_t peer;
+            if (*ip == '\0' || !ip4addr_aton(ip, &peer)) {
+                LOG_Printf("Usage: net cap on <a.b.c.d>\r\n");
+                return;
+            }
+            EthApp_SetCapturePeer(&peer);
+            EthApp_SetCapture(1);
+            LOG_Printf("CAPTURE ON -> %s:7778 (EthLab)\r\n", ip);
+        } else if (strncmp(m, "off", 3) == 0) {
+            EthApp_SetCapture(0);
+            LOG_Printf("CAPTURE OFF\r\n");
+        } else {
+            LOG_Printf("CAPTURE %s | SENT %lu DROP %lu\r\n",
+                       EthApp_GetCaptureOn() ? "ON" : "OFF",
+                       (unsigned long)EthApp_GetCapSent(),
+                       (unsigned long)EthApp_GetCapDrop());
+        }
+        return;
+    }
+    if (args != NULL && strncmp(args, "udp ", 4) == 0) {
         const char *p = args + 4;
         while (*p == ' ' || *p == '\t') p++;
         char ip[32];
@@ -130,17 +161,26 @@ static void cmd_net(const char *args)
         int r = EthApp_UdpSend(ip, (uint16_t)port, buf, blen);
         LOG_Printf("UDP %s:%lu len=%u -> %d\r\n", ip, port, (unsigned)blen, r);
         return;
-    }    if (args != NULL && strncmp(args, "dbg ", 4) == 0) {
-        if (strcmp(args + 4, "1") == 0 || strcmp(args + 4, " on") == 0 ||
-            strcmp(args + 4, "on") == 0) {
+    }
+    if (args != NULL && strncmp(args, "dbg ", 4) == 0) {
+        const char *m = args + 4;
+        while (*m == ' ') m++;
+        if (strcmp(m, "all") == 0 || strcmp(m, "tx") == 0 || strcmp(m, "1") == 0 || strcmp(m, "on") == 0) {
             EthApp_SetTxDbg(1);
-            LOG_Printf("TX debug ON\r\n");
+            EthApp_SetRxDbg(strcmp(m, "all") == 0 ? 1 : 0);
+            LOG_Printf("TX debug ON%s\r\n", strcmp(m, "all") == 0 ? ", RX debug ON" : "");
+        } else if (strcmp(m, "rx") == 0) {
+            EthApp_SetTxDbg(0);
+            EthApp_SetRxDbg(1);
+            LOG_Printf("RX debug ON\r\n");
         } else {
             EthApp_SetTxDbg(0);
-            LOG_Printf("TX debug OFF\r\n");
+            EthApp_SetRxDbg(0);
+            LOG_Printf("frame debug OFF\r\n");
         }
         return;
-    }    LOG_Printf("=== ETH ===\r\n");
+    }
+    LOG_Printf("=== ETH ===\r\n");
     LOG_Printf("  Link: %s\r\n", st->link_up ? "UP" : "DOWN");
     if (st->link_up) {
         LOG_Printf("  IP  : %u.%u.%u.%u\r\n", st->ip[0], st->ip[1], st->ip[2], st->ip[3]);

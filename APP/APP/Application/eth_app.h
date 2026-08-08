@@ -46,5 +46,19 @@ int EthApp_UdpSend(const char *host, uint16_t port,
 /* TX 帧调试：开启后每帧打印前 64 字节（诊断用，默认关闭） */
 int  EthApp_SetTxDbg(uint8_t on);
 void EthApp_TxDbg(uint32_t len, const uint8_t *buf);
+int  EthApp_SetRxDbg(uint8_t on);
+void EthApp_RxDbg(uint32_t len, const uint8_t *buf);
+
+/* ---------------- 上位机实时抓帧通道（EthLab 专用） ----------------
+ * 开启后，每个 TX/RX 以太网帧经 UDP 发送到抓帧对端 :7778，载荷格式：
+ *   dir(1) flags(1) orig_len(2, BE) raw[]   (flags bit0=截断)
+ * `net cap on` 由 TCP 控制台发出时自动把对端 IP 设为抓帧目标。 */
+int  EthApp_SetCapture(uint8_t on);
+int  EthApp_SetCapturePeer(const void *peer4);   /* const ip4_addr_t* */
+uint8_t EthApp_GetCaptureOn(void);
+uint32_t EthApp_GetCapSent(void);
+uint32_t EthApp_GetCapDrop(void);
+void EthApp_CapFrame(uint8_t dir, const uint8_t *buf, uint32_t len);
+void EthApp_CapFrameP(uint8_t dir, const void *pbuf);   /* const struct pbuf* */
 
 #endif
