@@ -11,7 +11,7 @@
  * ================================================================ */
 
 #define UI_QUEUE_LEN    8
-#define UI_TASK_STACK   2048   /* 字节（CMSIS-RTOS2）；v128 同负载在 1536B 任务内验证过 */
+#define UI_TASK_STACK   2560   /* 字节（CMSIS-RTOS2）；含 3D 渲染/格式化栈帧余量 */
 #define UI_TEXT_MAX     32
 
 typedef enum {
@@ -253,7 +253,9 @@ static void lcd_ui_task(void *arg)
             ui_pages[ui_page_cur] != NULL &&
             ui_pages[ui_page_cur]->refresh != NULL) {
             uint32_t now = (uint32_t)xTaskGetTickCount();
-            if (now - refresh_last >= pdMS_TO_TICKS(1000)) {
+            uint16_t period = ui_pages[ui_page_cur]->refresh_ms;
+            if (period == 0) period = 1000;
+            if (now - refresh_last >= pdMS_TO_TICKS(period)) {
                 refresh_last = now;
                 ui_pages[ui_page_cur]->refresh();
             }

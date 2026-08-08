@@ -3,6 +3,7 @@
 #include "lcd_ui.h"
 #include "touch_svc.h"
 #include "bsp_touch.h"
+#include "imu_svc.h"
 #include "event_bus.h"
 #include "app_config.h"
 #include "data_link.h"
@@ -12,6 +13,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 /* ================================================================
  * 板载 LCD 系统信息面板（基于 LcdUI 渲染任务框架）
@@ -89,12 +91,16 @@ static void lcd_page_clear_content(void)
                  BSP_LCD_COLOR_BLACK);
 }
 
-/* ---------- 数值（FONT16，右对齐至 x=LCD_VAL_RIGHT） ---------- */
-static void lcd_val(uint16_t y, const char *s, uint16_t color)
+/* ---------- 数值（FONT16，右对齐至指定右边线） ---------- */
+static void lcd_val_at(uint16_t xr, uint16_t y, const char *s, uint16_t color)
 {
     uint16_t n = (uint16_t)strlen(s);
-    BSP_LCD_ShowString((uint16_t)(LCD_VAL_RIGHT - n * 8u), y, s, color,
-                       BSP_LCD_FONT_16);
+    BSP_LCD_ShowString((uint16_t)(xr - n * 8u), y, s, color, BSP_LCD_FONT_16);
+}
+
+static void lcd_val(uint16_t y, const char *s, uint16_t color)
+{
+    lcd_val_at(LCD_VAL_RIGHT, y, s, color);
 }
 
 /* ================= HOME 页 ================= */
@@ -288,12 +294,205 @@ static void lcd_touch_event(uint8_t evt, uint16_t x, uint16_t y)
     }
 }
 
+/* ================= IMU 页（3D 姿态线框立方体 + 坐标轴 + 实时数值） ================= */
+#define IMU_CUBE_CX     52
+#define IMU_CUBE_CY     112
+#define IMU_CUBE_SIZE   28     /* 立方体半边长（像素），小体积避免覆盖文字 */
+#define IMU_AXIS_LEN    36     /* 坐标轴长度（超出立方体便于观察） */
+
+/* 立方体几何：8 顶点 / 12 边 / 6 面外法线 */
+static const int8_t s_cube_verts[8][3] = {
+    { -1, -1, -1 }, {  1, -1, -1 }, {  1,  1, -1 }, { -1,  1, -1 },
+    { -1, -1,  1 }, {  1, -1,  1 }, {  1,  1,  1 }, { -1,  1,  1 },
+};
+static const uint8_t s_cube_edges[12][2] = {
+    { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 },
+    { 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 },
+    { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 },
+};
+/* 每条边相邻的两个面（用于可见性：任一面可见则画该边） */
+static const uint8_t s_edge_faces[12][2] = {
+    { 1, 5 }, { 1, 2 }, { 1, 4 }, { 1, 3 },
+    { 0, 5 }, { 0, 2 }, { 0, 4 }, { 0, 3 },
+    { 3, 5 }, { 2, 5 }, { 2, 4 }, { 3, 4 },
+};
+static const int8_t s_cube_normals[6][3] = {
+    { 0, 0, 1 }, { 0, 0, -1 },
+    { 1, 0, 0 }, { -1, 0, 0 },
+    { 0, 1, 0 }, { 0, -1, 0 },
+};
+static float s_cube_q[4] = { 1.0f, 0.0f, 0.0f, 0.0f };
+
+/* 四元数旋转向量（q ⊗ v ⊗ q*，优化公式） */
+static void quat_rotate(float q0, float q1, float q2, float q3,
+                        float vx, float vy, float vz,
+                        float *ox, float *oy, float *oz)
+{
+    float tx = 2.0f * (q2 * vz - q3 * vy);
+    float ty = 2.0f * (q3 * vx - q1 * vz);
+    float tz = 2.0f * (q1 * vy - q2 * vx);
+    float ux = q2 * tz - q3 * ty;
+    float uy = q3 * tx - q1 * tz;
+    float uz = q1 * ty - q2 * tx;
+    *ox = vx + q0 * tx + ux;
+    *oy = vy + q0 * ty + uy;
+    *oz = vz + q0 * tz + uz;
+}
+
+/* 边界钳制画线（杜绝越界坐标导致画线循环失控） */
+static void lcd_line_clamped(int x0, int y0, int x1, int y1, uint16_t color)
+{
+    if (x0 < 0) x0 = 0;
+    if (x0 > 239) x0 = 239;
+    if (x1 < 0) x1 = 0;
+    if (x1 > 239) x1 = 239;
+    if (y0 < 0) y0 = 0;
+    if (y0 > 319) y0 = 319;
+    if (y1 < 0) y1 = 0;
+    if (y1 > 319) y1 = 319;
+    BSP_LCD_DrawLine((uint16_t)x0, (uint16_t)y0,
+                     (uint16_t)x1, (uint16_t)y1, color);
+}
+
+/* 渲染姿态线框立方体 + 中心坐标轴（erase=1 擦旧为黑） */
+static void lcd_imu_cube(const float q[4], uint8_t erase)
+{
+    float rx[8], ry[8], rz[8];
+    uint8_t vis[6] = {0, 0, 0, 0, 0, 0};
+
+    for (int i = 0; i < 8; i++) {
+        quat_rotate(q[0], q[1], q[2], q[3],
+                    (float)s_cube_verts[i][0], (float)s_cube_verts[i][1],
+                    (float)s_cube_verts[i][2], &rx[i], &ry[i], &rz[i]);
+    }
+    /* 可见面判定（法线朝向观察者） */
+    for (int f = 0; f < 6; f++) {
+        float nx, ny, nz;
+        quat_rotate(q[0], q[1], q[2], q[3],
+                    (float)s_cube_normals[f][0],
+                    (float)s_cube_normals[f][1],
+                    (float)s_cube_normals[f][2], &nx, &ny, &nz);
+        if (nz > 0.0f) vis[f] = 1;
+    }
+
+    /* 可见边（线框勾勒，隐藏边不画 → 立体感正确） */
+    {
+        uint16_t color = erase ? BSP_LCD_COLOR_BLACK : BSP_LCD_COLOR_WHITE;
+        for (int e = 0; e < 12; e++) {
+            if (!vis[s_edge_faces[e][0]] && !vis[s_edge_faces[e][1]]) continue;
+            int v0 = s_cube_edges[e][0], v1 = s_cube_edges[e][1];
+            lcd_line_clamped(
+                IMU_CUBE_CX + (int)(rx[v0] * IMU_CUBE_SIZE),
+                IMU_CUBE_CY - (int)(ry[v0] * IMU_CUBE_SIZE),
+                IMU_CUBE_CX + (int)(rx[v1] * IMU_CUBE_SIZE),
+                IMU_CUBE_CY - (int)(ry[v1] * IMU_CUBE_SIZE), color);
+        }
+    }
+
+    /* 中心三维坐标轴（相对立方体静止，X红 Y绿 Z蓝） */
+    {
+        static const int8_t axis[3][3] = {
+            { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 },
+        };
+        static const uint16_t axis_color[3] = {
+            0xF800, 0x07E0, 0x001F,
+        };
+        for (int a = 0; a < 3; a++) {
+            float dx, dy, dz;
+            quat_rotate(q[0], q[1], q[2], q[3],
+                        (float)axis[a][0], (float)axis[a][1],
+                        (float)axis[a][2], &dx, &dy, &dz);
+            uint16_t c = erase ? BSP_LCD_COLOR_BLACK : axis_color[a];
+            int tx = IMU_CUBE_CX + (int)(dx * IMU_AXIS_LEN);
+            int ty = IMU_CUBE_CY - (int)(dy * IMU_AXIS_LEN);
+            lcd_line_clamped(IMU_CUBE_CX, IMU_CUBE_CY, tx, ty, c);
+            /* 箭头：尖端 V 形两翼（屏幕方向 sx,sy + 垂直 px,py） */
+            float sx = dx, sy = -dy;
+            float px = -sy, py = sx;
+            float L = 7.0f, W = 3.5f;
+            int wx1 = tx + (int)(-sx * L + px * W);
+            int wy1 = ty + (int)(-sy * L + py * W);
+            int wx2 = tx + (int)(-sx * L - px * W);
+            int wy2 = ty + (int)(-sy * L - py * W);
+            lcd_line_clamped(tx, ty, wx1, wy1, c);
+            lcd_line_clamped(tx, ty, wx2, wy2, c);
+        }
+    }
+}
+
+static void lcd_imu_refresh(void)
+{
+    const imu_svc_state_t *s = ImuSvc_GetState();
+    char buf[32];
+    static uint32_t s_imu_status_ms = 0;
+
+    /* 快路径（100Hz）：姿态角实时更新 */
+    snprintf(buf, sizeof(buf), "%+6.1fdeg", (double)s->roll);   /* 定宽 9 字符 */
+    lcd_val_at(225, 92, buf, BSP_LCD_COLOR_WHITE);
+    snprintf(buf, sizeof(buf), "%+6.1fdeg", (double)s->pitch);
+    lcd_val_at(225, 118, buf, BSP_LCD_COLOR_WHITE);
+    snprintf(buf, sizeof(buf), "%+6.1fdeg", (double)s->yaw);
+    lcd_val_at(225, 144, buf, BSP_LCD_COLOR_YELLOW);
+
+    /* 慢路径（10Hz）：A/G/T 状态行（诊断数据，无需高频） */
+    {
+        uint32_t now = (uint32_t)xTaskGetTickCount();
+        if (now - s_imu_status_ms >= pdMS_TO_TICKS(100)) {
+            s_imu_status_ms = now;
+            snprintf(buf, sizeof(buf), "A %+6.2f %+6.2f %+6.2f g",
+                     (double)s->ax, (double)s->ay, (double)s->az);
+            BSP_LCD_ShowString(8, 168, buf, BSP_LCD_COLOR_CYAN, BSP_LCD_FONT_12);
+            snprintf(buf, sizeof(buf), "G %+6.1f %+6.1f %+6.1f dps",
+                     (double)s->gx, (double)s->gy, (double)s->gz);
+            BSP_LCD_ShowString(8, 184, buf, BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_12);
+            snprintf(buf, sizeof(buf), "T %+6.1f C n=%lu", (double)s->temp,
+                     (unsigned long)s->sample_count);
+            BSP_LCD_ShowString(8, 200, buf, BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+        }
+    }
+
+    /* 3D 姿态立方体：姿态变化超过 ~0.2° 才擦旧画新（静止零闪烁） */
+    {
+        float q[4] = { s->q0, s->q1, s->q2, s->q3 };
+        float dot = q[0] * s_cube_q[0] + q[1] * s_cube_q[1] +
+                    q[2] * s_cube_q[2] + q[3] * s_cube_q[3];
+        if (dot < 0.0f) dot = -dot;
+        if (dot < 0.999994f) {  /* 约 0.2° 阈值（极致实时） */
+            lcd_imu_cube(s_cube_q, 1);
+            s_cube_q[0] = q[0]; s_cube_q[1] = q[1];
+            s_cube_q[2] = q[2]; s_cube_q[3] = q[3];
+            lcd_imu_cube(q, 0);
+        }
+    }
+}
+
+static void lcd_imu_draw(void)
+{
+    lcd_page_clear_content();
+    lcd_page_header("IMU");
+    BSP_LCD_ShowString(8, 36, "MPU6050 AHRS", BSP_LCD_COLOR_YELLOW,
+                       BSP_LCD_FONT_16);
+    BSP_LCD_ShowString(8, 56, "3D attitude cube", BSP_LCD_COLOR_CYAN,
+                       BSP_LCD_FONT_12);
+
+    BSP_LCD_ShowString(110, 94, "R", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(110, 120, "P", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(110, 146, "Y", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+
+    s_cube_q[0] = 1.0f;
+    s_cube_q[1] = s_cube_q[2] = s_cube_q[3] = 0.0f;
+    lcd_imu_cube(s_cube_q, 0);
+    lcd_imu_refresh();
+    lcd_page_footer("SWIPE: NEXT PAGE");
+}
+
 /* ================= 页面注册 ================= */
 static const lcd_ui_page_t lcd_pages[] = {
-    { "HOME",   lcd_home_draw,   lcd_home_refresh,   NULL },
-    { "SYSTEM", lcd_system_draw, lcd_system_refresh, NULL },
-    { "BUS",    lcd_bus_draw,    lcd_bus_refresh,    NULL },
-    { "TOUCH",  lcd_touch_draw,  lcd_touch_refresh,  lcd_touch_event },
+    { "HOME",   lcd_home_draw,   lcd_home_refresh,   NULL,            0 },
+    { "SYSTEM", lcd_system_draw, lcd_system_refresh, NULL,            0 },
+    { "BUS",    lcd_bus_draw,    lcd_bus_refresh,    NULL,            0 },
+    { "TOUCH",  lcd_touch_draw,  lcd_touch_refresh,  lcd_touch_event, 0 },
+    { "IMU",    lcd_imu_draw,    lcd_imu_refresh,    NULL,            10 },
 };
 
 /* ---------- 按键导航 ---------- */

@@ -33,6 +33,7 @@
 #include "bsp.h"
 #include "event_bus.h"
 #include "stream_buffer.h"
+#include "i2c.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -116,8 +117,9 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_FSMC_Init();
-  MX_TIM8_Init();
-  MX_TIM1_Init();
+  MX_TIM8_Init();       
+  MX_TIM1_Init();       
+  MX_I2C1_Init();       
   /* USER CODE BEGIN 2 */
   EventBus_Init();    // 必须在调度器启动前初始化事件总线
 

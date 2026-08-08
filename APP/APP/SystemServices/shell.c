@@ -14,6 +14,8 @@
 #include "lcd_test.h"
 #include "touch_svc.h"
 #include "bsp_touch.h"
+#include "buzzer_app.h"
+#include "imu_svc.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -60,6 +62,8 @@ static void cmd_ota_rbtest(const char *args);
 static void cmd_eb_stress(const char *args);
 static void cmd_lcd(const char *args);
 static void cmd_touch(const char *args);
+static void cmd_beep(const char *args);
+static void cmd_mpu(const char *args);
 #if CRASH_INJECT_ENABLE
 static void cmd_crash(const char *args);
 #endif
@@ -96,6 +100,8 @@ static const cmd_entry_t cmd_table[] = {
     {"eb_stress",    "Event bus stress <n> <payload> <mode>", cmd_eb_stress},
     {"lcd",          "LCD test/info <info|test|clear|bench|dir|bl>", cmd_lcd},
     {"touch",        "Touch <info|cal|test>", cmd_touch},
+    {"beep",         "Buzzer beep <ms|test|off>", cmd_beep},
+    {"mpu",          "IMU MPU6050 <info|test|cal>", cmd_mpu},
 #if CRASH_INJECT_ENABLE
     {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", cmd_crash},
 #endif
@@ -665,6 +671,58 @@ static void cmd_ota_rbtest(const char *args)
     Ota_ForceRollbackTest();
 }
 
+/* ================== IMU √¸¡Ó ==================
+ * ”√∑®£∫mpu <info|test|cal> */
+static void cmd_mpu(const char *args)
+{
+    const imu_svc_state_t *s = ImuSvc_GetState();
+    if (args == NULL || strcmp(args, "info") == 0) {
+        LOG_Printf("MPU: ready=%u samples=%lu faults=%lu\r\n",
+                   (unsigned)s->ready, (unsigned long)s->sample_count,
+                   (unsigned long)s->fault_count);
+        LOG_Printf("MPU: R=%+.2f P=%+.2f Y=%+.2f deg\r\n",
+                   (double)s->roll, (double)s->pitch, (double)s->yaw);
+        LOG_Printf("MPU: A=(%+.3f,%+.3f,%+.3f)g G=(%+.2f,%+.2f,%+.2f)dps T=%+.1fC\r\n",
+                   (double)s->ax, (double)s->ay, (double)s->az,
+                   (double)s->gx, (double)s->gy, (double)s->gz,
+                   (double)s->temp);
+        return;
+    }
+    if (strcmp(args, "test") == 0) {
+        LOG_Printf("MPU: streaming R/P/Y and G for 2s...\r\n");
+        for (int i = 0; i < 20; i++) {
+            LOG_Printf("MPU: %+8.2f %+8.2f %+8.2f | %+6.1f %+6.1f %+6.1f\r\n",
+                       (double)s->roll, (double)s->pitch, (double)s->yaw,
+                       (double)s->gx, (double)s->gy, (double)s->gz);
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        return;
+    }
+    if (strcmp(args, "cal") == 0) {
+        ImuSvc_Recalibrate();
+        return;
+    }
+    LOG_Printf("Usage: mpu <info|test|cal>\r\n");
+}
+/* ================== ∑‰√˘∆˜√¸¡Ó ==================
+ * ”√∑®£∫beep [<ms>|test|off] */
+static void cmd_beep(const char *args)
+{
+    if (args == NULL || strcmp(args, "test") == 0) {
+        Buzzer_BeepPattern(2, 80, 60);
+        LOG_Printf("BEEP: double beep\r\n");
+        return;
+    }
+    if (strcmp(args, "off") == 0) {
+        Buzzer_Stop();
+        LOG_Printf("BEEP: stopped\r\n");
+        return;
+    }
+    int ms = atoi(args);
+    if (ms < 1 || ms > 3000) ms = 100;
+    Buzzer_Beep((uint16_t)ms);
+    LOG_Printf("BEEP: %d ms\r\n", ms);
+}
 /* ================== ¥•√˛∆¡√¸¡Ó ==================
  * ”√∑®£∫touch <info|cal|test> */
 static void cmd_touch(const char *args)

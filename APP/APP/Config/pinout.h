@@ -29,6 +29,16 @@
 #define TOUCH_MOSI_GPIO_Port GPIOF
 #define TOUCH_MOSI_Pin       GPIO_PIN_11
 
+/* 板载有源蜂鸣器（高电平发声） */
+#define BEEP_GPIO_Port       GPIOF
+#define BEEP_Pin             GPIO_PIN_8
+
+/* 外接 MPU6050（I2C1 硬件，400kHz） */
+#define MPU6050_SCL_Port     GPIOB
+#define MPU6050_SCL_Pin      GPIO_PIN_6
+#define MPU6050_SDA_Port     GPIOB
+#define MPU6050_SDA_Pin      GPIO_PIN_7
+
 #define HOSTLINK_UART       huart1      /* 涓婁綅鏈洪�氫俊涓撶敤 */
 #define HOSTLINK_UART_IRQn  USART1_IRQn
 #define HOSTLINK_BAUDRATE   921600

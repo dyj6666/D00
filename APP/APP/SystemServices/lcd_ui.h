@@ -27,6 +27,7 @@ typedef struct {
     void (*touch)(uint8_t evt, uint16_t x, uint16_t y);  /* 可选：触摸回调
                                         （DOWN/MOVE 实时送达 + TAP；渲染任务
                                         上下文，框架仍负责光标与滑动切页） */
+    uint16_t refresh_ms;   /* 页面刷新周期（0=默认 1000ms；实时页如 IMU 设 50） */
 } lcd_ui_page_t;
 
 /* ---------- 框架接口 ---------- */

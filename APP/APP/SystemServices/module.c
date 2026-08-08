@@ -2,6 +2,7 @@
 #include "logger.h"
 #include "led_app.h"
 #include "key_app.h"
+#include "buzzer_app.h"
 #include "ota_agent.h"
 #include "sysmon.h"
 #include "var_manager.h"
@@ -11,6 +12,7 @@
 #include "la_buffer.h"
 #include "lcd_app.h"
 #include "touch_svc.h"
+#include "imu_svc.h"
 
 #include <string.h>
 
@@ -22,8 +24,10 @@ static module_desc_t module_table[] = {
     MODULE_INIT("LA_Buffer",20,  LA_Buffer_Init),
     MODULE_INIT("LA_Sample",30,  LA_Sample_Init),
     MODULE_INIT("KeyApp",   40,  KeyApp_Init),
+    MODULE_INIT("BuzzerApp",42,  BuzzerApp_Init),
     MODULE_INIT("TouchSvc", 45,  TouchSvc_Init),
     MODULE_INIT("LedApp",   50,  LedApp_Init),
+    MODULE_INIT("ImuSvc",   52,  ImuSvc_Init),
     MODULE_INIT("LcdApp",   55,  LcdApp_Init),
     MODULE_INIT("OtaAgent", 60,  OtaAgent_Init),
     MODULE_INIT("SysMon",   70,  SysMon_Init),
