@@ -23,7 +23,9 @@ typedef struct {
     uint8_t   payload[EVENT_BUS_MSG_MAX_PAYLOAD];
 } msg_slot_t;
 
-static msg_slot_t g_msg_pool[EVENT_BUS_POOL_SIZE];
+/* 消息槽池：纯 CPU 访问，放 CCM（主 SRAM 让给 DMA/ETH） */
+static msg_slot_t g_msg_pool[EVENT_BUS_POOL_SIZE]
+    __attribute__((section(".ccmram"), zero_init));
 static QueueHandle_t free_queue;          // 空闲槽队列（ISR 安全）
 
 static volatile uint32_t g_msg_lost_count = 0; // 消息丢失计数器

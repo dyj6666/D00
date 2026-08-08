@@ -462,10 +462,30 @@ static void cmd_led(const char *args)
 static void cmd_taskstats(const char *args)
 {
     (void)args;
-    char stats_buf[512];
-    vTaskList(stats_buf);
+    UBaseType_t size = uxTaskGetNumberOfTasks();
+    TaskStatus_t *arr = pvPortMalloc(size * sizeof(TaskStatus_t));
+    if (arr == NULL) {
+        LOG_Printf("taskstats: no memory\r\n");
+        return;
+    }
+    size = uxTaskGetSystemState(arr, size, NULL);
     LOG_Printf("Task\tState\tPrio\tStack\t#\r\n");
-    LOG_Printf("%s\r\n", stats_buf);
+    for (UBaseType_t i = 0; i < size; i++) {
+        char st = 'X';
+        switch (arr[i].eCurrentState) {
+            case eRunning:   st = 'R'; break;
+            case eBlocked:   st = 'B'; break;
+            case eSuspended: st = 'S'; break;
+            case eDeleted:   st = 'D'; break;
+            default:         break;
+        }
+        LOG_Printf("%-12s\t%c\t%u\t%u\t%u\r\n",
+                   arr[i].pcTaskName, st,
+                   (unsigned)arr[i].uxCurrentPriority,
+                   (unsigned)arr[i].usStackHighWaterMark,
+                   (unsigned)arr[i].xTaskNumber);
+    }
+    vPortFree(arr);
     LOG_Printf("Free heap: %lu bytes\r\n", (unsigned long)xPortGetFreeHeapSize());
 }
 

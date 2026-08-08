@@ -57,6 +57,10 @@ void LOG_Printf(const char *format, ...)
     va_start(args, format);
     int len = vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
+    /* vsnprintf 返回“应写长度”，超长时必须钳制到缓冲内，否则栈越界读 */
+    if (len > (int)sizeof(buf) - 1) {
+        len = (int)sizeof(buf) - 1;
+    }
     if (len > 0) {
         xStreamBufferSend(global_tx_stream, buf, len, 0);
     }

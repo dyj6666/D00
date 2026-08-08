@@ -1461,3 +1461,29 @@ auto-stop）全部按设计工作。
     网卡驱动）问题，与固件无关（板端 ICMP 回复帧已逐字节验证合法）。
 - **结论**：ETH（链路/收发/诊断/可视化）与内存优化全部落地并实证，
   可提交。后续 TCP/UDP 服务开发按需给电脑加放行规则即可。
+
+### 12.75 综合性能与内存摸底优化（v181~v183）
+- **摸底（map + 实机采集）**：
+  - 静态 RAM 95.5KB = 堆 35.9KB(CCM) + ETH RX 池 13.2KB + LwIP MEM 12.3KB
+    + MEMP 8.5KB + LA 预触发 6.2KB(CCM) + 事件总线 4.6KB + 启动栈 4KB + 其余；
+  - 任务 15 个，栈占用 80~92%（ImuSvc 最紧 78B 余量），CPU：IDLE 89%、
+    ImuSvc 8%、TouchSvc 1%，无饿死；空闲堆仅 4.5KB（紧张）；
+  - **taskstats 输出乱码/截断**：根因 `LOG_Printf` 用 `vsnprintf` 返回值
+    作为长度发送（超 256B 时栈越界读，输出堆垃圾）——潜在全局隐患。
+- **优化（v181~v183）**：
+  1. **FreeRTOS 堆 35,840→49,152 入 CCM**（CCM 64KB 用 59.8KB）：
+     空闲堆 4.5KB→**17.3KB（4 倍）**，SRAM 零占用；
+  2. **事件总线消息池移入 CCM**：SRAM 再省 4.6KB（纯 CPU 访问）；
+  3. **logger.c 修复**：`vsnprintf` 长度钳制到缓冲内，杜绝栈越界读
+     （所有长字符串打印受益）；
+  4. **cmd_taskstats 重写**：堆分配 + 逐行打印（15 任务全量干净显示）；
+  5. **shellTask 栈 1536→2048**（shell 命令含大局部缓冲，余量 110B 太险）；
+  6. **EthIf 优先级 48→32**（低于事件总线：内联收包处理不得抢占系统事件）。
+- **任务调度最终形态**：eventBus 48 / EthIf 32 / ImuSvc+TouchSvc 32 /
+  logger 40 / shell+DataAgent+LcdUI+tcpip 24 / EthLink 16 /
+  DL_TX+DL_CMD+WDOG 8 / Tmr 2 / IDLE 0——15 任务栈水位 78~543B 余量，
+  CPU 峰值 ~11%，无反转/饿死风险。
+- **验证**：编译 0 Error/0 Warning；v183 OTA 全链路绿；UDP 回显 30/30
+  零丢包（RTT 1.44~2.40ms 均 1.66ms）；taskstats 15 任务全量显示；
+  空闲堆 17.3KB；持续运行无崩溃。ETH 收包池 13.2KB 与 LwIP MEM 12.3KB
+  为 DMA 必需（SRAM），保持不动。

@@ -53,21 +53,20 @@ static uint8_t ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (p == NULL) {
         return 0;
     }
-    /* raw 回调时 payload 仍在 IP 头处：先跳过 IP 头（含选项） */
-    if (p->len < IP_HLEN) {
-        return 0;
-    }
-    if (pbuf_remove_header(p, IPH_HL_BYTES((struct ip_hdr *)p->payload)) != 0) {
+    struct icmp_echo_hdr reply;
+    /* raw 回调时 payload 仍在 IP 头处：只读偏移、不改动 pbuf（否则
+     * 未吃包时触发 lwIP 断言 "altered pbuf payload pointer"） */
+    struct ip_hdr *iph = (struct ip_hdr *)p->payload;
+    u16_t iphlen = IPH_HL_BYTES(iph);
+    if (p->tot_len < iphlen + sizeof(reply)) {
         return 0;
     }
 
-    struct icmp_echo_hdr reply;
     uint8_t want_id_hi = (uint8_t)((uint16_t)s_ping_id >> 8);
     uint8_t want_id_lo = (uint8_t)((uint16_t)s_ping_id & 0xFF);
     uint8_t want_seq_hi = (uint8_t)((uint16_t)s_ping_seq >> 8);
     uint8_t want_seq_lo = (uint8_t)((uint16_t)s_ping_seq & 0xFF);
-    if (p->tot_len >= sizeof(reply) &&
-        pbuf_copy_partial(p, &reply, sizeof(reply), 0) == sizeof(reply) &&
+    if (pbuf_copy_partial(p, &reply, sizeof(reply), iphlen) == sizeof(reply) &&
         ICMPH_TYPE(&reply) == ICMP_ER &&
         ((uint8_t *)&reply.id)[0] == want_id_hi &&
         ((uint8_t *)&reply.id)[1] == want_id_lo &&
@@ -230,26 +229,26 @@ static uint8_t udp_echo_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p,
     if (p == NULL || p->tot_len < 8) {
         return 0;
     }
-    /* raw 回调时 payload 仍在 IP 头处：先跳过 IP 头（含选项） */
-    if (p->len < IP_HLEN) {
-        return 0;
-    }
-    if (pbuf_remove_header(p, IPH_HL_BYTES((struct ip_hdr *)p->payload)) != 0) {
+    /* raw 回调时 payload 仍在 IP 头处：只读偏移、不改动 pbuf */
+    struct ip_hdr *iph = (struct ip_hdr *)p->payload;
+    u16_t iphlen = IPH_HL_BYTES(iph);
+    if (p->tot_len < iphlen + 8u) {
         return 0;
     }
 
     /* UDP 头：offset2 = 目的端口。用显式字节比较（与字节序无关） */
     uint8_t dport_b[2];
-    pbuf_copy_partial(p, dport_b, 2, 2);
+    pbuf_copy_partial(p, dport_b, 2, iphlen + 2);
     if (dport_b[0] != (uint8_t)(UDP_ECHO_PORT >> 8) ||
         dport_b[1] != (uint8_t)(UDP_ECHO_PORT & 0xFF)) {
         return 0;   /* 非回显端口：放行给协议栈 */
     }
 
     /* 整包拷贝后交换源/目的端口回显（checksum=0，IPv4 合法） */
-    struct pbuf *r = pbuf_alloc(PBUF_IP, p->tot_len, PBUF_RAM);
+    u16_t udp_len = (u16_t)(p->tot_len - iphlen);
+    struct pbuf *r = pbuf_alloc(PBUF_IP, udp_len, PBUF_RAM);
     if (r != NULL) {
-        pbuf_copy_partial(p, r->payload, p->tot_len, 0);
+        pbuf_copy_partial(p, r->payload, udp_len, iphlen);
         uint8_t *u = (uint8_t *)r->payload;
         uint8_t sport_hi = u[0], sport_lo = u[1];
         u[0] = dport_b[0];                 /* 回显：原目的端口变源 */

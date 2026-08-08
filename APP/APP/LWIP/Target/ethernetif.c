@@ -59,7 +59,9 @@ static int32_t ETH_PHY_IO_GetTick(void);
 #define ETHIF_TX_TIMEOUT (2000U)
 /* USER CODE BEGIN OS_THREAD_STACK_SIZE_WITH_RTOS */
 /* Stack size of the interface thread */
-#define INTERFACE_THREAD_STACK_SIZE ( 350 )
+/* 本移植 TCPIP_CORE_LOCKING=1：tcpip_input 在调用者任务内联处理整包
+ * （ip4/ICMP/raw 回调），350B 会栈溢出——实测 EthIf 高水位仅剩 28B。 */
+#define INTERFACE_THREAD_STACK_SIZE ( 2048 )
 /* USER CODE END OS_THREAD_STACK_SIZE_WITH_RTOS */
 /* Network interface name */
 #define IFNAME0 's'
@@ -262,7 +264,8 @@ static void low_level_init(struct netif *netif)
   memset(&attributes, 0x0, sizeof(osThreadAttr_t));
   attributes.name = "EthIf";
   attributes.stack_size = INTERFACE_THREAD_STACK_SIZE;
-  attributes.priority = osPriorityRealtime;
+  /* 低于事件总线(Realtime)：内联收包处理不得抢占系统事件 */
+  attributes.priority = osPriorityAboveNormal;
   osThreadNew(ethernetif_input, netif, &attributes);
 /* USER CODE END OS_THREAD_NEW_CMSIS_RTOS_V2 */
 
