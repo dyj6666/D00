@@ -1487,3 +1487,20 @@ auto-stop）全部按设计工作。
   零丢包（RTT 1.44~2.40ms 均 1.66ms）；taskstats 15 任务全量显示；
   空闲堆 17.3KB；持续运行无崩溃。ETH 收包池 13.2KB 与 LwIP MEM 12.3KB
   为 DMA 必需（SRAM），保持不动。
+
+### 12.76 TCP 服务（v184~v186）
+- **交付**：工业 TCP 命令控制台（netconn API，端口 **9000**，行协议，
+  最多 2 并发客户端，120s 空闲断开）：
+  - 命令：help/info/ver/sysmon/taskstats/net/led/beep/mpu/echo/stream；
+  - **stream on**：每秒推送遥测（UPTIME/HEAP/TASKS/ETH 链路与 IP）；
+  - 新增 `TcpSvc` 模块（prio 66）、`tcp` shell 状态命令；
+  - 任务：TcpSvc（服务，栈 2048）/ TcpCli（客户端处理，栈 2048，动态创建），
+    taskstats 实测栈水位健康（TcpSvc 376 / TcpCli 230 余量）；
+  - 配套 lwipopts：`LWIP_SO_RCVTIMEO=1`（netconn 接收超时）。
+- **排障记录**：`netconn_set_recvtimeout` 受 LWIP_SO_RCVTIMEO 保护需显式
+  开启；shell.c 字节级插入时表项锚点需用整行（前缀匹配会劈裂表项）。
+- **验证（电脑↔板，TCP 出站不受 ICMP 影响）**：连接 9000 端口成功；
+  ver/sysmon/net/echo/led/beep/mpu 全部返回正确；遥测流 1s 周期稳定
+  推送、stream off 正常退出；任务增至 17（+TcpSvc+TcpCli），堆 12.6KB。
+- **连接方式**：`python`/`nc`/`telnet 192.168.10.10 9000` 即可操作；
+  后续 TCP 应用（HTTP/MQTT 等）按此框架扩展。

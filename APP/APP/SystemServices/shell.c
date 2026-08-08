@@ -17,6 +17,7 @@
 #include "buzzer_app.h"
 #include "imu_svc.h"
 #include "eth_app.h"
+#include "tcp_svc.h"
 #include "stream_buffer.h"
 #include "task.h"
 #include <ctype.h>
@@ -48,6 +49,7 @@ static void cmd_la_dma_stop(const char *args);
 static void cmd_la_dump(const char *args);
 static void cmd_la_dma_stat(const char *args);
 static void cmd_net(const char *args);
+static void cmd_tcp(const char *args);
 static void cmd_la_info(const char *args);
 static void cmd_la_state(const char *args);
 static void cmd_la_peek(const char *args);
@@ -158,6 +160,16 @@ static void cmd_mpu(const char *args);
 static void cmd_crash(const char *args);
 #endif
 
+static void cmd_tcp(const char *args)
+{
+    (void)args;
+    const tcp_svc_stat_t *st = TcpSvc_GetStat();
+    LOG_Printf("TCP console: port 9000, clients=%lu accepted=%lu rejected=%lu\r\n",
+               (unsigned long)st->clients,
+               (unsigned long)st->accepted,
+               (unsigned long)st->rejected);
+}
+
 static const cmd_entry_t cmd_table[] = {
     {"help",         "Show command help", cmd_help},
     {"info",         "System info (version/kernel/tasks)", cmd_info},
@@ -178,6 +190,7 @@ static const cmd_entry_t cmd_table[] = {
     {"la_state",     "LA state", cmd_la_state},
     {"la_peek",      "Peek sample at index", cmd_la_peek},
     {"sg_uart_start", "UART generator <baud> <text> <ms>", cmd_sg_uart_start},
+    {"tcp",          "TCP console status (port 9000)", cmd_tcp},
     {"net",          "ETH status / ping <ip>", cmd_net},
     {"sg_uart_stop", "Stop UART generator", cmd_sg_uart_stop},
     {"sg_uart_hex",  "UART hex frame generator", cmd_sg_uart_hex},

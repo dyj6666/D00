@@ -144,6 +144,7 @@
 #define TCPIP_THREAD_STACKSIZE      2048   /* raw 回调（ping/回显）在 tcpip 线程执行，1024 会溢出 */
 #undef  DEFAULT_THREAD_STACKSIZE
 #define DEFAULT_THREAD_STACKSIZE    2048
+#define LWIP_SO_RCVTIMEO            1      /* netconn_set_recvtimeout（TCP 控制台空闲/遥测超时） */
 /* USER CODE END 1 */
 
 #ifdef __cplusplus
