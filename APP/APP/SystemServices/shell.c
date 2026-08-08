@@ -680,6 +680,10 @@ static void cmd_lcd(const char *args)
         LOG_Printf("LCD: backlight on\r\n");
         return;
     }
+    if (strcmp(args, "bench") == 0) {
+        lcd_bench();
+        return;
+    }
     if (strncmp(args, "dir", 3) == 0) {
         int d = atoi(args + 3);
         if (d < 0 || d > 7) {
