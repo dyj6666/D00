@@ -11,9 +11,21 @@
 ```powershell
 python d00term.py                    # 交互选择传输
 python d00term.py com9               # UART 默认 115200
-python d00term.py tcp 192.168.1.10   # ETH 默认端口 9000
+python d00term.py tcp                # ETH 自动探测"电脑同网段"设备 IP
+python d00term.py tcp 192.168.1.10   # 或显式指定
 python d00term.py com9 -x "ver"      # 单次执行（脚本化）
 ```
+
+ETH 无参连接时会自动枚举电脑物理网卡（过滤 VMware/ICS/APIPA），依次探测
+出厂 IP（192.168.1.10）与各网段 `.10`；配合固件 `net ip` 持久化，只需在
+UART 端设置一次：
+
+```text
+python d00term.py com9 -x "net ip 192.168.10.10"   # 保存到 flash
+python d00term.py tcp                                # 之后每次直接连
+```
+
+`net ip default` 可清除保存配置并恢复出厂 192.168.1.10。
 
 ## 会话模式
 

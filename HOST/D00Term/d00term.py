@@ -138,6 +138,54 @@ TRANSPORTS = [UartTransport, TcpTransport, CanTransport]
 
 
 # ============================================================
+# ETH 默认地址：自动探测"与电脑同网段"的设备 IP
+# ============================================================
+VIRTUAL_SUBNETS = ("192.168.56.", "192.168.119.", "192.168.137.", "169.254.")
+
+
+def _pc_subnets():
+    """枚举电脑物理网卡网段（过滤 VMware/ICS/APIPA/回环）。"""
+    subs = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            if info[0] != socket.AF_INET:
+                continue
+            ip = info[4][0]
+            if ip.startswith("127.") or ip.startswith(VIRTUAL_SUBNETS):
+                continue
+            sub = ".".join(ip.split(".")[:3])
+            if sub not in subs:
+                subs.append(sub)
+    except Exception:
+        pass
+    return subs
+
+
+def _tcp_probe(host, port=DEFAULT_TCP_PORT, timeout=0.35):
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+        s.close()
+        return True
+    except OSError:
+        return False
+
+
+def detect_device_ip():
+    """ETH 默认设备 IP：
+    1) 出厂 IP 192.168.1.10 可达 → 用它；
+    2) 依次探测电脑各网段的 .10（可达即命中）；
+    3) 兜底：第一个电脑网段的 .10（提示用户用 net ip 设置一次即可持久化）。"""
+    if _tcp_probe("192.168.1.10"):
+        return "192.168.1.10"
+    for sub in _pc_subnets():
+        ip = f"{sub}.10"
+        if _tcp_probe(ip):
+            return ip
+    subs = _pc_subnets()
+    return f"{subs[0]}.10" if subs else "192.168.1.10"
+
+
+# ============================================================
 # 交互会话
 # ============================================================
 def _key_available():
@@ -282,13 +330,14 @@ def list_ports():
 
 def pick_transport():
     ports = list_ports()
+    dev_ip = detect_device_ip()
     _write("D00 命令行终端\r\n")
     _write("  1) UART  " + (", ".join(ports) if ports else "(未检测到 COM 口)") + "\r\n")
-    _write("  2) ETH   192.168.1.10:9000\r\n")
+    _write(f"  2) ETH   {dev_ip}:9000（自动探测电脑同网段）\r\n")
     _write("  3) CAN   (未接入)\r\n")
     choice = input("选择传输 [1/2/3]: ").strip()
     if choice == "2":
-        host = input("ETH IP [192.168.1.10]: ").strip() or "192.168.1.10"
+        host = input(f"ETH IP [{dev_ip}]: ").strip() or dev_ip
         return TcpTransport(host, DEFAULT_TCP_PORT)
     if choice == "3":
         return CanTransport()
@@ -366,7 +415,7 @@ def main(argv=None):
         baud = int(args.port_or_baud) if args.port_or_baud else DEFAULT_UART_BAUD
         t = UartTransport(port, baud)
     elif tl == "tcp":
-        host = args.target or "192.168.1.10"
+        host = args.target or detect_device_ip()
         port = int(args.port_or_baud) if args.port_or_baud else DEFAULT_TCP_PORT
         t = TcpTransport(host, port)
     elif tl == "can":
