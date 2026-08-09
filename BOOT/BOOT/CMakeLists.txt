@@ -25,6 +25,7 @@ if(CMAKE_CROSSCOMPILING)
         Core/Src/stm32f4xx_hal_msp.c
         Core/Src/system_stm32f4xx.c
         BootApp/boot_app.c
+        BootServices/boot_err.c
         BootServices/ymodem.c
         BootServices/ymodem_port.c
         BootServices/flash_if.c
@@ -35,7 +36,6 @@ if(CMAKE_CROSSCOMPILING)
         BootServices/uECC.c
         BootServices/crc32.c
         BootServices/fifo.c
-        BootServices/boot_param.c
         Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c
         Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c
         Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_dma.c

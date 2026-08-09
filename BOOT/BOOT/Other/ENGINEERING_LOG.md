@@ -85,3 +85,23 @@
   实测日志由 `Full Chip Erase Done` 变为 `Erase Done`，烧录后自动运行且 APP 正常跳转。
 - **OTA_Tool 迁移**：升级工具本质是上位机，已整体迁移至 `HOST/OTA_Tool/`
   （加密打包 + YMODEM 发送，COM 口 115200），与 VLink_Debugger 并列。
+
+## 5. GCC 交叉编译打通与隐患修复（2026-08，工程化整改）
+### 5.1 BOOT GCC 构建首次打通
+- **现象**：`cmake -S BOOT/BOOT -B build-fw` 编译报错——
+  `stm32f4xx_it.c` 的 ARMCC `__asm` 入口无法编译、链接缺 `Boot_ErrFaultEntry`。
+- **根因**：① fault handler 用 ARMCC 专用 `__asm/IMPORT` 语法，GCC 不支持；
+  ② `CMakeLists.txt` 的 `FW_SOURCES` 漏了 `BootServices/boot_err.c`
+  （Keil 工程有，GCC 列表没有）。
+- **解决**：`stm32f4xx_it.c` 加 `#if defined(__CC_ARM) / #elif defined(__GNUC__)`
+  双分支（GCC 用 naked + 内联汇编，语义与 ARMCC 完全一致，Keil 路径零改动）；
+  `CMakeLists.txt` 补 `boot_err.c`。
+- **验证**：GCC 构建通过，BOOT.bin ≈ 51.5KB < 64KB；Keil 发布构建
+  0 Error/0 Warning，BOOT.bin ≈ 32KB。
+### 5.2 UID 打印缓冲区溢出（GCC -Wformat-overflow 发现）
+- **现象**：`boot_app.c` `uid_str[32]` 用 `sprintf` 写入 39 字节（DEV_UID + 3×%08X + CRLF）。
+- **解决**：缓冲扩为 48 字节并改用 `snprintf(sizeof)`。
+- **验证**：GCC/Keil 双构建通过，0 警告。
+### 5.3 待办（硬件未在线）
+- 本轮 SWD 探针未连接，BOOT+APP 实机烧录/OTA 未执行；恢复探针后须补跑
+  `auto_pipeline.ps1 -Mode full -IncludeOta` 完成升级/回滚实测再发版。

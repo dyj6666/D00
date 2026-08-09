@@ -54,6 +54,7 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#if defined(__CC_ARM)
 /* 异常入口 __asm 包装：进入 C 前捕获真实 EXC_RETURN，按 bit2 选 PSP/MSP。
  * 传递：R0=栈帧指针，R1=EXC_RETURN，R2=错误来源。 */
 __asm void NMI_Handler(void)
@@ -120,6 +121,73 @@ __asm void UsageFault_Handler(void)
     LDR  R3, =Boot_ErrFaultEntry
     BX   R3
 }
+#elif defined(__GNUC__)
+/* GCC 交叉编译版本：naked C + 内联汇编，语义与上方 ARMCC 入口完全一致 */
+__attribute__((naked, used)) void NMI_Handler(void)
+{
+    __asm volatile(
+        "TST LR, #4\n"
+        "ITE EQ\n"
+        "MRSEQ R0, MSP\n"
+        "MRSNE R0, PSP\n"
+        "MOV R1, LR\n"
+        "MOV R2, #1\n"
+        "LDR R3, =Boot_ErrFaultEntry\n"
+        "BX R3\n");
+}
+
+__attribute__((naked, used)) void HardFault_Handler(void)
+{
+    __asm volatile(
+        "TST LR, #4\n"
+        "ITE EQ\n"
+        "MRSEQ R0, MSP\n"
+        "MRSNE R0, PSP\n"
+        "MOV R1, LR\n"
+        "MOV R2, #2\n"
+        "LDR R3, =Boot_ErrFaultEntry\n"
+        "BX R3\n");
+}
+
+__attribute__((naked, used)) void MemManage_Handler(void)
+{
+    __asm volatile(
+        "TST LR, #4\n"
+        "ITE EQ\n"
+        "MRSEQ R0, MSP\n"
+        "MRSNE R0, PSP\n"
+        "MOV R1, LR\n"
+        "MOV R2, #3\n"
+        "LDR R3, =Boot_ErrFaultEntry\n"
+        "BX R3\n");
+}
+
+__attribute__((naked, used)) void BusFault_Handler(void)
+{
+    __asm volatile(
+        "TST LR, #4\n"
+        "ITE EQ\n"
+        "MRSEQ R0, MSP\n"
+        "MRSNE R0, PSP\n"
+        "MOV R1, LR\n"
+        "MOV R2, #4\n"
+        "LDR R3, =Boot_ErrFaultEntry\n"
+        "BX R3\n");
+}
+
+__attribute__((naked, used)) void UsageFault_Handler(void)
+{
+    __asm volatile(
+        "TST LR, #4\n"
+        "ITE EQ\n"
+        "MRSEQ R0, MSP\n"
+        "MRSNE R0, PSP\n"
+        "MOV R1, LR\n"
+        "MOV R2, #5\n"
+        "LDR R3, =Boot_ErrFaultEntry\n"
+        "BX R3\n");
+}
+#endif
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
