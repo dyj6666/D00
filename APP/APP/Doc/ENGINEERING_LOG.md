@@ -1590,6 +1590,6 @@ auto-stop）全部按设计工作。
   （false negative，实际升级成功）→ 改为 `err=[1-9]|state=[2-9]`；
   `auto_verify.ps1` 新增 `-SerialReset`（DAP-only 环境无 SWD 复位的替代路径），
   `com9_logger.py` 支持 `--cmd` 在打开串口后立即发送命令。
-- **遗留**：LogicAnalyzer `test_robustness.py` 为硬件接线集成测试（60 组 × 实机采样），
-  由 `auto_hosttest.ps1 -Robustness` 显式触发；I2C 组因无 ADDR 失败，
-  需确认 PE2/PE3 与逻辑分析仪通道接线后复测。
+- **LA 硬件健壮性测试（不复测）**：`test_robustness.py` 为 60 组实机采样集成测试，
+  需 PE2/PE3 接入逻辑分析仪通道；用户确认当前未接线且此前已实测过，
+  本轮不复测（`auto_hosttest.ps1 -Robustness` 开关保留，供有接线环境使用）。
