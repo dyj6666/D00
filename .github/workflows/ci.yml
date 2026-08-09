@@ -61,7 +61,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install deps
-        run: pip install numpy pyserial
+        run: pip install numpy pyserial PyQt5
       - name: VLink protocol tests
         run: python HOST/VLink_Debugger/tests/test_protocol.py
       - name: LogicAnalyzer decoder tests
