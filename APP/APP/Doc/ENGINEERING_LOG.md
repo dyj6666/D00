@@ -1638,7 +1638,20 @@ auto-stop）全部按设计工作。
   - Keil 0 Error/0 Warning；GCC 交叉编译 0 错误；APP ctest 通过；
   - HOSTLINK OTA build 234→235 通过，复位日志 `last build 235`、
     17 模块、ETH ready、TCP console listening、无活动态 CRASH；
-  - **双终端实测**：UART（COM9）与 TCP（:9000）均可用同一命令集
+- **双终端实测**：UART（COM9）与 TCP（:9000）均可用同一命令集
     （ver/echo/help/tcp/net），统一提示符 `D00> `；传输掩码生效
     （`ota` 标注 `[UART]`）；`net ip` 经 UART 修改网参后 TCP 终端
     立即可达（跨端一致性验证）。
+
+### 12.82 配套上位机：D00Term 命令行终端（HOST/D00Term）
+- **定位**：与固件 `cmd_transport_t` 对称的可插拔传输 CLI 终端——
+  界面只有端口选择与命令行，无多余控件；UART 原始透传（设备自带
+  行编辑/回显/补全）、ETH 行编辑会话（本地回显+上下键历史）、
+  CAN 预留扩展类（`TRANSPORTS` 一行注册，命令零改动）。
+- **形态**：单文件 `d00term.py` + `start_term.bat` 双击启动；
+  PyInstaller 可选打包 `dist/D00Term/D00Term.exe`（1.8MB，已验证）。
+- **能力**：`d00term.py com9 / tcp <ip> [/ tcp <ip> <port>]` 进入会话；
+  `-x "cmd"` 单次执行（脚本化）；`--list` 枚举串口；`--selftest` 传输层自检。
+- **验证**：`--selftest/--list` 通过；UART `ver`/`echo` 应答正确；
+  ETH（192.168.10.10:9000）`ver`/`tcp` 应答正确（含 banner 与统一提示符）；
+  板子 IP 测试后已恢复 192.168.1.10。

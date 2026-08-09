@@ -9,7 +9,7 @@
 D00/
 ├── APP/     应用固件工程（FreeRTOS + HOSTLINK 协议 + 逻辑分析仪）
 ├── BOOT/    安全 OTA 引导工程（AES/ECC/SHA256 验签 + YMODEM 传输）
-├── HOST/    上位机（VLink_Debugger 调试器 + OTA_Tool 升级工具 + LogicAnalyzer 逻辑分析仪）
+├── HOST/    上位机（VLink_Debugger 调试器 + OTA_Tool 升级工具 + LogicAnalyzer 逻辑分析仪 + D00Term 命令行终端）
 ├── workflow/ Codex AI 工作流（自检/构建/烧录/验证/OTA/单测/报告）
 ├── config/   机器可读配置（版本号单一事实源 version.json）
 ├── .github/  云端 CI（BOOT+APP GCC 构建、ctest、HOST 测试）
@@ -77,6 +77,10 @@ cd HOST/LogicAnalyzer
 pip install -r requirements.txt
 python main.py
 python tests/test_decoders.py    # 解码器单元测试
+
+# D00Term：配套命令行终端（UART/ETH，CAN 扩展）
+cd HOST/D00Term
+python d00term.py com9            # 或 start_term.bat 双击启动；tcp 192.168.1.10 走 ETH
 ```
 
 ## 三工程联动契约
@@ -120,6 +124,7 @@ BOOT(0x08000000, 64KB) ──跳转──▶ APP(0x08010000, 320KB) ──HOSTLI
 | HOST 说明 | `HOST/VLink_Debugger/README.md` | 结构、运行、测试 |
 | HOST 升级工具 | `HOST/OTA_Tool/` | BOOT 安全 OTA 打包与发送（UID 派生密钥 + ECC 签名） |
 | HOST 逻辑分析仪 | `HOST/LogicAnalyzer/README.md` | 8 通道采集/波形/UART·I2C·SPI 解码 |
+| D00Term 终端 | `HOST/D00Term/README.md` | UART/ETH 命令行终端（CAN 扩展） |
 | AI 工作流 | `workflow/WORKFLOW.md` | 流水线模式、脚本参数、验证规则 |
 
 ## 协作约定
