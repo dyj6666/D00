@@ -12,7 +12,8 @@
 void SntpSvc_Init(void);
 int  SntpSvc_SetServer(const char *ip);            /* 0=成功（写 EEPROM + 生效） */
 const uint8_t *SntpSvc_GetServer(void);            /* NULL=未配置 */
-int  SntpSvc_Sync(const uint8_t server[4], uint32_t timeout_ms); /* 0=成功并写 RTC */
+int  SntpSvc_Sync(const uint8_t server[4], uint16_t port,
+                  uint32_t timeout_ms); /* 0=成功并写 RTC */
 int  SntpSvc_SetAuto(uint8_t on);
 uint8_t SntpSvc_Auto(void);
 void SntpSvc_GetTimeStr(char *buf, uint32_t len);  /* "YYYY-MM-DD HH:MM:SS" */

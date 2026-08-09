@@ -397,9 +397,21 @@ static void cmd_sntp(const char *args)
         while (*p == ' ' || *p == '\t') p++;
         const uint8_t *srv = SntpSvc_GetServer();
         uint8_t local[4];
+        uint16_t port = 123u;
         if (*p != '\0') {
-            if (SntpSvc_SetServer(p) != 0) {
-                LOG_Printf("SNTP: invalid server %s\r\n", p);
+            const char *sp = p;
+            char ip[32];
+            char *dst = ip;
+            while (*sp != '\0' && *sp != ' ' && *sp != '\t' &&
+                   (dst - ip) < 31) {
+                *dst++ = *sp++;
+            }
+            *dst = '\0';
+            if (*sp != '\0') {
+                port = (uint16_t)atoi(sp);
+            }
+            if (SntpSvc_SetServer(ip) != 0) {
+                LOG_Printf("SNTP: invalid server %s\r\n", ip);
                 return;
             }
             srv = SntpSvc_GetServer();
@@ -409,10 +421,11 @@ static void cmd_sntp(const char *args)
             return;
         }
         memcpy(local, srv, 4);
-        LOG_Printf("SNTP: syncing %u.%u.%u.%u ...\r\n",
+        LOG_Printf("SNTP: syncing %u.%u.%u.%u:%u ...\r\n",
                    (unsigned)local[0], (unsigned)local[1],
-                   (unsigned)local[2], (unsigned)local[3]);
-        int r = SntpSvc_Sync(local, 3000u);
+                   (unsigned)local[2], (unsigned)local[3],
+                   (unsigned)port);
+        int r = SntpSvc_Sync(local, port, 3000u);
         char ts[32];
         SntpSvc_GetTimeStr(ts, sizeof(ts));
         LOG_Printf("SNTP: %s, RTC=%s\r\n", (r == 0) ? "OK" : "FAIL", ts);
@@ -432,7 +445,7 @@ static void cmd_sntp(const char *args)
         }
         return;
     }
-    LOG_Printf("Usage: sntp <info|sync [server]|auto <on|off>>\r\n");
+    LOG_Printf("Usage: sntp <info|sync [server [port]]|auto <on|off>>\r\n");
 }
 
 static void cmd_mqtt(const char *args)

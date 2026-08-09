@@ -105,7 +105,12 @@ static void mqtt_do_connect(void *arg)
     if (e != ERR_OK) {
         s_stat.err_cnt++;
         LOG_Printf("[MQTT] connect start failed (%d)\r\n", (int)e);
+        return;
     }
+    /* 注意：mqtt_client_connect 内部 memset 整个 client 结构，
+     * 会清空此前设置的 inpub 回调——必须在 connect 之后（tcpip 线程内）重设，
+     * 否则收到 PUBLISH 时 data_cb 为空指针 → INVSTATE 崩溃。 */
+    mqtt_set_inpub_callback(s_client, mqtt_inpub_cb, mqtt_indata_cb, NULL);
 }
 
 typedef struct {
@@ -222,7 +227,6 @@ int MqttSvc_Connect(const char *ip, uint16_t port)
         s_stat.err_cnt++;
         return -2;
     }
-    mqtt_set_inpub_callback(s_client, mqtt_inpub_cb, mqtt_indata_cb, NULL);
     if (tcpip_callback(mqtt_do_connect, NULL) != ERR_OK) {
         return -4;
     }

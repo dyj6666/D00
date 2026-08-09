@@ -53,9 +53,9 @@ static uint8_t epoch_weekday(uint32_t t)
     return (uint8_t)((wd == 0u) ? 7u : wd);
 }
 
-int SntpSvc_Sync(const uint8_t server[4], uint32_t timeout_ms)
+int SntpSvc_Sync(const uint8_t server[4], uint16_t port, uint32_t timeout_ms)
 {
-    if (server == NULL) {
+    if (server == NULL || port == 0u) {
         return -1;
     }
     struct netconn *conn = netconn_new(NETCONN_UDP);
@@ -65,7 +65,7 @@ int SntpSvc_Sync(const uint8_t server[4], uint32_t timeout_ms)
     netconn_set_recvtimeout(conn, timeout_ms);
     ip_addr_t dst;
     IP4_ADDR(&dst, server[0], server[1], server[2], server[3]);
-    err_t e = netconn_connect(conn, &dst, SNTP_PORT);
+    err_t e = netconn_connect(conn, &dst, port);
     if (e != ERR_OK) {
         netconn_delete(conn);
         return -3;
@@ -74,7 +74,20 @@ int SntpSvc_Sync(const uint8_t server[4], uint32_t timeout_ms)
     uint8_t req[48];
     memset(req, 0, sizeof(req));
     req[0] = 0x1Bu;                       /* LI=0 VN=3 MODE=3（client） */
-    e = netconn_write(conn, req, sizeof(req), NETCONN_COPY);
+    struct netbuf *txbuf = netbuf_new();
+    if (txbuf == NULL) {
+        netconn_delete(conn);
+        return -2;
+    }
+    void *dp = netbuf_alloc(txbuf, sizeof(req));
+    if (dp == NULL) {
+        netbuf_delete(txbuf);
+        netconn_delete(conn);
+        return -2;
+    }
+    memcpy(dp, req, sizeof(req));
+    e = netconn_send(conn, txbuf);        /* UDP 用 send，write 仅限 TCP */
+    netbuf_delete(txbuf);
     int ret = -4;
     if (e == ERR_OK) {
         struct netbuf *nb = NULL;
@@ -182,7 +195,7 @@ static void sntp_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(SNTP_BOOT_DELAY_S * 1000u));
     for (;;) {
         if (s_auto && s_have_server) {
-            int r = SntpSvc_Sync(s_server, 3000u);
+            int r = SntpSvc_Sync(s_server, SNTP_PORT, 3000u);
             char ts[32];
             SntpSvc_GetTimeStr(ts, sizeof(ts));
             LOG_Printf("[SNTP] sync %s -> %s\r\n",

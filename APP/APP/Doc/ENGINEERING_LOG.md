@@ -1858,3 +1858,24 @@ auto-stop）全部按设计工作。
   - `netconn_recv_tcp_pbuf(conn, NULL)` 吞掉请求导致后续 recv 阻塞；
   - `http_handle` 的 2×1024B 局部缓冲压爆 2048B 服务任务栈（HTTP 间歇
     卡死根因）→ 改静态缓冲；修复后 200/200 全通。
+- **补齐全套测试（build 281）——上一轮未覆盖项全部实测**：
+  - **SNTP 真实同步**：发现 UDP 误用 `netconn_write`（仅 TCP 适用）导致
+    请求从未发出 → 改用 `netconn_send` 修复；PC 临时 SNTP 服务器(:1123，
+    :123 被系统 w32time 占用)实测：`sntp sync` OK，**RTC 校准到本地时间**
+    （2026-08-10 00:03，UTC+8）；
+  - **MQTT 全链路（真实 broker）**：连接 CONNECTED → 遥测每 5s 发布
+    （broker 收到 d00/status JSON）→ 订阅 SUBACK → **PC 发布消息被板子
+    接收**（`[MQTT] recv topic=d00/status` + payload）。过程中发现并修复：
+    `mqtt_client_connect` 内部 memset 清空 inpub 回调 → 收到 PUBLISH 时
+    data_cb 空指针调用崩溃（INVSTATE/PC=0，tcpip_thread）→ 回调设置移到
+    connect 之后（tcpip 线程内）；
+  - **DHCP 真实获取 IP**：PC 最小 DHCP 服务器（:67）实测
+    DISCOVER→OFFER→REQUEST→ACK→bound，板子获取 192.168.10.50 且可 ping
+    通（期间修复服务器端 cookie/字段顺序/广播接口三个问题）；
+  - **TCP 遥测流**：`stream on` → 1.2 行/s 推送；
+  - **抓帧通道**：`net cap` 实测捕获 DHCP/ICMP 帧；
+  - **板→PC ping**：`net ping 192.168.10.201` → Reply 1ms；
+  - **HTTP HTML 页**：×100 全通（12 req/s）；**UDP 1400B**：200/200 零丢
+    （95 pkt/s ≈ 1.33MB/s）；
+  - **稳定性**：全套压测后堆 15216→15056B（无泄漏），全部任务栈水位健康，
+    无新增崩溃记录。
