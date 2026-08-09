@@ -981,23 +981,22 @@ static void cmd_kv(const char *args)
     }
     if (strncmp(args, "scan", 4) == 0) {
         LOG_Printf("I2C bus scan (7-bit):\r\n");
-        for (uint8_t bus = 1; bus <= 2; bus++) {
-            LOG_Printf("  I2C%u:", (unsigned)bus);
-            int lock = (bus == 1) ? BSP_I2C1_Lock(100) : BSP_I2C2_Lock(100);
-            if (lock == 0) {
-                I2C_HandleTypeDef *hi = (bus == 1) ? &hi2c1 : &hi2c2;
-                for (uint8_t a = 0x40; a <= 0x77; a++) {
-                    if (HAL_I2C_IsDeviceReady(hi, (uint16_t)(a << 1), 1,
-                                              100) == HAL_OK) {
-                        LOG_Printf(" 0x%02X", (unsigned)a);
-                    }
+        BSP_I2C1_Init();
+        LOG_Printf("  I2C1 hw (PB6/PB7):");
+        if (BSP_I2C1_Lock(100) == 0) {
+            for (uint8_t a = 0x40; a <= 0x77; a++) {
+                if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1,
+                                          100) == HAL_OK) {
+                    LOG_Printf(" 0x%02X", (unsigned)a);
                 }
-                if (bus == 1) { BSP_I2C1_Unlock(); } else { BSP_I2C2_Unlock(); }
-            } else {
-                LOG_Printf(" lock-fail");
             }
-            LOG_Printf("\r\n");
+            BSP_I2C1_Unlock();
+        } else {
+            LOG_Printf(" lock-fail");
         }
+        LOG_Printf("\r\n");
+        LOG_Printf("  Soft IIC (PB8/PB9): 0x50 = %s\r\n",
+                   BSP_EEPROM_Probe() == 0 ? "OK (AT24C02)" : "MISS");
         return;
     }
     if (strncmp(args, "get", 3) == 0) {

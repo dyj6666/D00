@@ -61,7 +61,7 @@ void KV_Init(void)
 {
     s_valid = 0;
     if (BSP_EEPROM_Init() != 0) {
-        LOG_Printf("[KV] EEPROM not present (I2C2 PB10/PB11 @0x50)\r\n");
+        LOG_Printf("[KV] EEPROM not present (soft IIC PB8/PB9 @0x50)\r\n");
         return;
     }
     uint8_t hdr[KV_HEAD_SIZE];
