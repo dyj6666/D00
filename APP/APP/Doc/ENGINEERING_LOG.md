@@ -1606,3 +1606,14 @@ auto-stop）全部按设计工作。
 - **验证**：Keil 发布构建 0 Error/0 Warning；HOSTLINK OTA build 232→233
   全流程通过（BOOT phase 2→7 err=0），复位日志确认 `last build 233`、
   17 模块初始化、ETH ready、无活动态 CRASH；视觉效果待用户目检确认。
+
+### 12.80 LCD NET 页右对齐宽度修正（build 234）
+- **现象**：12.79 修复后 MAC 尾部仍被屏幕右缘裁掉（最后 1~2 字符）。
+- **根因**：`lcd_val_at` 按 8px/字符估算右对齐起点，但 `lcd_show_string`
+  实际步进为 `size/2 + 1 = 9px/字符`（含 1px 间距，见 lcd.c:1227）；
+  MAC 17 字符实际宽 153px，起点 x=100 时右缘 253 > 240px 屏宽 → 裁切。
+- **解决**：`lcd_val_at` 改为 `xr - n * 9u`，右对齐精确到最后一字右缘
+  （MAC 起点 x=83、右缘 235，完整显示）；全页数值列随之精确右对齐。
+- **验证**：Keil 0 Error/0 Warning；HOSTLINK OTA build 233→234 通过；
+  复位日志 `last build 234` / 17 模块 / ETH ready / 无活动态 CRASH；
+  视觉效果待用户目检确认。

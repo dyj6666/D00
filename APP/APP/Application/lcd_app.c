@@ -106,7 +106,9 @@ static void lcd_page_clear_content(void)
 static void lcd_val_at(uint16_t xr, uint16_t y, const char *s, uint16_t color)
 {
     uint16_t n = (uint16_t)strlen(s);
-    BSP_LCD_ShowString((uint16_t)(xr - n * 8u), y, s, color, BSP_LCD_FONT_16);
+    /* FONT16 实际步进 = size/2 + 1 = 9px/字符（含 1px 间距，见 lcd_show_string），
+     * 不能用 8px 估算：MAC 17 字符按 8px 计算会向右多出 17px 而超出屏宽。 */
+    BSP_LCD_ShowString((uint16_t)(xr - n * 9u), y, s, color, BSP_LCD_FONT_16);
 }
 
 static void lcd_val(uint16_t y, const char *s, uint16_t color)
