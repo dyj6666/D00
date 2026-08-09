@@ -24,6 +24,7 @@
 #include "imu_svc.h"
 #include "eth_app.h"
 #include "tcp_svc.h"
+#include "icmp_svc.h"
 #include "cmd_shell.h"
 #include "kv_store.h"
 #include "bsp_eeprom.h"
@@ -56,6 +57,7 @@ static void cmd_la_dump(const char *args);
 static void cmd_la_dma_stat(const char *args);
 static void cmd_net(const char *args);
 static void cmd_tcp(const char *args);
+static void cmd_icmp(const char *args);
 static void cmd_la_info(const char *args);
 static void cmd_la_state(const char *args);
 static void cmd_la_peek(const char *args);
@@ -240,6 +242,64 @@ static void cmd_tcp(const char *args)
                (unsigned long)st->rejected);
 }
 
+static void cmd_icmp(const char *args)
+{
+    if (args == NULL || *args == '\0' || strncmp(args, "info", 4) == 0) {
+        const icmp_svc_stat_t *st = IcmpSvc_GetStat();
+        LOG_Printf("ICMP service: %s, limit=%lu pps, uptime=%lus\r\n",
+                   st->enabled ? "reply ON" : "reply OFF (silent)",
+                   (unsigned long)st->rate_limit_pps,
+                   (unsigned long)st->uptime_s);
+        LOG_Printf("  rx echo=%lu reply=%lu drop=%lu other=%lu total=%lu\r\n",
+                   (unsigned long)st->echo_rx,
+                   (unsigned long)st->echo_tx,
+                   (unsigned long)st->echo_drop,
+                   (unsigned long)st->other_rx,
+                   (unsigned long)st->total_rx);
+        LOG_Printf("  rate=%lu pps (peak %lu)  rtt min/avg/max=%lu/%lu/%lu us\r\n",
+                   (unsigned long)st->rate_pps,
+                   (unsigned long)st->peak_pps,
+                   (unsigned long)st->min_rtt_us,
+                   (unsigned long)st->avg_rtt_us,
+                   (unsigned long)st->max_rtt_us);
+        LOG_Printf("  last peer=%u.%u.%u.%u seq=%u\r\n",
+                   st->last_peer[0], st->last_peer[1],
+                   st->last_peer[2], st->last_peer[3],
+                   (unsigned)st->last_seq);
+        return;
+    }
+    if (strncmp(args, "reset", 5) == 0) {
+        IcmpSvc_Reset();
+        LOG_Printf("ICMP: stats reset\r\n");
+        return;
+    }
+    if (strncmp(args, "reply", 5) == 0) {
+        const char *p = args + 5;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "on", 2) == 0) {
+            IcmpSvc_SetEnabled(1);
+            LOG_Printf("ICMP: reply ON\r\n");
+        } else if (strncmp(p, "off", 3) == 0) {
+            IcmpSvc_SetEnabled(0);
+            LOG_Printf("ICMP: reply OFF (silent)\r\n");
+        } else {
+            LOG_Printf("Usage: icmp reply <on|off>\r\n");
+        }
+        return;
+    }
+    if (strncmp(args, "limit", 5) == 0) {
+        int pps = atoi(args + 5);
+        if (pps > 0 && pps <= 65535) {
+            IcmpSvc_SetRateLimit((uint16_t)pps);
+            LOG_Printf("ICMP: rate limit=%d pps\r\n", pps);
+        } else {
+            LOG_Printf("Usage: icmp limit <1..65535>\r\n");
+        }
+        return;
+    }
+    LOG_Printf("Usage: icmp <info|reset|reply <on|off>|limit <pps>>\r\n");
+}
+
 static const cmd_entry_t cmd_table[] = {
     {"help",         "Show command help", CMD_TRANSPORT_ALL, cmd_help},
     {"info",         "System info (version/kernel/tasks)", CMD_TRANSPORT_ALL, cmd_info},
@@ -262,6 +322,7 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_uart_start", "UART generator <baud> <text> <ms>", CMD_TRANSPORT_ALL, cmd_sg_uart_start},
     {"tcp",          "TCP console status (port 9000)", CMD_TRANSPORT_ALL, cmd_tcp},
     {"net",          "ETH status / ping <ip>", CMD_TRANSPORT_ALL, cmd_net},
+    {"icmp",         "ICMP service <info|reset|reply on|off|limit pps>", CMD_TRANSPORT_ALL, cmd_icmp},
     {"sg_uart_stop", "Stop UART generator", CMD_TRANSPORT_ALL, cmd_sg_uart_stop},
     {"sg_uart_hex",  "UART hex frame generator", CMD_TRANSPORT_ALL, cmd_sg_uart_hex},
     {"sg_spi_start", "SPI generator <hex> <ms>", CMD_TRANSPORT_ALL, cmd_sg_spi_start},

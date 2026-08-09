@@ -1725,3 +1725,28 @@ auto-stop）全部按设计工作。
 - **验证**：Keil 增量 0 警告；OTA build 241→242 通过；
   `kv scan` 显示 `Soft IIC (PB8/PB9): 0x50 = OK (AT24C02)`；
   `kv set/get` 复位后保持；触摸校准存盘恢复链路确认。
+
+### 12.86 ICMP 应答服务（icmp_svc，build 243）
+- **定位**：板载 ICMP Echo 应答 + 完整可观测性，按服务分层嵌入：
+  - `Application/icmp_svc`：raw ICMP PCB 接管 echo request（type 8），
+    自组 echo reply（type 0，软件校验和），DWT 统计应答耗时（us）；
+    与 eth_app 的 ping 客户端（`net ping`）天然共存（请求由本服务应答，
+    应答仍由 ping 客户端匹配）；
+  - 统计：rx echo / tx reply / drop / other、最近 1s 速率与峰值、
+    min/avg/max 延迟、最近对端与 seq；
+  - 限速（默认 500 pps，超限吞包）与静默模式（`reply off` 吞包不回）；
+  - module.c 注册（优先级 66，EthApp 之后）；统一命令 `icmp
+    <info|reset|reply on|off|limit pps>`（UART/TCP 均可用）；
+    sysmon 新增 ICMP 监控项；CMake/Keil 工程同步加入。
+- **验证（板侧全链路实测）**：Keil 增量 0 警告；OTA build 242→243；
+  `icmp` 显示 reply ON/limit 500；PC ping → rx echo=reply、RTT≈26-83us、
+  last peer=192.168.10.201；`reply off` 后 ping 3 包 → rx+3、reply+0、
+  drop+3（静默生效）；`limit 1` 后连续 2 ping → reply+1、drop+1、
+  peak=2（限速生效）；TCP/UDP（7777 回显、9000 控制台）不受影响。
+- **PC 侧阻塞（环境问题，非固件）**：Windows ping 100% 超时但板侧
+  rx=reply（回包帧经板载抓帧通道逐字节校验：IP/ICMP 校验和、id/seq、
+  源目 MAC 全部正确；同尺寸 60B UDP 回显可正常到达 PC）。防火墙三配置
+  全关、回环 ping 正常、PC→板 ICMP 可达（port unreachable 能到板），
+  唯独入站 ICMP 被丢——判定为第三方 WFP 驱动拦截（本机装有 Steam++
+  WinAccel.sys 与网易 UU uuwfp.sys/uunetfilter.sys，进程以管理员运行，
+  沙箱无法结束）。**待用户退出 Steam++/UU 加速器后复核 PC ping**。

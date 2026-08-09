@@ -15,6 +15,7 @@
 #include "imu_svc.h"
 #include "eth_app.h"
 #include "tcp_svc.h"
+#include "icmp_svc.h"
 #include "cmd_shell.h"
 #include "shell.h"
 #include "kv_store.h"
@@ -39,7 +40,8 @@ static module_desc_t module_table[] = {
     MODULE_INIT("LcdApp",   55,  LcdApp_Init),
     MODULE_INIT("OtaAgent", 60,  OtaAgent_Init),
     MODULE_INIT("EthApp",   65,  EthApp_Init),
-    MODULE_INIT("TcpSvc",   66,  TcpSvc_Init),
+    MODULE_INIT("IcmpSvc",  66,  IcmpSvc_Init),
+    MODULE_INIT("TcpSvc",   67,  TcpSvc_Init),
     MODULE_INIT("SysMon",   70,  SysMon_Init),
     MODULE_INIT("DataAgent",80,  DataAgent_Init),
 };

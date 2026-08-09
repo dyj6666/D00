@@ -121,6 +121,7 @@ if(CMAKE_CROSSCOMPILING)
     Application/buzzer_app.c
     Application/eth_app.c
     Application/tcp_svc.c
+    Application/icmp_svc.c
     BSP/bsp_system.c
     BSP/bsp_uart.c
     BSP/bsp_nvm.c

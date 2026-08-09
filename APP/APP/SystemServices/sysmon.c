@@ -11,6 +11,7 @@
 #include "data_link.h"
 #include "err_mgr.h"
 #include "eth_app.h"
+#include "icmp_svc.h"
 
 #include <string.h>
 
@@ -70,6 +71,23 @@ static void print_eth_stats(void)
     } else {
         LOG_Printf("\r\n");
     }
+}
+
+static void print_icmp_stats(void)
+{
+    const icmp_svc_stat_t *st = IcmpSvc_GetStat();
+    LOG_Printf("=== ICMP ===\r\n");
+    LOG_Printf("  Echo rx/tx/drop: %lu/%lu/%lu  Other rx: %lu\r\n",
+               (unsigned long)st->echo_rx,
+               (unsigned long)st->echo_tx,
+               (unsigned long)st->echo_drop,
+               (unsigned long)st->other_rx);
+    LOG_Printf("  Rate: %lu pps (peak %lu)  RTT: %lu/%lu/%lu us\r\n",
+               (unsigned long)st->rate_pps,
+               (unsigned long)st->peak_pps,
+               (unsigned long)st->min_rtt_us,
+               (unsigned long)st->avg_rtt_us,
+               (unsigned long)st->max_rtt_us);
 }
 
 static void print_crash_info(void)
@@ -195,10 +213,11 @@ static const monitor_item_t monitor_items[] = {
     {"Heap",        print_heap_info},
     {"Watchdog",    print_watchdog_status},
     {"Reset Reason",print_reset_reason},
-    {"Event Bus",   print_event_bus_stats},
-    {"DataLink",    print_data_link_stats},
-    {"ETH",         print_eth_stats},
-    {"Last Crash",  print_crash_info},
+      {"Event Bus",   print_event_bus_stats},
+      {"DataLink",    print_data_link_stats},
+      {"ETH",         print_eth_stats},
+      {"ICMP",        print_icmp_stats},
+      {"Last Crash",  print_crash_info},
     // 示例：未来添加监控变量
     // {"Custom Sensor", print_custom_sensor},
 };
