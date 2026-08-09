@@ -292,7 +292,12 @@ def pick_transport():
         return TcpTransport(host, DEFAULT_TCP_PORT)
     if choice == "3":
         return CanTransport()
-    port = ports[0] if ports else input("COM 口 [COM9]: ").strip() or "COM9"
+    if ports:
+        default = "COM9" if "COM9" in ports else ports[0]
+        hint = "、".join(ports)
+        port = input(f"选择串口 [{default}]（可用: {hint}）: ").strip() or default
+    else:
+        port = input("选择串口 [COM9]: ").strip() or "COM9"
     return UartTransport(port, DEFAULT_UART_BAUD)
 
 
@@ -372,7 +377,11 @@ def main(argv=None):
     try:
         t.open()
     except Exception as e:
-        print(f"[D00Term] 连接失败: {e}")
+        if isinstance(t, UartTransport):
+            avail = "、".join(list_ports()) or "无"
+            print(f"[D00Term] 连接失败: {e}\n         可用串口: {avail}")
+        else:
+            print(f"[D00Term] 连接失败: {e}")
         return 1
 
     try:
