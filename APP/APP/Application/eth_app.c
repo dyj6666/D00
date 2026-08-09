@@ -402,17 +402,17 @@ int EthApp_SetStaticIPPersist(const char *addr_str)
     cfg.ip[3] = ip4_addr4(&ip);
     cfg.mask[0] = 255; cfg.mask[1] = 255; cfg.mask[2] = 255; cfg.mask[3] = 0;
     cfg.gw[0] = cfg.gw[1] = cfg.gw[2] = cfg.gw[3] = 0;
-    int r = NvConfig_Save(&cfg);
+    int r = NetConfig_Save(&cfg);
     LOG_Printf("IP %u.%u.%u.%u %s\r\n",
                (unsigned)cfg.ip[0], (unsigned)cfg.ip[1],
                (unsigned)cfg.ip[2], (unsigned)cfg.ip[3],
-               (r == 0) ? "saved to flash" : "applied, save FAILED");
+               (r == 0) ? "saved to EEPROM" : "applied, save FAILED");
     return 0;
 }
 
 int EthApp_SetStaticIPDefault(void)
 {
-    NvConfig_Clear();
+    NetConfig_Clear();
     return EthApp_SetStaticIP("192.168.1.10");
 }
 
@@ -615,8 +615,8 @@ void EthApp_Init(void)
         LOG_Printf("ETH  : WARN udp echo pcb alloc failed\r\n");
     }
     /* 网络配置持久化：上电应用上次保存的 IP（若有） */
-    NvConfig_Init();
-    if (NvConfig_Load(&s_boot_cfg)) {
+    NetConfig_Init();
+    if (NetConfig_Load(&s_boot_cfg)) {
         tcpip_callback(eth_apply_cfg_cb, &s_boot_cfg);
         LOG_Printf("ETH  : app ready (saved IP %u.%u.%u.%u/24)\r\n",
                    (unsigned)s_boot_cfg.ip[0], (unsigned)s_boot_cfg.ip[1],

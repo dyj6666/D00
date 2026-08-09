@@ -26,7 +26,7 @@
 #include "tcp_svc.h"
 #include "icmp_svc.h"
 #include "cmd_shell.h"
-#include "kv_store.h"
+#include "usr_store.h"
 #include "bsp_eeprom.h"
 #include "bsp_mpu6050.h"
 #include "bsp_i2c.h"
@@ -105,7 +105,7 @@ static void cmd_net(const char *args)
             return;
         }
         if (EthApp_SetStaticIPPersist(ip) == 0) {
-            LOG_Printf("IP set to %s/24 (saved to flash)\r\n", ip);
+            LOG_Printf("IP set to %s/24 (saved to EEPROM)\r\n", ip);
         } else {
             LOG_Printf("Invalid IP: %s\r\n", ip);
         }
@@ -227,7 +227,7 @@ static void cmd_mpu(const char *args);
 static void cmd_ver(const char *args);
 static void cmd_echo(const char *args);
 static void cmd_stream(const char *args);
-static void cmd_kv(const char *args);
+static void cmd_usr(const char *args);
 #if CRASH_INJECT_ENABLE
 static void cmd_crash(const char *args);
 #endif
@@ -334,7 +334,7 @@ static const cmd_entry_t cmd_table[] = {
     {"eb_stress",    "Event bus stress <n> <payload> <mode>", CMD_TRANSPORT_ALL, cmd_eb_stress},
     {"lcd",          "LCD test/info <info|test|clear|bench|dir|bl>", CMD_TRANSPORT_ALL, cmd_lcd},
     {"touch",        "Touch <info|cal|test>", CMD_TRANSPORT_ALL, cmd_touch},
-    {"kv",           "EEPROM KV <scan|list|get|set|reset>", CMD_TRANSPORT_ALL, cmd_kv},
+    {"usr",          "User storage <info|scan|get|set|erase|reset>", CMD_TRANSPORT_ALL, cmd_usr},
     {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
     {"mpu",          "IMU MPU6050 <info|test|cal>", CMD_TRANSPORT_ALL, cmd_mpu},
 #if CRASH_INJECT_ENABLE
@@ -814,7 +814,7 @@ static void cmd_touch(const char *args)
         if (cal.xfac != 0) cal.xc += (int32_t)dx * cal.xfac;
         if (cal.yfac != 0) cal.yc += (int32_t)dy * cal.yfac;
         BSP_Touch_SetCal(&cal);
-        (void)KV_Set(KV_KEY_TOUCH_CAL, &cal, sizeof(cal));
+        (void)UsrStore_Set(USR_KEY_TOUCH_CAL, &cal, sizeof(cal));
         LOG_Printf("TOUCH: nudge (%d,%d) -> xc=%ld yc=%ld\r\n",
                    dx, dy, (long)cal.xc, (long)cal.yc);
         return;
@@ -1030,44 +1030,45 @@ static void cmd_crash(const char *args)
 }
 #endif
 
-/* ================== EEPROM KV（存储自检/调试） ================== */
-static void cmd_kv(const char *args)
+/* ================== 用户存储（EEPROM usr_store 自检/调试） ================== */
+static void cmd_usr(const char *args)
 {
     if (args == NULL || *args == '\0' || strncmp(args, "info", 4) == 0) {
-        LOG_Printf("KV: valid=%d count=%lu eeprom=%s mpu=%s\r\n",
-                   KV_Valid(), (unsigned long)KV_Count(),
-                   BSP_EEPROM_Probe() == 0 ? "OK" : "MISS",
-                   BSP_MPU6050_Check() == 0 ? "OK" : "MISS");
+        uint32_t used = 0, free = 0;
+        UsrStore_Info(&used, &free);
+        LOG_Printf("USR: valid=%d keys=%lu used=%luB free=%luB eeprom=%s\r\n",
+                   UsrStore_Valid(), (unsigned long)UsrStore_Count(),
+                   (unsigned long)used, (unsigned long)free,
+                   BSP_EEPROM_Probe() == 0 ? "OK" : "MISS");
         return;
     }
     if (strncmp(args, "scan", 4) == 0) {
-        LOG_Printf("I2C bus scan (7-bit):\r\n");
-        BSP_I2C1_Init();
-        LOG_Printf("  I2C1 hw (PB6/PB7):");
-        if (BSP_I2C1_Lock(100) == 0) {
-            for (uint8_t a = 0x40; a <= 0x77; a++) {
-                if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1,
-                                          100) == HAL_OK) {
-                    LOG_Printf(" 0x%02X", (unsigned)a);
-                }
+        LOG_Printf("USR log layout (offset|key|len|crc):\r\n");
+        uint16_t off = 0;
+        while (off < 256u) {
+            uint8_t hdr[5];
+            if (BSP_EEPROM_Read(off, hdr, 5) != 0 || hdr[0] != 0xA5u) {
+                break;
             }
-            BSP_I2C1_Unlock();
-        } else {
-            LOG_Printf(" lock-fail");
+            uint16_t dlen = (hdr[2] == 0xFFu) ? 0u : hdr[2];
+            LOG_Printf("  %04X: key=%u len=%u crc=%02X%02X%s\r\n",
+                       (unsigned)off, (unsigned)hdr[1], (unsigned)hdr[2],
+                       (unsigned)hdr[3], (unsigned)hdr[4],
+                       (hdr[2] == 0xFFu) ? " (tomb)" : "");
+            off = (uint16_t)(off + 5u + dlen);
         }
-        LOG_Printf("\r\n");
-        LOG_Printf("  Soft IIC (PB8/PB9): 0x50 = %s\r\n",
-                   BSP_EEPROM_Probe() == 0 ? "OK (AT24C02)" : "MISS");
+        LOG_Printf("  log end @0x%04X, free=%uB\r\n",
+                   (unsigned)off, (unsigned)(256u - off));
         return;
     }
     if (strncmp(args, "get", 3) == 0) {
         int key = atoi(args + 3);
-        uint8_t buf[20];
-        int n = KV_Get((uint8_t)key, buf, sizeof(buf));
+        uint8_t buf[USR_DATA_MAX];
+        int n = UsrStore_Get((uint8_t)key, buf, sizeof(buf));
         if (n < 0) {
-            LOG_Printf("KV: key %d not found\r\n", key);
+            LOG_Printf("USR: key %d not found\r\n", key);
         } else {
-            LOG_Printf("KV: key %d len=%d data=", key, n);
+            LOG_Printf("USR: key %d len=%d data=", key, n);
             for (int i = 0; i < n; i++) {
                 LOG_Printf("%02X", buf[i]);
             }
@@ -1081,7 +1082,7 @@ static void cmd_kv(const char *args)
         while (*p == ' ' || *p == '\t') p++;
         while ((*p >= '0' && *p <= '9') || *p == '-') p++;
         while (*p == ' ' || *p == '\t') p++;
-        uint8_t buf[20];
+        uint8_t buf[USR_DATA_MAX];
         uint16_t n = 0;
         while (isxdigit((unsigned char)p[0]) && isxdigit((unsigned char)p[1])) {
             unsigned int v = 0;
@@ -1091,20 +1092,21 @@ static void cmd_kv(const char *args)
             }
             p += 2;
         }
-        int r = KV_Set((uint8_t)key, buf, n);
-        LOG_Printf("KV: set key %d len=%u -> %d\r\n", key, (unsigned)n, r);
+        int r = UsrStore_Set((uint8_t)key, buf, n);
+        LOG_Printf("USR: set key %d len=%u -> %d\r\n", key, (unsigned)n, r);
         return;
     }
     if (strncmp(args, "erase", 5) == 0) {
         int key = atoi(args + 5);
-        LOG_Printf("KV: erase key %d -> %d\r\n", key, KV_Erase((uint8_t)key));
+        LOG_Printf("USR: erase key %d -> %d\r\n",
+                   key, UsrStore_Erase((uint8_t)key));
         return;
     }
     if (strncmp(args, "reset", 5) == 0) {
-        LOG_Printf("KV: reset -> %d\r\n", KV_Reset());
+        LOG_Printf("USR: reset -> %d\r\n", UsrStore_Reset());
         return;
     }
-    LOG_Printf("Usage: kv <info|scan|get <key>|set <key> <hex>|erase <key>|reset>\r\n");
+    LOG_Printf("Usage: usr <info|scan|get <key>|set <key> <hex>|erase <key>|reset>\r\n");
 }
 
 /* ================== 事件总线极限负载测试 ==================

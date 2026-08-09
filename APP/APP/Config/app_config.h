@@ -25,13 +25,6 @@
 #define OTA_STATE_RECOVERY      0x00000003UL
 #define OTA_STATE_UPGRADE       0x00000004UL
 
-/* 网络配置持久化：PARAM 区（0x080E0000 起，128KB）子区域。
- * BOOT 参数双槽在 0x080E0000 / 0x080E0400（各 32B），日志区自 0x080E1000 起，
- * 32B/槽 × 128 槽（4KB），追加写；满后整扇区维护（保留 BOOT 双槽重写）。 */
-#define NET_CFG_NVM_BASE        0x080E1000UL
-#define NET_CFG_NVM_SIZE        (4 * 1024)
-#define NET_CFG_NVM_MAGIC       0x4E565043UL   /* 'NVPC' */
-
 /* OTA 协议：单包最大数据块 */
 #define OTA_CHUNK_MAX           240
 

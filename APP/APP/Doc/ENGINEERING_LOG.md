@@ -1770,3 +1770,32 @@ auto-stop）全部按设计工作。
   - TCP 控制台（:9000）、UDP 回显（:7777）不受影响；
   - `icmp` 统计：rx echo=reply、RTT 26-70us、限速/静默模式均正常；
   - 复位后 `net ip` 持久化恢复 192.168.10.10 正常。
+
+### 12.88 存储架构整理：用户数据统一 EEPROM，OTA 参数保留 flash（build 248）
+- **架构定界（明确分层）**：
+  - **用户数据 → EEPROM（板载 AT24C02 256B）**：触摸校准、网络配置、
+    以及未来所有需要掉电保持的用户参数，统一经 `usr_store` 存取；
+  - **OTA 参数 → flash 不变**：BOOT 参数双槽（PARAM 0x080E0000）、
+    APP 魔数/版本、DOWNLOAD 会话槽等全部保留原址原语义；
+  - 删除 `bsp_nvm`（PARAM 区 flash 访问抽象不再被用户数据使用），
+    PARAM 区从此只归 OTA/BOOT 所有，互不干扰。
+- **usr_store（日志式 EEPROM 用户存储，替代 kv_store）**：
+  - 布局：256B 顺序日志，记录 = magic(1)+key(1)+len(1)+crc16(2)+data；
+    追加写天然免擦、分散磨损；删除 = 追加 len=0xFF 墓碑；
+    空间不足自动 compact（收集各 key 最新值 → 整片写 0xFF → 重建）；
+  - 读 = 单遍扫描取各 key 最新有效记录，CRC16 全程校验；
+  - 键注册表集中管理（usr_store.h 加一行即登记新用户数据）；
+  - 内部互斥串行化，命令 `kv` 升级为 `usr <info|scan|get|set|erase|reset>`。
+- **net_config 迁移 EEPROM**：`NvConfig_*`（flash 日志）→
+  `NetConfig_*`（usr_store key=NET_CFG），`net ip` 保存/上电恢复/
+  `net ip default` 清除全链路走 EEPROM；日志文案同步改为 EEPROM。
+- **验证（build 248，全链路实测）**：
+  - 首启自动识别旧 KV 格式并重格式化；`[USR] ready (log ...)`；
+  - `net ip 192.168.10.10` → `usr get 2` = C0A80A0AFFFFFF0000000000
+    （ip/mask/gw）；**跨 OTA/复位均自动恢复 192.168.10.10**
+    （修复了旧 flash 方案 OTA 后偶发回退默认 IP 的问题）；
+  - `usr set 9 DEADBEEF` → get 一致 → 复位保持；`usr erase 9` →
+    scan 见 tomb、get 返回 not found；`net ip default` → key2 墓碑、
+    复位回 192.168.1.10；
+  - PC ping 3/3（RTT 1-2ms）不受影响；Keil/GCC 0 警告；
+    OTA build 245→248 连续三次成功（BOOT 参数/会话槽不受影响）。

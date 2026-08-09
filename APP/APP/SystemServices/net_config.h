@@ -1,14 +1,14 @@
+/* ================================================================
+ * 网络配置持久化（EEPROM 用户存储，USR_KEY_NET_CFG）
+ *   - `net ip <a.b.c.d>` 保存到 EEPROM，上电自动应用上次配置；
+ *   - 属用户数据：统一走 usr_store（日志式 EEPROM），
+ *     OTA 参数仍在 flash（PARAM 区），两者互不干扰；
+ *   - 由 EthApp 在启动时 NetConfig_Init + NetConfig_Load。
+ * ================================================================ */
 #ifndef NET_CONFIG_H
 #define NET_CONFIG_H
 
 #include <stdint.h>
-
-/* ================================================================
- * 网络配置持久化（PARAM 区日志式 NVM）
- *   - 每次保存向日志区追加一个 32B 槽位（只写不擦，免整扇区频繁擦除）
- *   - 上电扫描取"最后一个有效条目"= 上次保存的配置
- *   - 日志满（128 次）执行维护：保留 BOOT 参数双槽后整扇区重建
- * ================================================================ */
 
 typedef struct {
     uint8_t ip[4];
@@ -16,16 +16,16 @@ typedef struct {
     uint8_t gw[4];
 } net_cfg_t;
 
-/* 初始化：扫描日志缓存最新有效配置（幂等） */
-void NvConfig_Init(void);
+/* 初始化：从 EEPROM 加载最新配置（幂等，须在 usr_store 之后） */
+void NetConfig_Init(void);
 
 /* 读取保存的配置；返回 1=有且有效（写入 cfg），0=无/已被清除 */
-int  NvConfig_Load(net_cfg_t *cfg);
+int  NetConfig_Load(net_cfg_t *cfg);
 
-/* 追加保存；返回 0=成功，负=失败 */
-int  NvConfig_Save(const net_cfg_t *cfg);
+/* 保存到 EEPROM（日志追加）；返回 0=成功，负=失败 */
+int  NetConfig_Save(const net_cfg_t *cfg);
 
-/* 清除保存配置（写"用默认"标记条目，等价 net ip default） */
-int  NvConfig_Clear(void);
+/* 清除保存配置（写墓碑，等价 net ip default） */
+int  NetConfig_Clear(void);
 
 #endif

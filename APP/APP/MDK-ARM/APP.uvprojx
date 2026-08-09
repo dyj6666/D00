@@ -2008,14 +2008,14 @@
               <FilePath>..\SystemServices\net_config.h</FilePath>
             </File>
             <File>
-              <FileName>kv_store.c</FileName>
+              <FileName>usr_store.c</FileName>
               <FileType>1</FileType>
-              <FilePath>..\SystemServices\kv_store.c</FilePath>
+              <FilePath>..\SystemServices\usr_store.c</FilePath>
             </File>
             <File>
-              <FileName>kv_store.h</FileName>
+              <FileName>usr_store.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\SystemServices\kv_store.h</FilePath>
+              <FilePath>..\SystemServices\usr_store.h</FilePath>
             </File>
             <File>
               <FileName>event_bus.c</FileName>
@@ -2176,16 +2176,6 @@
               <FileName>bsp_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\bsp_uart.c</FilePath>
-            </File>
-            <File>
-              <FileName>bsp_nvm.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\BSP\bsp_nvm.c</FilePath>
-            </File>
-            <File>
-              <FileName>bsp_nvm.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\BSP\bsp_nvm.h</FilePath>
             </File>
             <File>
               <FileName>bsp_i2c.c</FileName>
