@@ -1743,10 +1743,30 @@ auto-stop）全部按设计工作。
   last peer=192.168.10.201；`reply off` 后 ping 3 包 → rx+3、reply+0、
   drop+3（静默生效）；`limit 1` 后连续 2 ping → reply+1、drop+1、
   peak=2（限速生效）；TCP/UDP（7777 回显、9000 控制台）不受影响。
-- **PC 侧阻塞（环境问题，非固件）**：Windows ping 100% 超时但板侧
-  rx=reply（回包帧经板载抓帧通道逐字节校验：IP/ICMP 校验和、id/seq、
-  源目 MAC 全部正确；同尺寸 60B UDP 回显可正常到达 PC）。防火墙三配置
-  全关、回环 ping 正常、PC→板 ICMP 可达（port unreachable 能到板），
-  唯独入站 ICMP 被丢——判定为第三方 WFP 驱动拦截（本机装有 Steam++
-  WinAccel.sys 与网易 UU uuwfp.sys/uunetfilter.sys，进程以管理员运行，
-  沙箱无法结束）。**待用户退出 Steam++/UU 加速器后复核 PC ping**。
+- **PC 侧表象（曾被误判为环境问题，根因见 12.87）**：Windows ping 100%
+  超时但板侧 rx=reply（回包帧逐字节校验正确：IP/ICMP 校验和、id/seq、
+  源目 MAC 全对；同尺寸 UDP 回显正常到达 PC）。`netstat -s -p icmp`
+  显示 PC 的 ICMP **Errors 随每个回包 +1**——即 Windows 收到但判为
+  校验和错误后丢弃，与防火墙/WFP 驱动无关（12.87 定位为 F4 MAC 硬件
+  校验和插入损坏 ICMP 校验和）。
+
+### 12.87 根因与修复：F4 MAC TX 校验和插入损坏 ICMP（build 245）
+- **根因（STM32F4 已知硅问题）**：`ethernetif.c` 的
+  `TxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC`，
+  且 HAL 初始化 TX 描述符时 `SET_BIT(DESC0, ETH_DMATXDESC_CHECKSUMTCPUDPICMPFULL)`
+  ——MAC 在发送时对 IP/TCP/UDP/**ICMP** 帧做硬件校验和插入，把软件
+  已写好的 ICMP 校验和字段重写为错误值（F4 的 ICMP 校验和插入不可靠），
+  于是 PC 侧 `netstat` ICMP Errors 递增、ping 全丢；而 IP/TCP/UDP 由
+  MAC 重算后恰好正确，故 TCP/UDP 一切正常，极具迷惑性。
+- **修复**：lwipopts.h 已全部开启软件校验和（CHECKSUM_GEN_IP/TCP/UDP/
+  ICMP=1），只需在 `ethernetif.c` 把 `ChecksumCtrl = ETH_CHECKSUM_DISABLE`
+  **并保留 CSUM attribute**（否则 HAL 每帧不写 CIC 位，残留
+  CHECKSUMTCPUDPICMPFULL 仍生效）。此后所有校验和由软件计算，帧内容
+  原样上线。
+- **验证（build 245，双向全通）**：
+  - PC `ping -n 5 192.168.10.10` → **5/5 成功，RTT 1-2ms**，ICMP Errors
+    归零（回包全部计入 Echo Replies）；
+  - 板 `net ping 192.168.10.201` → `Reply ... time=2ms`（PC 正常回包）；
+  - TCP 控制台（:9000）、UDP 回显（:7777）不受影响；
+  - `icmp` 统计：rx echo=reply、RTT 26-70us、限速/静默模式均正常；
+  - 复位后 `net ip` 持久化恢复 192.168.10.10 正常。

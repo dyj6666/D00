@@ -220,8 +220,13 @@ static void low_level_init(struct netif *netif)
   hal_eth_init_status = HAL_ETH_Init(&heth);
 
   memset(&TxConfig, 0 , sizeof(ETH_TxPacketConfig));
+  /* 校验和全部软件计算（lwipopts.h CHECKSUM_GEN_*=1）：
+   * F4 MAC 的 TX 校验和插入（描述符 CIC=TCP/UDP/ICMP FULL）会把 ICMP
+   * 校验和字段重写为错误值，导致 PC 侧 ICMP Errors 递增、ping 全丢。
+   * 保留 CSUM attribute 使 HAL 每帧用 ChecksumCtrl=DISABLE 清 CIC 位，
+   * 彻底禁用硬件插入，保证 IP/TCP/UDP/ICMP 校验和一致有效。 */
   TxConfig.Attributes = ETH_TX_PACKETS_FEATURES_CSUM | ETH_TX_PACKETS_FEATURES_CRCPAD;
-  TxConfig.ChecksumCtrl = ETH_CHECKSUM_IPHDR_PAYLOAD_INSERT_PHDR_CALC;
+  TxConfig.ChecksumCtrl = ETH_CHECKSUM_DISABLE;
   TxConfig.CRCPadCtrl = ETH_CRC_PAD_INSERT;
 
   /* End ETH HAL Init */
