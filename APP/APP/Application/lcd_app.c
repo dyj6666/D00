@@ -5,6 +5,12 @@
 #include "bsp_touch.h"
 #include "imu_svc.h"
 #include "eth_app.h"
+#include "icmp_svc.h"
+#include "tcp_svc.h"
+#include "mqtt_svc.h"
+#include "http_svc.h"
+#include "dns_svc.h"
+#include "sntp_svc.h"
 #include "event_bus.h"
 #include "app_config.h"
 #include "data_link.h"
@@ -305,53 +311,153 @@ static void lcd_bus_draw(void)
     lcd_page_footer("KEY: NEXT PAGE");
 }
 
-/* ================= NET 页（以太网链路/IP/流量） ================= */
-static void lcd_net_val(uint16_t y, const char *s, uint16_t color)
-{
-    /* 数值统一右对齐到右边缘（240px 屏 → x=236；MAC 17 字符 ×8px=136px
-     * 起点 100，永不压到左侧标签），各行右缘整齐。 */
-    lcd_val_at((uint16_t)(BSP_LCD_GetWidth() - 4u), y, s, color);
-}
+  /* ================= NET 页（ETH 全套状态：LINK/TRAFFIC/ICMP/SERVICES） =================
+   * 布局规范：FONT12（7px/字符），标签左列 x=8，数值右对齐 x=234，行距 13px；
+   * 分组标题黄色 + 分隔线；状态类数值按语义着色；刷新先清值区后画，杜绝残影。 */
+  #define NET_RIGHT   234u   /* 数值右对齐边线（240-6） */
+  #define NET_LABEL_W 56u    /* 值区起点（最宽标签 Uptime 6 字符×7=42 + 边距） */
+  #define NET_PITCH   13u
+  #define NET_Y0      25u
 
-static void lcd_net_refresh(void)
-{
-    char buf[24];
-    EthApp_RefreshStatus();
-    const eth_status_t *st = EthApp_GetStatus();
-    BSP_LCD_ShowString(8, 34, "Link", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    lcd_net_val(36, st->link_up ? "UP" : "DOWN",
-                st->link_up ? BSP_LCD_COLOR_GREEN : BSP_LCD_COLOR_RED);
-    if (st->link_up) {
-        snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
-                 st->ip[0], st->ip[1], st->ip[2], st->ip[3]);
-    } else {
-        snprintf(buf, sizeof(buf), "-.-.-.-");
-    }
-    lcd_net_val(92, buf, BSP_LCD_COLOR_CYAN);
-    snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
-             st->mac[0], st->mac[1], st->mac[2],
-             st->mac[3], st->mac[4], st->mac[5]);
-    lcd_net_val(118, buf, BSP_LCD_COLOR_YELLOW);
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)st->rx_packets);
-    lcd_net_val(144, buf, BSP_LCD_COLOR_WHITE);
-    snprintf(buf, sizeof(buf), "%lu", (unsigned long)st->tx_packets);
-    lcd_net_val(170, buf, BSP_LCD_COLOR_WHITE);
-    snprintf(buf, sizeof(buf), "%lus", (unsigned long)st->link_uptime_s);
-    lcd_net_val(196, buf, BSP_LCD_COLOR_GREEN);
-}
+  static void lcd_net_header(const char *s, uint16_t y)
+  {
+      BSP_LCD_ShowString(8, y, s, BSP_LCD_COLOR_YELLOW, BSP_LCD_FONT_12);
+      BSP_LCD_Fill(8, (uint16_t)(y + 6u), (uint16_t)(BSP_LCD_GetWidth() - 9u),
+                   (uint16_t)(y + 6u), BSP_LCD_COLOR_GRAY);
+  }
 
-static void lcd_net_draw(void)
-{
-    lcd_page_clear_content();
-    lcd_page_header("NET");
-    BSP_LCD_ShowString(8, 90, "IP", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    BSP_LCD_ShowString(8, 116, "MAC", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    BSP_LCD_ShowString(8, 142, "RX", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    BSP_LCD_ShowString(8, 168, "TX", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    BSP_LCD_ShowString(8, 194, "Uptime", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    lcd_net_refresh();
-    lcd_page_footer("SWIPE: NEXT PAGE");
-}
+  static void lcd_net_label(const char *s, uint16_t y)
+  {
+      BSP_LCD_ShowString(8, y, s, BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+  }
+
+  static void lcd_net_val(uint16_t y, const char *s, uint16_t color)
+  {
+      uint16_t n = (uint16_t)strlen(s);
+      /* 先清值区（防数值变短残留）再右对齐绘制（FONT12 步进 7px/字符） */
+      BSP_LCD_Fill(NET_LABEL_W, y, (uint16_t)(BSP_LCD_GetWidth() - 1u),
+                   (uint16_t)(y + 11u), BSP_LCD_COLOR_BLACK);
+      BSP_LCD_ShowString((uint16_t)(NET_RIGHT - n * 7u), y, s, color,
+                         BSP_LCD_FONT_12);
+  }
+
+  static void lcd_net_refresh(void)
+  {
+      char buf[32];
+      EthApp_RefreshStatus();
+      const eth_status_t *st = EthApp_GetStatus();
+
+      /* LINK */
+      lcd_net_val(NET_Y0 + 13u, st->link_up ? "UP" : "DOWN",
+                  st->link_up ? BSP_LCD_COLOR_GREEN : BSP_LCD_COLOR_RED);
+      if (st->link_up) {
+          snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+                   st->ip[0], st->ip[1], st->ip[2], st->ip[3]);
+          lcd_net_val(NET_Y0 + 26u, buf, BSP_LCD_COLOR_CYAN);
+          snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+                   st->mac[0], st->mac[1], st->mac[2],
+                   st->mac[3], st->mac[4], st->mac[5]);
+          lcd_net_val(NET_Y0 + 39u, buf, BSP_LCD_COLOR_YELLOW);
+          snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+                   st->gw[0], st->gw[1], st->gw[2], st->gw[3]);
+          lcd_net_val(NET_Y0 + 52u, buf, BSP_LCD_COLOR_WHITE);
+      } else {
+          lcd_net_val(NET_Y0 + 26u, "-.-.-.-", BSP_LCD_COLOR_CYAN);
+          lcd_net_val(NET_Y0 + 39u, "--:--:--:--:--:--",
+                      BSP_LCD_COLOR_YELLOW);
+          lcd_net_val(NET_Y0 + 52u, "-.-.-.-", BSP_LCD_COLOR_WHITE);
+      }
+      const char *dh = EthApp_DhcpState();
+      lcd_net_val(NET_Y0 + 65u, dh,
+                  strcmp(dh, "bound") == 0 ? BSP_LCD_COLOR_GREEN :
+                  strcmp(dh, "off") == 0 ? BSP_LCD_COLOR_GRAY :
+                  BSP_LCD_COLOR_YELLOW);
+
+      /* TRAFFIC */
+      snprintf(buf, sizeof(buf), "%lu", (unsigned long)st->rx_packets);
+      lcd_net_val(NET_Y0 + 91u, buf, BSP_LCD_COLOR_WHITE);
+      snprintf(buf, sizeof(buf), "%lu", (unsigned long)st->tx_packets);
+      lcd_net_val(NET_Y0 + 104u, buf, BSP_LCD_COLOR_WHITE);
+      snprintf(buf, sizeof(buf), "%lus", (unsigned long)st->link_uptime_s);
+      lcd_net_val(NET_Y0 + 117u, buf, BSP_LCD_COLOR_GREEN);
+
+      /* ICMP */
+      const icmp_svc_stat_t *is = IcmpSvc_GetStat();
+      snprintf(buf, sizeof(buf), "%lu/%lu/%lu",
+               (unsigned long)is->echo_rx, (unsigned long)is->echo_tx,
+               (unsigned long)is->echo_drop);
+      lcd_net_val(NET_Y0 + 143u, buf, BSP_LCD_COLOR_WHITE);
+      snprintf(buf, sizeof(buf), "%lu/%lu pps",
+               (unsigned long)is->rate_pps, (unsigned long)is->peak_pps);
+      lcd_net_val(NET_Y0 + 156u, buf, BSP_LCD_COLOR_CYAN);
+      snprintf(buf, sizeof(buf), "%lu/%lu/%luus",
+               (unsigned long)is->min_rtt_us, (unsigned long)is->avg_rtt_us,
+               (unsigned long)is->max_rtt_us);
+      lcd_net_val(NET_Y0 + 169u, buf, BSP_LCD_COLOR_GREEN);
+      snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+               is->last_peer[0], is->last_peer[1],
+               is->last_peer[2], is->last_peer[3]);
+      lcd_net_val(NET_Y0 + 182u, buf, BSP_LCD_COLOR_LGRAY);
+
+      /* SERVICES */
+      const tcp_svc_stat_t *ts = TcpSvc_GetStat();
+      snprintf(buf, sizeof(buf), "%lu/%lu",
+               (unsigned long)ts->clients, (unsigned long)ts->accepted);
+      lcd_net_val(NET_Y0 + 208u, buf, BSP_LCD_COLOR_WHITE);
+      const mqtt_svc_stat_t *ms = MqttSvc_GetStat();
+      static const char *mqtt_st[] = {"IDLE", "CONN", "ONLINE", "ERR"};
+      const char *ms_s = (ms->state < 4u) ? mqtt_st[ms->state] : "?";
+      lcd_net_val(NET_Y0 + 221u, ms_s,
+                  ms->state == 2u ? BSP_LCD_COLOR_GREEN :
+                  ms->state == 3u ? BSP_LCD_COLOR_RED :
+                  BSP_LCD_COLOR_LGRAY);
+      snprintf(buf, sizeof(buf), "%lu", (unsigned long)HttpSvc_GetRequests());
+      lcd_net_val(NET_Y0 + 234u, buf, BSP_LCD_COLOR_WHITE);
+      const uint8_t *dn = DnsSvc_GetServer();
+      if (dn != NULL) {
+          snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+                   dn[0], dn[1], dn[2], dn[3]);
+      } else {
+          snprintf(buf, sizeof(buf), "unset");
+      }
+      lcd_net_val(NET_Y0 + 247u, buf, BSP_LCD_COLOR_CYAN);
+      SntpSvc_GetTimeStr(buf, sizeof(buf));
+      lcd_net_val(NET_Y0 + 260u, buf, BSP_LCD_COLOR_GREEN);
+  }
+
+  static void lcd_net_draw(void)
+  {
+      lcd_page_clear_content();
+      lcd_page_header("NET");
+
+      lcd_net_header("LINK", NET_Y0);
+      lcd_net_label("Link", NET_Y0 + 13u);
+      lcd_net_label("IP", NET_Y0 + 26u);
+      lcd_net_label("MAC", NET_Y0 + 39u);
+      lcd_net_label("GW", NET_Y0 + 52u);
+      lcd_net_label("DHCP", NET_Y0 + 65u);
+
+      lcd_net_header("TRAFFIC", NET_Y0 + 78u);
+      lcd_net_label("RX", NET_Y0 + 91u);
+      lcd_net_label("TX", NET_Y0 + 104u);
+      lcd_net_label("Uptime", NET_Y0 + 117u);
+
+      lcd_net_header("ICMP", NET_Y0 + 130u);
+      lcd_net_label("Echo", NET_Y0 + 143u);
+      lcd_net_label("Rate", NET_Y0 + 156u);
+      lcd_net_label("RTT", NET_Y0 + 169u);
+      lcd_net_label("Peer", NET_Y0 + 182u);
+
+      lcd_net_header("SERVICES", NET_Y0 + 195u);
+      lcd_net_label("TCP", NET_Y0 + 208u);
+      lcd_net_label("MQTT", NET_Y0 + 221u);
+      lcd_net_label("HTTP", NET_Y0 + 234u);
+      lcd_net_label("DNS", NET_Y0 + 247u);
+      lcd_net_label("SNTP", NET_Y0 + 260u);
+
+      lcd_net_refresh();
+      lcd_page_footer("SWIPE: NEXT PAGE");
+  }
 
 /* ================= TOUCH 页（触摸测试/调校观察） ================= */
 static const char *lcd_touch_state_name(uint8_t st)

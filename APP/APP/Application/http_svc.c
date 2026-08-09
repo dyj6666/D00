@@ -99,11 +99,11 @@ static void http_build_body(char *buf, uint32_t len, int json)
 
 static void http_handle(struct netconn *conn)
 {
-    char buf[HTTP_BUF];
+    /* 静态缓冲：单连接串行处理，避免大局部数组压爆服务任务栈 */
+    static char buf[HTTP_BUF];
+    static char body[HTTP_BUF];
     int n = 0;
-    err_t e = netconn_recv_tcp_pbuf(conn, NULL);   /* 仅触发（小请求） */
-    (void)e;
-    /* 简化：读一行请求（GET /path HTTP/1.x） */
+    /* 读请求行（GET /path HTTP/1.x）；单连接串行处理 */
     struct netbuf *nb = NULL;
     if (netconn_recv(conn, &nb) == ERR_OK && nb != NULL) {
         void *d = NULL;
@@ -113,16 +113,20 @@ static void http_handle(struct netconn *conn)
             int cl = (l < (u16_t)(HTTP_BUF - 1)) ? l : (HTTP_BUF - 1);
             memcpy(buf, d, cl);
             buf[cl] = '\0';
-            if (strncmp(buf, "GET /api/status", 15) == 0) {
+            if (cl >= 15 && strncmp(buf, "GET /api/status", 15) == 0) {
                 n = 1;
-            } else if (strncmp(buf, "GET /", 5) == 0) {
+            } else if (cl >= 5 && strncmp(buf, "GET /", 5) == 0) {
                 n = 2;
             }
         }
         netbuf_delete(nb);
+    } else {
+        /* 连接无数据/超时：仍回 400 并关闭，避免客户端悬挂 */
+        const char *bad = "HTTP/1.0 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        netconn_write(conn, bad, (u16_t)strlen(bad), NETCONN_COPY);
+        return;
     }
 
-    char body[HTTP_BUF];
     const char *mime = "text/html";
     if (n == 1) {
         http_build_body(body, sizeof(body), 1);
@@ -157,12 +161,13 @@ static void http_task(void *arg)
         return;
     }
     netconn_bind(srv, IP_ADDR_ANY, HTTP_PORT);
+    netconn_set_recvtimeout(srv, 500);   /* accept 不无限阻塞，单请求不拖垮服务 */
     netconn_listen(srv);
     LOG_Printf("[HTTP] status server listening :%u\r\n", (unsigned)HTTP_PORT);
     for (;;) {
         struct netconn *cli = NULL;
         if (s_enabled && netconn_accept(srv, &cli) == ERR_OK && cli != NULL) {
-            netconn_set_recvtimeout(cli, 3000);
+            netconn_set_recvtimeout(cli, 1500);
             http_handle(cli);
             netconn_close(cli);
             netconn_delete(cli);

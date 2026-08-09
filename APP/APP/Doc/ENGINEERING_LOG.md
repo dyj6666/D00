@@ -1834,3 +1834,27 @@ auto-stop）全部按设计工作。
   - `mqtt connect` 无 broker → 状态机 CONNECTING→DISCONNECTED→IDLE（计数正确），
     待真实 broker 复测 pub/sub/遥测；
   - ICMP ping 3/3（1-2ms）、TCP 控制台、UDP 回显均正常；Keil/GCC 0 警告。
+
+### 12.90 LCD 全套 ETH 状态页 + ETH 全套压力性能测试（build 278）
+- **LCD NET 页升级（优雅美观）**：
+  - 四分组布局：LINK（Link/IP/MAC/GW/DHCP）、TRAFFIC（RX/TX/Uptime）、
+    ICMP（Echo rx/tx/drop、Rate、RTT min/avg/max、Peer）、
+    SERVICES（TCP cli/acc、MQTT 状态、HTTP 请求数、DNS 服务器、SNTP 时间）；
+  - 排版规范：FONT12 右对齐（7px/字符）、标签左列 x=8、值右缘 x=234，
+    分组标题黄色 + 分隔线，状态值语义着色（UP/bound/ONLINE=绿，
+    DOWN/ERR=红），刷新先清值区后画杜绝残影；`lcd page <0-5>` 直达各页。
+- **压力性能测试（build 278 实机）**：
+  - ICMP：常规 50×32B 与 20×1400B 全通（RTT 1-2ms）；并发 100 全收全回
+    （peak 4pps，板侧 RTT 26-232us）；限速 limit=5 下 250 洪峰 → 回 132/丢 118
+    （限速精确生效，系统稳定）；
+  - UDP 回显：持续 181 pkt/s 零丢失（500/500，avg 5.5ms）；突发 8 连发
+    14.8% 丢失（RX 零拷贝池深 8 的设计边界，已记录）；
+  - TCP 控制台：670 cmd/s（avg 1.5ms，100/100）；并发 2 客户端成功；
+  - HTTP /api/status：200/200 全通，avg 65ms / max 84ms / 15.3 req/s；
+  - DNS resolve：30/30 稳定；
+  - 稳定性：历经全部压力后堆 15216→15128B（无泄漏），全部任务栈水位健康
+    （HttpSvc 265、tcpip 366、EthIf 443、LcdUI 542 / 各自限额）；
+- **压测暴露并修复的 bug（http_svc）**：
+  - `netconn_recv_tcp_pbuf(conn, NULL)` 吞掉请求导致后续 recv 阻塞；
+  - `http_handle` 的 2×1024B 局部缓冲压爆 2048B 服务任务栈（HTTP 间歇
+    卡死根因）→ 改静态缓冲；修复后 200/200 全通。

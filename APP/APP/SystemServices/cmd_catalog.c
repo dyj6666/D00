@@ -570,7 +570,7 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_i2c_complex","I2C complex frame demo", CMD_TRANSPORT_ALL, cmd_sg_i2c_complex},
     {"ota_rbtest",   "OTA rollback self-test (danger)", CMD_TRANSPORT_UART, cmd_ota_rbtest},
     {"eb_stress",    "Event bus stress <n> <payload> <mode>", CMD_TRANSPORT_ALL, cmd_eb_stress},
-    {"lcd",          "LCD test/info <info|test|clear|bench|dir|bl>", CMD_TRANSPORT_ALL, cmd_lcd},
+    {"lcd",          "LCD <info|page <0-5>|test|clear|bench|dir|bl>", CMD_TRANSPORT_ALL, cmd_lcd},
     {"touch",        "Touch <info|cal|test>", CMD_TRANSPORT_ALL, cmd_touch},
     {"usr",          "User storage <info|scan|get|set|erase|reset>", CMD_TRANSPORT_ALL, cmd_usr},
     {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
@@ -1145,6 +1145,16 @@ static void cmd_lcd(const char *args)
     if (args == NULL || strcmp(args, "info") == 0) {
         LOG_Printf("LCD: id=0x%04X, %ux%u\r\n",
                    BSP_LCD_GetId(), BSP_LCD_GetWidth(), BSP_LCD_GetHeight());
+        return;
+    }
+    if (strncmp(args, "page", 4) == 0) {
+        int pg = atoi(args + 4);
+        if (pg >= 0 && pg <= 5) {
+            LcdUI_ShowPage((uint8_t)pg);
+            LOG_Printf("LCD: page %d\r\n", pg);
+        } else {
+            LOG_Printf("Usage: lcd page <0-5> (HOME/SYSTEM/BUS/NET/TOUCH/IMU)\r\n");
+        }
         return;
     }
     if (strcmp(args, "clear") == 0) {
