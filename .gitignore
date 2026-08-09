@@ -64,3 +64,18 @@ temp_secure.bin
 # ---------- 日志与临时 ----------
 *.log
 *.tmp
+
+# Codex embedded workflow artifacts
+workflow/logs/
+workflow/last_report.json
+**/_auto_boot.txt
+**/_auto_ota.txt
+**/_auto_ota_debug.txt
+
+# 本地调试日志（不入库）
+**/_com9_*.txt
+**/_shell_*.txt
+
+# OTA_Tool 本地状态（含设备 UID/本地路径，不入库）
+HOST/OTA_Tool/config.json
+HOST/OTA_Tool/version_lib.json

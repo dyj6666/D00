@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  boot-firmware-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: carlosperate/arm-none-eabi-gcc-action@v1
+      - name: Configure
+        run: cmake -S BOOT/BOOT -B build-boot-fw -G Ninja -DCMAKE_TOOLCHAIN_FILE=BOOT/BOOT/cmake/toolchain-stm32f4.cmake
+      - name: Build
+        run: cmake --build build-boot-fw
+      - name: Check artifact
+        run: test -s build-boot-fw/BOOT.bin && echo "BOOT.bin OK"
+
+  boot-host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S BOOT/BOOT -B build-boot-host -G Ninja
+      - name: Build
+        run: cmake --build build-boot-host
+      - name: Run tests
+        run: ctest --test-dir build-boot-host --output-on-failure
+
+  app-firmware-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: carlosperate/arm-none-eabi-gcc-action@v1
+      - name: Configure
+        run: cmake -S APP/APP -B build-app-fw -G Ninja -DCMAKE_TOOLCHAIN_FILE=APP/APP/cmake/arm-none-eabi-toolchain.cmake
+      - name: Build
+        run: cmake --build build-app-fw
+      - name: Check artifact
+        run: test -s build-app-fw/APP.bin && echo "APP.bin OK"
+      - name: 检查发布固件无崩溃注入后门
+        run: '! grep -a -q "Crash injection" build-app-fw/APP.bin && echo "no crash backdoor OK"'
+
+  app-host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S APP/APP -B build-app-host -G Ninja
+      - name: Build
+        run: cmake --build build-app-host
+      - name: Run tests
+        run: ctest --test-dir build-app-host --output-on-failure
+
+  host-python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install numpy pyserial
+      - name: VLink protocol tests
+        run: python HOST/VLink_Debugger/tests/test_protocol.py
+      - name: LogicAnalyzer decoder tests
+        run: python HOST/LogicAnalyzer/tests/test_decoders.py
+      - name: EthLab smoke tests
+        run: python HOST/EthLab/tests/smoke_test.py
+
+  workflow-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 工作流已版本化
+        run: |
+          git ls-files | grep -q '^workflow/' || exit 1
+          git ls-files | grep -q '^AGENTS.md$' || exit 1
+          git ls-files | grep -q '^config/version.json$' || exit 1
+          git ls-files | grep -q '^\.github/workflows/ci\.yml$' || exit 1
+      - name: 关键文件编码为 UTF-8
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          bad = []
+          for p in [Path('AGENTS.md'), Path('workflow/WORKFLOW.md'),
+                    Path('APP/APP/SystemServices/err_mgr.c'),
+                    Path('APP/APP/SystemServices/shell.c'),
+                    Path('APP/APP/Config/pinout.h')]:
+              try:
+                  p.read_text('utf-8')
+              except UnicodeDecodeError:
+                  bad.append(str(p))
+          if bad:
+              raise SystemExit(f'non-UTF8: {bad}')
+          print('encoding OK')
+          PY

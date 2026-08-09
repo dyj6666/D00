@@ -57,7 +57,9 @@
 
 ### 2.4 新增 shell 命令
 
-在 `shell.c` 添加 `cmd_xxx` 函数 + 命令表一行即可。
+在 `SystemServices/cmd_shell.c` 的命令注册表添加一行（`Cmd_Register`），
+并声明允许的传输掩码（`CMD_TRANSPORT_UART/TCP/...`）。命令实现与具体
+物理传输（串口 / TCP / 未来 CAN）解耦：`LOG_Printf` 输出自动路由到当前终端。
 
 ## 3. 移植指南
 
@@ -88,18 +90,22 @@ UV4 -r -b MDK-ARM/APP.uvprojx -j0 -o build.log
 ### GCC（交叉编译验证路径）
 
 ```
-cmake -S . -B build-fw -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-stm32f4.cmake
+cmake -S . -B build-fw -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-toolchain.cmake
 cmake --build build-fw
-# 产物：build-fw/firmware.elf、build-fw/APP.bin
+# 产物：build-fw/APP.elf、build-fw/APP.bin
 ```
 
-### 主机单元测试（纯逻辑层）
+### 主机单元测试（纯逻辑层，无需交叉工具链）
 
 ```
-cmake -S . -B build
+cmake -S . -B build -G Ninja
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+`CMakeLists.txt` 由 `Script/gen_cmake.py` 从 Keil 工程生成：
+交叉编译（带 toolchain file）时构建固件，纯主机构建时自动进入 `host_tests` 分支
+（协议 / CRC / 变量分片）。
 
 ### 语法冒烟（无 Keil 环境时）
 

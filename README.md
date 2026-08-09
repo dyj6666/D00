@@ -1,6 +1,7 @@
 # D00 — STM32F407 综合开发平台
 
 单仓库三子工程，覆盖**引导（BOOT）/ 应用（APP）/ 上位机（HOST）**全链路。
+配套 **AI 工作流**（`workflow/` + `AGENTS.md`）：改代码 → 构建 → 烧录 → 日志验证 → OTA 冒烟 → 单测 → 提交 全自动闭环。
 
 ## 仓库结构
 
@@ -9,6 +10,12 @@ D00/
 ├── APP/     应用固件工程（FreeRTOS + HOSTLINK 协议 + 逻辑分析仪）
 ├── BOOT/    安全 OTA 引导工程（AES/ECC/SHA256 验签 + YMODEM 传输）
 ├── HOST/    上位机（VLink_Debugger 调试器 + OTA_Tool 升级工具 + LogicAnalyzer 逻辑分析仪）
+├── workflow/ Codex AI 工作流（自检/构建/烧录/验证/OTA/单测/报告）
+├── config/   机器可读配置（版本号单一事实源 version.json）
+├── .github/  云端 CI（BOOT+APP GCC 构建、ctest、HOST 测试）
+├── .githooks/ git hooks（pre-commit 编码/卫生检查）
+├── AGENTS.md Codex 行为准则（最高执行约定）
+├── install.ps1 一键启用 git hooks
 ├── .gitignore   统一忽略规则（Keil/GCC/Python 产物）
 └── LICENSE
 ```
@@ -30,10 +37,10 @@ UV4 -r -b APP/APP/MDK-ARM/APP.uvprojx -j0
 
 # GCC 交叉编译（验证路径）
 cmake -S APP/APP -B APP/APP/build-fw -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=APP/APP/cmake/toolchain-stm32f4.cmake
+  -DCMAKE_TOOLCHAIN_FILE=APP/APP/cmake/arm-none-eabi-toolchain.cmake
 cmake --build APP/APP/build-fw
 
-# 主机单元测试（协议层）
+# 主机单元测试（协议层；无需交叉工具链）
 cmake -S APP/APP -B APP/APP/build && cmake --build APP/APP/build
 ctest --test-dir APP/APP/build
 ```
@@ -75,7 +82,7 @@ python tests/test_decoders.py    # 解码器单元测试
 ## 三工程联动契约
 
 ```
-BOOT(0x08000000, 64KB) ──跳转──▶ APP(0x08010000, 256KB) ──HOSTLINK(921600)──▶ HOST
+BOOT(0x08000000, 64KB) ──跳转──▶ APP(0x08010000, 320KB) ──HOSTLINK(921600)──▶ HOST
         │                        │
         └──OTA 升级：APP 写 RTC_BKP_DR1=0x5A5A → 复位 → BOOT 进升级模式
             → YMODEM 收包 → 验签解密 → 写 APP 区 → 写魔数/版本 → 复位跳转
@@ -85,11 +92,23 @@ BOOT(0x08000000, 64KB) ──跳转──▶ APP(0x08010000, 256KB) ──HOSTLI
 
 | 约定 | 值 |
 | --- | --- |
-| APP 有效性魔数 | `0x4F54412E` @ `0x0804FFF8` |
-| APP 版本号 | @ `0x0804FFFC` |
+| APP 有效性魔数 | `0x4F54412E` @ `0x0805FFF8` |
+| APP 版本号 | @ `0x0805FFFC` |
 | 升级请求标志 | `RTC_BKP_DR1 == 0x5A5A` |
 | OTA 包头魔数 | `0x4F5441FE` |
 | 跳转目标 | `0x08010000` |
+
+> 分区/魔数/版本地址的唯一权威来源：`BOOT/BOOT/Config/boot_config.h` 与
+> `APP/APP/Config/app_config.h`（另见 `BOOT/BOOT/Other/flash分区` 与 `APP/APP/Doc/OTA_ARCHITECTURE.md`）。
+
+## AI 工作流
+
+- 行为准则：[`AGENTS.md`](AGENTS.md)（Codex 最高执行约定）；
+- 一键环境准备：`powershell -ExecutionPolicy Bypass -File install.ps1`（启用 pre-commit hooks）；
+- 总流水线：`workflow\auto_pipeline.ps1 -Mode full -IncludeOta`，产出 `workflow\last_report.json`；
+- 版本/构建号单一事实源：`config/version.json`（`workflow\common.ps1` 自动读取）；
+- 云端 CI：`.github\workflows\ci.yml`（无硬件回归：BOOT+APP GCC 构建、ctest、HOST 测试、崩溃后门扫描）；
+- 详细说明见 [`workflow/WORKFLOW.md`](workflow/WORKFLOW.md)。
 
 ## 文档索引
 
@@ -101,10 +120,12 @@ BOOT(0x08000000, 64KB) ──跳转──▶ APP(0x08010000, 256KB) ──HOSTLI
 | HOST 说明 | `HOST/VLink_Debugger/README.md` | 结构、运行、测试 |
 | HOST 升级工具 | `HOST/OTA_Tool/` | BOOT 安全 OTA 打包与发送（UID 派生密钥 + ECC 签名） |
 | HOST 逻辑分析仪 | `HOST/LogicAnalyzer/README.md` | 8 通道采集/波形/UART·I2C·SPI 解码 |
+| AI 工作流 | `workflow/WORKFLOW.md` | 流水线模式、脚本参数、验证规则 |
 
 ## 协作约定
 
 - **分层**：业务/服务/BSP/配置严格分层，服务层不直接碰 HAL；
 - **构建产物**：一律不进 git（统一 `.gitignore`）；
-- **编码**：UTF-8、4 空格缩进、Allman 括号；
+- **编码**：UTF-8、4 空格缩进、Allman 括号（pre-commit 自动检查）；
+- **单一事实源**：分区/魔数见 Config 头文件，版本/构建号见 `config/version.json`，禁止散落重复；
 - **留痕**：任何修改同步更新对应工程的 `ENGINEERING_LOG.md`。
