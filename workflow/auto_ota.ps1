@@ -25,7 +25,7 @@ $r = Invoke-Exe -FilePath $script:Python -Arguments @($script:OtaCli, $script:Ap
 try { $logger.WaitForExit(($CaptureSeconds + 30) * 1000) } catch {}
 Stop-Logger $logger
 
-$otaOk = ($r.ExitCode -eq 0) -and ($r.Stdout -notmatch "FAILED|no response|state=[1-9]")
+$otaOk = ($r.ExitCode -eq 0) -and ($r.Stdout -notmatch "FAILED|no response|err=[1-9]|state=[2-9]")
 $hostline = (($r.Stdout -split "`r?`n") | Select-String -Pattern "OTA|BOOT|phase|FAIL" | Select-Object -Last 15) -join "`n"
 $txt = ""
 if (Test-Path -LiteralPath $debugLog) { $txt = Get-Content -LiteralPath $debugLog -Raw }

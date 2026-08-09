@@ -1,7 +1,8 @@
 param(
     [int]$Seconds = 25,
     [string]$Port = "SWD",
-    [switch]$NoReset
+    [switch]$NoReset,
+    [switch]$SerialReset
 )
 . "$PSScriptRoot\common.ps1"
 $ErrorActionPreference = "Stop"
@@ -10,14 +11,18 @@ New-Item -ItemType Directory -Force -Path $script:LogDir | Out-Null
 $report = New-Report
 $report.git = Get-GitHead
 
-Write-Step ("Capture " + $script:DebugPort + " for " + $Seconds + "s, reset via SWD")
-$logger = Start-Com9Logger -OutFile $script:BootLog -Seconds $Seconds
-Start-Sleep -Seconds 2
-if (-not $NoReset) {
+$resetMethod = "SWD"
+if ($SerialReset) { $resetMethod = "Serial" }
+if ($NoReset) { $resetMethod = "none" }
+Write-Step ("Capture " + $script:DebugPort + " for " + $Seconds + "s, reset via " + $resetMethod)
+$logger = Start-Com9Logger -OutFile $script:BootLog -Seconds $Seconds `
+    -Cmd $(if ($SerialReset) { "reset" } else { "" })
+if (-not $NoReset -and -not $SerialReset) {
+    Start-Sleep -Seconds 2
     $r = Invoke-Exe -FilePath $script:Programmer -Arguments @("-c", "port=$Port", "-rst") -TimeoutSec 60
     if ($r.ExitCode -ne 0) {
         Stop-Logger $logger
-        throw "SWD reset failed - is the target connected?"
+        throw "SWD reset failed - is the target connected? (或使用 -SerialReset 走串口复位)"
     }
 }
 try { $logger.WaitForExit(($Seconds + 30) * 1000) } catch {}

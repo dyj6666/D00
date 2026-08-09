@@ -1580,8 +1580,16 @@ auto-stop）全部按设计工作。
   构建通过（text≈197KB < OTA 232KB 上限）；APP/BOOT ctest 全部通过；
   HOST VLink/LogicAnalyzer/EthLab 单测通过；`self_check.ps1` 全绿
   （除"工作流已入库"项，随提交消除）。
-- **待办（硬件未在线）**：本轮 SWD 探针未连接（No debug probe detected），
-  烧录/日志验证/OTA 冒烟未能执行；恢复探针后必须补跑 `-Mode full -IncludeOta`
-  完成实机确认再宣称发版。LogicAnalyzer `test_robustness.py` 为硬件接线集成测试
-  （60 组 × 实机采样），已移出 CI，由 `auto_hosttest.ps1 -Robustness` 显式触发；
-  当前 I2C 组因无 ADDR 失败，需确认 PE2/PE3 与逻辑分析仪通道接线后复测。
+- **实机验证（Keil DAP + OTA，v191/build 232）**：STM32CubeProgrammer 不识别
+  CMSIS-DAP 探针，改按指定路径——BOOT 用 Keil `UV4 -f`（DAP，返回码 0，
+  -FO15 扇区擦除保留 APP）烧录；APP 用 HOSTLINK OTA（COM13 921600）从
+  build 231→232 升级，BOOT phase 2→7 全部 err=0；复位后 COM9 日志确认
+  `OTA : Agent ready (last build 232)`、17 模块初始化、ETH ready、
+  无 HardFault/活动态 CRASH（仅历史 #7 恢复记录提醒）。
+- **顺带修复**：`auto_ota.ps1` 失败判定正则把正常状态 `state=1` 误判为失败
+  （false negative，实际升级成功）→ 改为 `err=[1-9]|state=[2-9]`；
+  `auto_verify.ps1` 新增 `-SerialReset`（DAP-only 环境无 SWD 复位的替代路径），
+  `com9_logger.py` 支持 `--cmd` 在打开串口后立即发送命令。
+- **遗留**：LogicAnalyzer `test_robustness.py` 为硬件接线集成测试（60 组 × 实机采样），
+  由 `auto_hosttest.ps1 -Robustness` 显式触发；I2C 组因无 ADDR 失败，
+  需确认 PE2/PE3 与逻辑分析仪通道接线后复测。

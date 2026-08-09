@@ -102,6 +102,8 @@
 - **现象**：`boot_app.c` `uid_str[32]` 用 `sprintf` 写入 39 字节（DEV_UID + 3×%08X + CRLF）。
 - **解决**：缓冲扩为 48 字节并改用 `snprintf(sizeof)`。
 - **验证**：GCC/Keil 双构建通过，0 警告。
-### 5.3 待办（硬件未在线）
-- 本轮 SWD 探针未连接，BOOT+APP 实机烧录/OTA 未执行；恢复探针后须补跑
-  `auto_pipeline.ps1 -Mode full -IncludeOta` 完成升级/回滚实测再发版。
+### 5.3 实机验证（Keil DAP + OTA）
+- BOOT 经 Keil DAP（`UV4 -f`）烧录成功（返回码 0，-FO15 扇区擦除保留 APP）；
+- APP 经 HOSTLINK OTA build 231→232 升级，BOOT phase 2→7 全部 err=0；
+- 复位日志确认新固件启动：`OTA : Agent ready (last build 232)`、17 模块初始化、
+  ETH ready、无 HardFault/活动态 CRASH（仅历史 #7 恢复记录提醒）。

@@ -84,7 +84,7 @@ HOST 测试、发布固件崩溃后门扫描、工作流文件版本化检查。
 | self_check.ps1 | 工具链/串口/约定一致性 + 编码/崩溃后门/版本单一事实源/可复现性/文档漂移检查 | `-TestHw` 探测 SWD | 退出码 0/1/2 |
 | auto_build.ps1 | Keil/GCC 构建 BOOT+APP | `-Project APP/BOOT/ALL` `-Toolchain Keil/GCC` `-Clean` | `workflow\logs\build_*.log` |
 | auto_flash.ps1 | 生成带魔数镜像并 SWD 烧录 | `-SkipBoot -SkipApp -KeepImage -Version N` | `workflow\logs\flash.log` |
-| auto_verify.ps1 | 复位抓 COM9 日志并判定 | `-Seconds 25 -NoReset` | `APP\_auto_boot.txt` |
+| auto_verify.ps1 | 复位抓 COM9 日志并判定 | `-Seconds 25 -NoReset -SerialReset`（DAP-only 环境用串口复位） | `APP\_auto_boot.txt` |
 | auto_ota.ps1 | HOSTLINK 安全升级冒烟 | `-Version N -BuildNo N -Port COM13` | `workflow\logs\ota_hostlink.log` |
 | auto_hosttest.ps1 | 主机单测（+ `-Robustness` LA 硬件健壮性，需接线） | `-SkipBoot -SkipApp` | `workflow\logs\hosttest_*.log` |
 | auto_pipeline.ps1 | 总流水线编排 | `-Mode ...` `-IncludeOta` | `workflow\last_report.json` |

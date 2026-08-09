@@ -182,9 +182,11 @@ function Test-KeilLog {
 }
 
 function Start-Com9Logger {
-    param([string]$OutFile, [int]$Seconds)
+    param([string]$OutFile, [int]$Seconds, [string]$Cmd = "")
     Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
-    Start-Process -FilePath $script:Python -ArgumentList @($script:Com9Logger, $OutFile, "$Seconds") `
+    $args = @($script:Com9Logger, $OutFile, "$Seconds")
+    if ($Cmd) { $args += @("--cmd", $Cmd) }
+    Start-Process -FilePath $script:Python -ArgumentList $args `
         -WindowStyle Hidden -PassThru
 }
 

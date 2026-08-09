@@ -1,16 +1,30 @@
-"""临时工具：COM9 日志抓取（供 SWD 复位后查看启动/崩溃信息）。"""
+"""COM9 日志抓取：可选在打开串口后立即发送一条命令（如 reset）。
 
+用法：
+    python com9_logger.py <out> <seconds> [--cmd "reset"] [--port COM9] [--baud 115200]
+"""
+
+import argparse
 import sys
 import time
 
 import serial
 
-OUT = sys.argv[1] if len(sys.argv) > 1 else r"D:\GIT-SPACE\D00\APP\APP\_com9_boot.txt"
-SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 20
+parser = argparse.ArgumentParser()
+parser.add_argument("out", nargs="?", default=r"D:\GIT-SPACE\D00\APP\APP\_com9_boot.txt")
+parser.add_argument("seconds", nargs="?", type=int, default=20)
+parser.add_argument("--cmd", default=None, help="打开串口后立即发送的命令（如 reset）")
+parser.add_argument("--port", default="COM9")
+parser.add_argument("--baud", type=int, default=115200)
+args = parser.parse_args()
 
-ser = serial.Serial("COM9", 115200, timeout=0.2)
-end = time.time() + SECONDS
-with open(OUT, "w", encoding="utf-8", errors="replace") as f:
+ser = serial.Serial(args.port, args.baud, timeout=0.2)
+if args.cmd:
+    time.sleep(0.3)
+    ser.reset_input_buffer()
+    ser.write((args.cmd + "\r").encode())
+end = time.time() + args.seconds
+with open(args.out, "w", encoding="utf-8", errors="replace") as f:
     while time.time() < end:
         try:
             n = ser.in_waiting
