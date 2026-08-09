@@ -342,6 +342,14 @@ static bool boot_apply_download(bool emit_status)
     }
 #endif
 
+    /* 升级成功：失效全部 DOWNLOAD 会话槽（魔数写 0，1→0 无需擦除）。
+     * 防止同版本+同尺寸旧包被 APP 续传逻辑误判恢复（stale-resume）。 */
+    for (uint32_t si = 0; si < BOOT_SESSION_SLOTS; si++) {
+        uint32_t zero = 0;
+        flash_write(BOOT_SESSION_BASE + si * BOOT_SESSION_STRIDE,
+                    (uint8_t *)&zero, sizeof(zero));
+    }
+
     BKP_WRITE(0, BOOT_FLAG_NONE);
     printf("Update successful! Rebooting to new APP...\r\n");
     boot_status_send(BOOT_ST_DONE, 0);
