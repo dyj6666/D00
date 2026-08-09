@@ -304,43 +304,49 @@ static void lcd_bus_draw(void)
 }
 
 /* ================= NET 页（以太网链路/IP/流量） ================= */
+static void lcd_net_val(uint16_t y, const char *s, uint16_t color)
+{
+    /* 数值统一右对齐到右边缘（240px 屏 → x=236；MAC 17 字符 ×8px=136px
+     * 起点 100，永不压到左侧标签），各行右缘整齐。 */
+    lcd_val_at((uint16_t)(BSP_LCD_GetWidth() - 4u), y, s, color);
+}
+
 static void lcd_net_refresh(void)
 {
     char buf[24];
     EthApp_RefreshStatus();
     const eth_status_t *st = EthApp_GetStatus();
-    BSP_LCD_ShowString(8, 36, "Link", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    BSP_LCD_ShowString(60, 36, st->link_up ? "UP" : "DOWN",
-                       st->link_up ? BSP_LCD_COLOR_GREEN : BSP_LCD_COLOR_RED,
-                       BSP_LCD_FONT_16);
+    BSP_LCD_ShowString(8, 34, "Link", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    lcd_net_val(36, st->link_up ? "UP" : "DOWN",
+                st->link_up ? BSP_LCD_COLOR_GREEN : BSP_LCD_COLOR_RED);
     if (st->link_up) {
         snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
                  st->ip[0], st->ip[1], st->ip[2], st->ip[3]);
     } else {
         snprintf(buf, sizeof(buf), "-.-.-.-");
     }
-    lcd_val(92, buf, BSP_LCD_COLOR_CYAN);
+    lcd_net_val(92, buf, BSP_LCD_COLOR_CYAN);
     snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
              st->mac[0], st->mac[1], st->mac[2],
              st->mac[3], st->mac[4], st->mac[5]);
-    lcd_val(118, buf, BSP_LCD_COLOR_YELLOW);
+    lcd_net_val(118, buf, BSP_LCD_COLOR_YELLOW);
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)st->rx_packets);
-    lcd_val(144, buf, BSP_LCD_COLOR_WHITE);
+    lcd_net_val(144, buf, BSP_LCD_COLOR_WHITE);
     snprintf(buf, sizeof(buf), "%lu", (unsigned long)st->tx_packets);
-    lcd_val(170, buf, BSP_LCD_COLOR_WHITE);
+    lcd_net_val(170, buf, BSP_LCD_COLOR_WHITE);
     snprintf(buf, sizeof(buf), "%lus", (unsigned long)st->link_uptime_s);
-    lcd_val(196, buf, BSP_LCD_COLOR_GREEN);
+    lcd_net_val(196, buf, BSP_LCD_COLOR_GREEN);
 }
 
 static void lcd_net_draw(void)
 {
     lcd_page_clear_content();
     lcd_page_header("NET");
-    BSP_LCD_ShowString(8, 92, "IP", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    BSP_LCD_ShowString(8, 118, "MAC", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    BSP_LCD_ShowString(8, 144, "RX", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    BSP_LCD_ShowString(8, 170, "TX", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
-    BSP_LCD_ShowString(8, 196, "Uptime", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 90, "IP", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 116, "MAC", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 142, "RX", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 168, "TX", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
+    BSP_LCD_ShowString(8, 194, "Uptime", BSP_LCD_COLOR_LGRAY, BSP_LCD_FONT_12);
     lcd_net_refresh();
     lcd_page_footer("SWIPE: NEXT PAGE");
 }

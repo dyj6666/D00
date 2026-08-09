@@ -1593,3 +1593,16 @@ auto-stop）全部按设计工作。
 - **LA 硬件健壮性测试（不复测）**：`test_robustness.py` 为 60 组实机采样集成测试，
   需 PE2/PE3 接入逻辑分析仪通道；用户确认当前未接线且此前已实测过，
   本轮不复测（`auto_hosttest.ps1 -Robustness` 开关保留，供有接线环境使用）。
+
+### 12.79 LCD NET 页排版修复（v191/build 233）
+- **现象**：NET 页字符不齐，MAC 行与左侧标签重合覆盖。
+- **根因**：数值统一右对齐到全局 `LCD_VAL_RIGHT=150`；MAC 为 17 字符 ×
+  FONT16 8px = 136px，右对齐后起点 x=14，直接压到左侧 "MAC" 标签
+  （x=8..26）上；其余行数值左缘也随长度参差。
+- **解决**：NET 页新增 `lcd_net_val()`——数值统一右对齐到右边缘
+  （240px 屏 → x=236，MAC 起点 100，安全间距），各行右缘整齐；
+  12px 标签上移 2px 与 16px 数值垂直居中（Link 34/IP 90/MAC 116/
+  RX 142/TX 168/Uptime 194）。
+- **验证**：Keil 发布构建 0 Error/0 Warning；HOSTLINK OTA build 232→233
+  全流程通过（BOOT phase 2→7 err=0），复位日志确认 `last build 233`、
+  17 模块初始化、ETH ready、无活动态 CRASH；视觉效果待用户目检确认。
