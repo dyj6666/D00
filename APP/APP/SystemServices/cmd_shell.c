@@ -18,12 +18,18 @@ static uint32_t s_count = 0;
 static osMutexId_t s_mutex = NULL;
 static cmd_ctx_t *s_active = NULL;   /* 当前分发中的适配器上下文 */
 
+#define CMD_TRANSPORT_MAX   8
+static const cmd_transport_t *s_transports[CMD_TRANSPORT_MAX];
+static uint32_t s_transport_count = 0;
+
 static void cmd_log_sink(const char *s, uint16_t len);
 
 void Cmd_Init(void)
 {
     memset(s_table, 0, sizeof(s_table));
     s_count = 0;
+    memset(s_transports, 0, sizeof(s_transports));
+    s_transport_count = 0;
     if (s_mutex == NULL) {
         s_mutex = osMutexNew(NULL);
     }
@@ -63,21 +69,80 @@ uint32_t Cmd_Count(void)
     return s_count;
 }
 
+void Cmd_TransportRegister(const cmd_transport_t *t)
+{
+    if (t == NULL || t->mask == 0 || t->name == NULL ||
+        s_transport_count >= CMD_TRANSPORT_MAX) {
+        return;
+    }
+    for (uint32_t i = 0; i < s_transport_count; i++) {
+        if (s_transports[i]->mask == t->mask) {
+            return;                       /* 已注册，幂等 */
+        }
+    }
+    s_transports[s_transport_count++] = t;
+}
+
+uint32_t Cmd_TransportCount(void)
+{
+    return s_transport_count;
+}
+
+const cmd_transport_t *Cmd_TransportGet(uint32_t index)
+{
+    return (index < s_transport_count) ? s_transports[index] : NULL;
+}
+
 const char *Cmd_TransportName(uint32_t mask)
 {
     if (mask == CMD_TRANSPORT_ALL) {
         return "ALL";
     }
-    if (mask == CMD_TRANSPORT_UART) {
-        return "UART";
-    }
-    if (mask == CMD_TRANSPORT_TCP) {
-        return "TCP";
-    }
-    if (mask == CMD_TRANSPORT_CAN) {
-        return "CAN";
+    for (uint32_t i = 0; i < s_transport_count; i++) {
+        if (s_transports[i]->mask == mask) {
+            return s_transports[i]->name;
+        }
     }
     return "?";
+}
+
+void Cmd_SessionReset(cmd_session_t *s, uint32_t mask, void *user,
+                      cmd_out_fn out)
+{
+    if (s == NULL) {
+        return;
+    }
+    memset(s, 0, sizeof(*s));
+    s->ctx.transport = mask;
+    s->ctx.user = user;
+    s->ctx.out = out;
+}
+
+uint32_t Cmd_SessionFeed(cmd_session_t *s, const uint8_t *data, uint16_t len)
+{
+    uint32_t dispatched = 0;
+    if (s == NULL || data == NULL) {
+        return 0;
+    }
+    for (uint16_t i = 0; i < len; i++) {
+        uint8_t ch = data[i];
+        if (ch == '\n') {
+            if (s->len > 0 && s->line[s->len - 1] == '\r') {
+                s->len--;
+            }
+            s->line[s->len] = '\0';
+            if (s->len > 0) {
+                Cmd_DispatchLine(s->line, &s->ctx);
+                dispatched++;
+            }
+            s->len = 0;
+        } else if (s->len < CMD_LINE_MAX - 1) {
+            s->line[s->len++] = (char)ch;
+        } else {
+            s->len = 0;                   /* 超长行：丢弃重来 */
+        }
+    }
+    return dispatched;
 }
 
 uint32_t Cmd_ActiveTransport(void)

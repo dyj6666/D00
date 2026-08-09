@@ -1617,3 +1617,28 @@ auto-stop）全部按设计工作。
 - **验证**：Keil 0 Error/0 Warning；HOSTLINK OTA build 233→234 通过；
   复位日志 `last build 234` / 17 模块 / ETH ready / 无活动态 CRASH；
   视觉效果待用户目检确认。
+
+### 12.81 Shell 架构重构：上层一致 + 底层物理协议可插拔（build 235）
+- **背景**：命令注册表（cmd_shell）已有，但传输适配层隐式、命令目录与
+  UART 适配器耦合在同一文件、CAN 扩展点不明确。
+- **架构**：
+  - `cmd_shell.h/c`（命令核心）：注册表/分发/会话上下文/LOG 路由 +
+    新增**传输适配器注册表**（`cmd_transport_t {name,mask,start}`，
+    `Cmd_TransportRegister`）与**流式会话助手**
+    （`cmd_session_t` + `Cmd_SessionFeed` 按行切分分发）+ 统一提示符 `CMD_PROMPT`；
+  - `cmd_catalog.h/c`（命令目录）：全部 cmd_* 实现从 shell.c 迁出，
+    只声明 transport 掩码，与物理协议完全解耦；
+  - `shell.c`（UART 适配器）：仅保留行编辑器/历史/补全/任务，
+    初始化注册 UART 传输 + 命令目录；
+  - `tcp_svc.c`（TCP 适配器）：改用 `Cmd_SessionFeed`（与未来 CAN 同一套
+    会话逻辑），初始化注册 TCP 传输，提示符统一；
+  - `cmd_can.h/c`（CAN 适配器模板）：`CMD_ENABLE_CAN=0` 惰性编译，
+    文档化接入步骤——1 个适配器文件 + 1 行注册即可，命令零改动。
+- **验证**：
+  - Keil 0 Error/0 Warning；GCC 交叉编译 0 错误；APP ctest 通过；
+  - HOSTLINK OTA build 234→235 通过，复位日志 `last build 235`、
+    17 模块、ETH ready、TCP console listening、无活动态 CRASH；
+  - **双终端实测**：UART（COM9）与 TCP（:9000）均可用同一命令集
+    （ver/echo/help/tcp/net），统一提示符 `D00> `；传输掩码生效
+    （`ota` 标注 `[UART]`）；`net ip` 经 UART 修改网参后 TCP 终端
+    立即可达（跨端一致性验证）。

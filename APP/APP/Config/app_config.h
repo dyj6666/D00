@@ -38,6 +38,11 @@
 #define SHELL_LINE_MAX          128
 #define SHELL_CMD_MAX           20
 
+// CAN shell 传输适配器（未来扩展；当前无硬件驱动，保持 0）
+#ifndef CMD_ENABLE_CAN
+#define CMD_ENABLE_CAN          0
+#endif
+
 /*--------------------------- 事件总线 --------------------------------------*/
 #define EVENT_BUS_SUBS_MAX      8     // 每个消息类型最大订阅者数
 #define EVENT_BUS_QUEUE_LENGTH  64    // 主事件队列深度

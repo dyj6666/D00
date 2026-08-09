@@ -57,9 +57,16 @@
 
 ### 2.4 新增 shell 命令
 
-在 `SystemServices/cmd_shell.c` 的命令注册表添加一行（`Cmd_Register`），
-并声明允许的传输掩码（`CMD_TRANSPORT_UART/TCP/...`）。命令实现与具体
-物理传输（串口 / TCP / 未来 CAN）解耦：`LOG_Printf` 输出自动路由到当前终端。
+在 `SystemServices/cmd_catalog.c` 添加 `cmd_xxx` 实现 + `cmd_table` 一行，
+声明允许的传输掩码（`CMD_TRANSPORT_UART/TCP/...`）。命令实现与具体物理传输
+（串口 / TCP / 未来 CAN）解耦：`LOG_Printf` 输出自动路由到当前终端。
+
+### 2.5 Shell 传输适配器（新增物理协议）
+
+命令核心 `cmd_shell` 维护传输适配器注册表（`cmd_transport_t`）：
+UART（`shell.c`）、TCP（`tcp_svc.c`）已注册；新增协议（如 CAN）只需
+实现一个适配器文件 + `Cmd_TransportRegister()` 一行，命令目录零改动。
+流式传输（TCP/CAN）复用 `Cmd_SessionFeed` 按行切分分发。
 
 ## 3. 移植指南
 

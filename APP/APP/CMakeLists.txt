@@ -90,6 +90,8 @@ if(CMAKE_CROSSCOMPILING)
     SystemServices/logger.c
     SystemServices/shell.c
     SystemServices/cmd_shell.c
+    SystemServices/cmd_catalog.c
+    SystemServices/cmd_can.c
     SystemServices/event_bus.c
     SystemServices/module.c
     SystemServices/sysmon.c

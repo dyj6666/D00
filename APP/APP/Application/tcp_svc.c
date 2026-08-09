@@ -1,7 +1,8 @@
 /* ================================================================
- * TCP 服务：统一命令框架的 TCP 适配器（netconn API）
+ * TCP 服务：统一命令框架的 TCP 传输适配器（netconn API）
  *   - 端口 9000，行协议（CR/LF 结束），最多 2 个并发客户端
- *   - 命令统一由 cmd_shell 注册表分发，LOG_Printf 经路由写到连接
+ *   - 行拆分/分发复用命令核心的 Cmd_SessionFeed（与未来 CAN 同一套）
+ *   - 初始化时 Cmd_TransportRegister() 注册 "TCP" 传输（可插拔）
  *   - stream on：每秒推送关键遥测（uptime/heap/tasks/ETH）
  * ================================================================ */
 #include "tcp_svc.h"
@@ -28,9 +29,15 @@
 #define TCP_SVC_MAX_CLIENTS   2
 #define TCP_SVC_TASK_STACK    2048
 #define TCP_SVC_CLIENT_STACK  2048
-#define TCP_SVC_MAX_LINE      160
 #define TCP_SVC_IDLE_MS       120000
 #define TCP_SVC_STREAM_MS     1000
+
+/* TCP 传输适配器描述：注册到命令核心（传输名/掩码，命令零感知） */
+static const cmd_transport_t s_tcp_transport = {
+    .name  = "TCP",
+    .mask  = CMD_TRANSPORT_TCP,
+    .start = NULL,          /* 服务任务由 TcpSvc_Init 创建 */
+};
 
 /* TCP 客户端会话：统一命令框架 ctx->user 指向它 */
 struct tcp_cli {
@@ -123,9 +130,7 @@ static void tcp_client_task(void *arg)
 {
     struct netconn *conn = (struct netconn *)arg;
     struct tcp_cli cli;
-    cmd_ctx_t ctx;
-    char line[TCP_SVC_MAX_LINE];
-    size_t line_len = 0;
+    cmd_session_t sess;
 
     memset(&cli, 0, sizeof(cli));
     cli.conn = conn;
@@ -140,13 +145,10 @@ static void tcp_client_task(void *arg)
         cli.peer_ip[3] = ip4_addr4(p4);
     }
 
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.transport = CMD_TRANSPORT_TCP;
-    ctx.user = &cli;
-    ctx.out = tcp_ctx_out;
+    Cmd_SessionReset(&sess, CMD_TRANSPORT_TCP, &cli, tcp_ctx_out);
 
     svc_write(conn, "D00 Embedded Platform TCP Console\r\n");
-    svc_write(conn, "Type 'help' for commands.\r\n> ");
+    svc_write(conn, "Type 'help' for commands.\r\n" CMD_PROMPT);
 
     for (;;) {
         struct pbuf *p = NULL;
@@ -154,7 +156,7 @@ static void tcp_client_task(void *arg)
         if (err == ERR_TIMEOUT) {
             if (cli.stream_on) {
                 tcp_stream_tick(conn);
-                svc_write(conn, "> ");
+                svc_write(conn, CMD_PROMPT);
             }
             continue;
         }
@@ -163,36 +165,16 @@ static void tcp_client_task(void *arg)
         }
 
         u16_t off = 0;
+        uint8_t chunk[64];
         while (off < p->tot_len) {
-            size_t room = sizeof(line) - 1 - line_len;
-            if (room == 0) {
-                line_len = 0;   /* 超长行：丢弃重来 */
-                room = sizeof(line) - 1;
-            }
-            u16_t take = (u16_t)((p->tot_len - off) < room
-                                     ? (p->tot_len - off) : room);
-            pbuf_copy_partial(p, line + line_len, take, off);
-            line_len += take;
+            u16_t take = (u16_t)((p->tot_len - off) < sizeof(chunk)
+                                     ? (p->tot_len - off) : sizeof(chunk));
+            pbuf_copy_partial(p, chunk, take, off);
+            Cmd_SessionFeed(&sess, chunk, take);
             off += take;
-
-            for (;;) {
-                char *nl = (char *)memchr(line, '\n', line_len);
-                if (nl == NULL) {
-                    break;
-                }
-                size_t l = (size_t)(nl - line);
-                if (l > 0 && line[l - 1] == '\r') {
-                    l--;
-                }
-                line[l] = '\0';
-                Cmd_DispatchLine(line, &ctx);
-                size_t consumed = (size_t)(nl - line) + 1;
-                line_len -= consumed;
-                memmove(line, nl + 1, line_len);
-            }
         }
         pbuf_free(p);
-        svc_write(conn, "> ");
+        svc_write(conn, CMD_PROMPT);
 
         netconn_set_recvtimeout(conn, cli.stream_on ? TCP_SVC_STREAM_MS
                                                     : TCP_SVC_IDLE_MS);
@@ -257,6 +239,7 @@ static void tcp_server_task(void *arg)
 void TcpSvc_Init(void)
 {
     memset(&s_stat, 0, sizeof(s_stat));
+    Cmd_TransportRegister(&s_tcp_transport);
     osThreadAttr_t attr = {
         .name = "TcpSvc",
         .stack_size = TCP_SVC_TASK_STACK,

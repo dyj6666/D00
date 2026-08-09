@@ -1,0 +1,14 @@
+#ifndef CMD_CATALOG_H
+#define CMD_CATALOG_H
+
+/* ================================================================
+ * 命令目录：全部 cmd_* 实现集中于此，与物理传输完全解耦。
+ *   - 命令只声明 transport 掩码（CMD_TRANSPORT_*），不感知终端协议；
+ *   - 输出统一走 LOG_Printf，由命令核心路由到当前适配器会话；
+ *   - 新增命令 = 在 cmd_catalog.c 加 cmd_xxx 实现 + cmd_table 一行。
+ * ================================================================ */
+
+/* 注册全部命令（UART/TCP/CAN 各适配器共享，幂等） */
+void CmdCatalog_Register(void);
+
+#endif

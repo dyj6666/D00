@@ -1978,6 +1978,26 @@
               <FilePath>..\SystemServices\cmd_shell.h</FilePath>
             </File>
             <File>
+              <FileName>cmd_catalog.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\cmd_catalog.c</FilePath>
+            </File>
+            <File>
+              <FileName>cmd_catalog.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\SystemServices\cmd_catalog.h</FilePath>
+            </File>
+            <File>
+              <FileName>cmd_can.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\cmd_can.c</FilePath>
+            </File>
+            <File>
+              <FileName>cmd_can.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\SystemServices\cmd_can.h</FilePath>
+            </File>
+            <File>
               <FileName>event_bus.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\SystemServices\event_bus.c</FilePath>
