@@ -1,4 +1,9 @@
 #include "err_mgr.h"
+#if defined(__GNUC__)
+#define ERR_RETURN_ADDR()   __builtin_return_address(0)
+#else
+#define ERR_RETURN_ADDR()   __return_address()
+#endif
 #include "bsp.h"
 #include "app_config.h"
 #include "usart.h"
@@ -11,8 +16,9 @@
 #include <string.h>
 #include <stdio.h>
 
-/* FreeRTOS 内部 TCB 指针（tasks.c 定义，task.h 未导出）�? * 中断/异常上下文直接读取当前任务，避免 xTaskGetCurrentTaskHandle()
- * 内部�?taskENTER_CRITICAL（ISR 中非法）�?*/
+/* FreeRTOS 内部 TCB 指针（tasks.c 定义，task.h 未导出）：
+ * 中断/异常上下文直接读取当前任务，避免 xTaskGetCurrentTaskHandle()
+ * 内部的 taskENTER_CRITICAL（ISR 中非法）。*/
 struct tskTaskControlBlock;
 extern struct tskTaskControlBlock * volatile pxCurrentTCB;
 
@@ -20,7 +26,7 @@ extern struct tskTaskControlBlock * volatile pxCurrentTCB;
  * 系统错误管理实现
  * ================================================================ */
 
-/* ---------- BKP 摘要布局（reg 0 保留�?OTA BOOT_FLAG_UPGRADE�?---------- */
+/* ---------- BKP 摘要布局（reg 0 保留给 OTA BOOT_FLAG_UPGRADE；---------- */
 #define ERR_BKP_MAGIC_REG    1u
 #define ERR_BKP_SRC_REG      2u
 #define ERR_BKP_SEQ_REG      3u
@@ -33,14 +39,14 @@ extern struct tskTaskControlBlock * volatile pxCurrentTCB;
 #define ERR_BKP_NAME_REG0    10u   /* task_name[0..3] */
 #define ERR_BKP_NAME_REG1    11u   /* task_name[4..7] */
 #define ERR_BKP_NAME_REG2    12u   /* task_name[8..11] */
-#define ERR_BKP_CRC_REG      13u   /* 摘要完整性校�?*/
-#define ERR_BKP_RAPID_REG    14u   /* 快速崩溃计�?*/
+#define ERR_BKP_CRC_REG      13u   /* 摘要完整性校验*/
+#define ERR_BKP_RAPID_REG    14u   /* 快速崩溃计数*/
 #define ERR_BKP_RTC_REG      15u   /* 上次崩溃 RTC 秒数 */
 #define ERR_BKP_MAGIC_VAL    0x45525231u  /* 'ERR1' */
 
 #define ERR_RAPID_WINDOW_S   10u   /* 快速崩溃判定窗口（秒） */
-#define ERR_RAPID_LIMIT      3u    /* 连续快速崩溃锁定阈�?*/
-#define ERR_BACKTRACE_SCAN   512u  /* 栈回溯扫描深度（字节�?*/
+#define ERR_RAPID_LIMIT      3u    /* 连续快速崩溃锁定阈值*/
+#define ERR_BACKTRACE_SCAN   512u  /* 栈回溯扫描深度（字节）*/
 #define ERR_FLASH_CODE_BASE  0x08000000u
 #define ERR_FLASH_CODE_END   0x08100000u
 #define ERR_SRAM_BASE        0x20000000u
@@ -50,7 +56,7 @@ static err_record_t g_rec;
 static volatile uint8_t g_locked = 0;
 volatile uint32_t ERR_TickMs = 0;
 
-/* 崩溃序号：BKP 摘要有效则递增，否则从头计数（防止残留垃圾数据�?*/
+/* 崩溃序号：BKP 摘要有效则递增，否则从头计数（防止残留垃圾数据）*/
 static uint32_t err_next_seq(void)
 {
     uint32_t magic = BSP_RTC_ReadBackupReg(ERR_BKP_MAGIC_REG);
@@ -61,13 +67,13 @@ static uint32_t err_next_seq(void)
     return seq + 1u;
 }
 
-/* 记录当前任务名（线程模式有效；处理模式标 ISR�?*/
+/* 记录当前任务名（线程模式有效；处理模式标 ISR）*/
 static void err_capture_task(char *out, uint32_t cap)
 {
     if (out == NULL || cap == 0) return;
     out[0] = '\0';
-    /* 直接�?pxCurrentTCB：xTaskGetCurrentTaskHandle() 内部使用
-     * taskENTER_CRITICAL，在中断/异常上下文非法（可导致死锁）�?*/
+    /* 直接读 pxCurrentTCB：xTaskGetCurrentTaskHandle() 内部使用
+     * taskENTER_CRITICAL，在中断/异常上下文非法（可导致死锁）。*/
     TaskHandle_t h = pxCurrentTCB;
     if (h != NULL) {
         const char *name = pcTaskGetName(h);
@@ -139,7 +145,7 @@ static void err_uart_dec32(uint32_t v)
     }
 }
 
-/* ---------- fault 状态解�?---------- */
+/* ---------- fault 状态解码---------- */
 static void err_decode_cause(err_src_t src, uint32_t cfsr, uint32_t hfsr,
                              char *out, uint32_t cap)
 {
@@ -169,13 +175,13 @@ static void err_decode_cause(err_src_t src, uint32_t cfsr, uint32_t hfsr,
     snprintf(out, cap, "%s: %s", err_src_name(src), s);
 }
 
-/* ---------- 代码地址判定（Thumb �?1，Flash 范围内） ---------- */
+/* ---------- 代码地址判定（Thumb 位 1，Flash 范围内） ---------- */
 static int err_is_code(uint32_t v)
 {
     return (v >= ERR_FLASH_CODE_BASE && v < ERR_FLASH_CODE_END && (v & 1u));
 }
 
-/* ---------- 堆栈回溯（启发式扫描，返回调用链 PC 列表�?---------- */
+/* ---------- 堆栈回溯（启发式扫描，返回调用链 PC 列表）---------- */
 static uint32_t err_backtrace(uint32_t sp, uint32_t lr, uint32_t pc,
                               uint32_t *out, uint32_t max)
 {
@@ -184,7 +190,7 @@ static uint32_t err_backtrace(uint32_t sp, uint32_t lr, uint32_t pc,
     if (err_is_code(pc) && n < max) out[n++] = pc;
     if (err_is_code(lr) && n < max) out[n++] = lr;
 
-    /* 栈指针必须落�?SRAM 范围内才扫描，避免二�?fault */
+    /* 栈指针必须落在 SRAM 范围内才扫描，避免二次 fault */
     if (sp < ERR_SRAM_BASE || sp >= ERR_SRAM_END) {
         return n;
     }
@@ -208,7 +214,7 @@ static uint32_t err_backtrace(uint32_t sp, uint32_t lr, uint32_t pc,
     return n;
 }
 
-/* ---------- BKP 摘要持久�?---------- */
+/* ---------- BKP 摘要持久化---------- */
 static uint32_t err_bkp_crc(uint32_t *regs, uint32_t n)
 {
     uint32_t sum = 0x5A5A5A5Au;
@@ -232,7 +238,7 @@ static void err_bkp_save(const err_record_t *rec)
     regs[7] = rec->hfsr;
     regs[8] = rec->tick_ms;
     memcpy(&regs[9], rec->task_name, 12);          /* regs[9..11] */
-    uint32_t crc = err_bkp_crc(regs, 12);          /* 摘要 CRC�?2 项） */
+    uint32_t crc = err_bkp_crc(regs, 12);          /* 摘要 CRC（12 项） */
 
     BSP_RTC_WriteBackupReg(ERR_BKP_MAGIC_REG, regs[0]);
     BSP_RTC_WriteBackupReg(ERR_BKP_SRC_REG, regs[1]);
@@ -249,7 +255,7 @@ static void err_bkp_save(const err_record_t *rec)
     BSP_RTC_WriteBackupReg(ERR_BKP_CRC_REG, crc);
 }
 
-/* ---------- 快速崩溃防抖（RTC 秒级窗口�?---------- */
+/* ---------- 快速崩溃防抖（RTC 秒级窗口）---------- */
 static uint32_t err_rtc_sec(void)
 {
     RTC_TimeTypeDef t;
@@ -284,7 +290,7 @@ static int err_rapid_crash_check(void)
 /* ---------- 恢复策略：软复位 / 防抖锁定 ---------- */
 static void err_delay_loop(uint32_t ms)
 {
-    /* 中断已禁用，不能�?HAL_Delay（依�?SysTick 中断）；裸循环近�?*/
+    /* 中断已禁用，不能使用 HAL_Delay（依赖 SysTick 中断）；裸循环近似*/
     volatile uint32_t n = ms * 16800u;   /* ~168MHz，粗粒度 */
     while (n--) {
     }
@@ -301,7 +307,7 @@ static void err_recover(void)
         }
     }
 
-    /* LED 快闪 3 次提示后软复位（复位原因�?BSP_RESET 保留�?sysmon 分析�?*/
+    /* LED 快闪 3 次提示后软复位（复位原因由 BSP_RESET 保留供 sysmon 分析；*/
     for (int i = 0; i < 3; i++) {
         BSP_LED_Toggle(1);
         err_delay_loop(80);
@@ -315,14 +321,14 @@ static void err_recover(void)
 void ERR_DumpRecord(const err_record_t *rec)
 {
     if (rec == NULL) return;
-    /* 直接中止 USART3 TX DMA（不依赖 HAL：异�?中断上下文中
+    /* 直接中止 USART3 TX DMA（不依赖 HAL：异常中断上下文中
      * HAL_UART_AbortTransmit 的锁/等待可能阻塞，导致诊断卡死） */
     if (huart3.hdmatx != NULL) {
         DMA_Stream_TypeDef *tx = huart3.hdmatx->Instance;
-        tx->CR &= ~DMA_SxCR_EN;        /* 禁用 TX DMA �?*/
+        tx->CR &= ~DMA_SxCR_EN;        /* 禁用 TX DMA 流*/
         DMA_TypeDef *dma = (huart3.hdmatx->StreamIndex < 8) ? DMA1 : DMA2;
-        dma->LIFCR = 0xFFFFFFFFu;      /* 清低流标志（诊断场景�?*/
-        dma->HIFCR = 0xFFFFFFFFu;      /* 清高流标�?*/
+        dma->LIFCR = 0xFFFFFFFFu;      /* 清低流标志（诊断场景）*/
+        dma->HIFCR = 0xFFFFFFFFu;      /* 清高流标志*/
     }
     CLEAR_BIT(huart3.Instance->CR3, USART_CR3_DMAT);
 
@@ -397,7 +403,7 @@ void ERR_HandleFaultEntry(uint32_t *stack_frame, uint32_t exc_return,
         g_rec.pc = stack_frame[6];
         g_rec.psr = stack_frame[7];
     } else {
-        /* NMI 等：MSP 上的标准异常压栈（r0-r3,r12,lr,pc,psr�?*/
+        /* NMI 等：MSP 上的标准异常压栈（r0-r3,r12,lr,pc,psr）*/
         const uint32_t *sp = (const uint32_t *)__get_MSP();
         g_rec.r0 = sp[0];
         g_rec.r1 = sp[1];
@@ -410,7 +416,7 @@ void ERR_HandleFaultEntry(uint32_t *stack_frame, uint32_t exc_return,
         if (!err_is_code(g_rec.pc)) g_rec.pc = g_rec.lr;
     }
 
-    /* 线程模式（任务上下文）时记录当前任务�?*/
+    /* 线程模式（任务上下文）时记录当前任务名*/
     if (exc_return & 0x04) {
         err_capture_task(g_rec.task_name, sizeof(g_rec.task_name));
     } else {
@@ -448,7 +454,7 @@ void ERR_HandleAssert(uint32_t line)
     g_rec.src = ERR_SRC_RTOS_ASSERT;
     g_rec.seq = err_next_seq();
     g_rec.tick_ms = ERR_TickMs;
-    g_rec.lr = (uint32_t)__return_address();
+    g_rec.lr = (uint32_t)ERR_RETURN_ADDR();
     g_rec.pc = g_rec.lr;
     err_capture_task(g_rec.task_name, sizeof(g_rec.task_name));
     g_rec.msp = (uint32_t)__get_MSP();
@@ -516,7 +522,7 @@ void ERR_HandleTaskStall(const char *task_name, uint32_t silent_ms)
 void ERR_HandleUnhandledIRQ(uint32_t irqn)
 {
     __disable_irq();
-    err_uart_puts("[ERR] unhandled-irq entry\r\n");   /* 入口标记：区分中�?直接调用 */
+    err_uart_puts("[ERR] unhandled-irq entry\r\n");   /* 入口标记：区分中断直接调用 */
     memset(&g_rec, 0, sizeof(g_rec));
     g_rec.magic = ERR_RECORD_MAGIC;
     g_rec.src = ERR_SRC_UNHANDLED_IRQ;
@@ -543,7 +549,7 @@ void ERR_ReportLastCrash(void)
 {
     uint32_t magic = BSP_RTC_ReadBackupReg(ERR_BKP_MAGIC_REG);
     if ((magic & 0xFF) != (ERR_BKP_MAGIC_VAL & 0xFF)) {
-        return;   /* 无有效崩溃记�?*/
+        return;   /* 无有效崩溃记录*/
     }
 
     err_record_t rec;
@@ -573,7 +579,7 @@ void ERR_ReportLastCrash(void)
                err_src_name((err_src_t)rec.src),
                (unsigned long)rec.tick_ms);
     LOG_Printf("[CRASH]   PC=");
-    /* LOG_Printf 不支�?%X 的高位补零？直接打印十六进制 */
+    /* LOG_Printf 不支持 %X 的高位补零？直接打印十六进制 */
     LOG_Printf("%08lX", (unsigned long)rec.pc);
     LOG_Printf("  LR=%08lX  cause=%s\r\n",
                (unsigned long)rec.lr, rec.cause);
@@ -601,7 +607,7 @@ void ERR_Init(void)
     memset(&g_rec, 0, sizeof(g_rec));
     g_locked = 0;
 
-    /* 清理早期调试布局的历史残留：崩溃序号异常�?100000）时清空摘要�?     * 保证重启后崩溃序号从 1 重新计数（BKP 布局版本迁移保护）�?*/
+    /* 清理早期调试布局的历史残留：崩溃序号异常（>100000）时清空摘要，     * 保证重启后崩溃序号从 1 重新计数（BKP 布局版本迁移保护）。*/
     if (BSP_RTC_ReadBackupReg(ERR_BKP_SEQ_REG) > 100000u) {
         for (uint32_t i = ERR_BKP_MAGIC_REG; i <= ERR_BKP_RTC_REG; i++) {
             BSP_RTC_WriteBackupReg(i, 0);

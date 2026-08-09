@@ -15,12 +15,16 @@
 #include "imu_svc.h"
 #include "eth_app.h"
 #include "tcp_svc.h"
+#include "cmd_shell.h"
+#include "shell.h"
 
 #include <string.h>
 
 /* 模块注册表：priority 数值小者先初始化。
  * 依赖顺序：VAR -> DataLink -> LA_Buffer -> LA_Sample -> 应用模块 -> SysMon/DataAgent */
 static module_desc_t module_table[] = {
+    MODULE_INIT("Cmd",    2,  Cmd_Init),
+    MODULE_INIT("Shell",  4,  Shell_Init),
     MODULE_INIT("VAR",       0,  VAR_Init),
     MODULE_INIT("DataLink", 10,  DataLink_Init),
     MODULE_INIT("LA_Buffer",20,  LA_Buffer_Init),

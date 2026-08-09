@@ -61,6 +61,9 @@
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/* GCC 工具链不使用 ARMCC 内联汇编包装：5 个故障入口由
+ * gcc_port/fault_handlers_gcc.c 提供等价 naked asm 版本 */
+#if !defined(__GNUC__)
 /* Note: The 5 fault entry wrappers below (NMI/HardFault/MemManage/BusFault/
  * UsageFault) are the assembly front-ends of the err_mgr diagnostic system;
  * they must capture the real stack pointer before entering C.
@@ -135,6 +138,7 @@ __asm void UsageFault_Handler(void)
     LDR  R3, =ERR_HandleFaultEntry
     BX   R3
 }
+#endif
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/

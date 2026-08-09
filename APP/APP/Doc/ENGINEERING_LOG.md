@@ -1551,3 +1551,37 @@ auto-stop）全部按设计工作。
   字段树/统计/PCAP 导出全部联调通过；`net` 显示 CAP SENT/DROP 计数。
 - **结论**：ETH 上位机（控制台 + 抓包 + 协议可视化 + 统计 + 测试工具）
   与固件抓帧通道端到端打通，本轮重大验证通过，可提交。
+
+### 12.78 工程化整改：AI 工作流闭环 + 可复现性加固（v192 构建期）
+- **背景**：综合评估发现三类系统性问题——单一事实源缺失（版本/分区多处散落）、
+  可复现构建与测试未闭环（APP GCC 依赖未入库文件、CI 死配置、APP 主机单测无构建规则）、
+  发布卫生（崩溃注入后门默认开启、3 个源文件编码损坏、README 魔数地址过时）。
+- **解决**：
+  1. **崩溃后门**：`app_config.h` 的 `CRASH_INJECT_ENABLE` 改为跟随 `APP_DEBUG_MODE`
+     （发布构建自动为 0）；`self_check.ps1` 与 CI 新增对 `APP.bin` 的
+     "Crash injection" 字符串扫描（Keil/GCC 产物实测均不含）。
+  2. **编码归一**：`Config/pinout.h`（GBK）、`SystemServices/err_mgr.c`、
+     `SystemServices/shell.c`（UTF-8/GBK 混合损坏）迁移为合法 UTF-8，
+     并恢复 crash/eb_stress/la 帮助文本与关键注释；pre-commit 钩子
+     （`.githooks/pre-commit`）强制暂存区 UTF-8 + LF + 末尾换行。
+  3. **主机单测闭环**：`gen_cmake.py` 模板新增 `CMAKE_CROSSCOMPILING` 分支——
+     交叉编译构建固件、纯主机构建构建 `host_tests`（协议/CRC/变量分片），
+     `ctest` 可复现；`cmake/APP.ld` 与 `arm-none-eabi-toolchain.cmake` 入库。
+  4. **单一事实源**：新增 `config/version.json`（版本/构建号），`common.ps1`
+     自动读取；`OTA_Tool/config.json`、`version_lib.json` 为本地状态（含 UID/路径），
+     移出 git 并加入忽略规则。
+  5. **流水线增强**：`auto_pipeline.ps1` 修复 `-Skip*` 开关被模式覆盖的 bug；
+     每阶段记录耗时（`*_sec`），报告附 BOOT/APP 产物 SHA256；
+     `self_check.ps1` 新增编码/后门/版本一致性/可复现性/README 漂移检查。
+  6. **CI 落地**：死配置 `APP/APP/.github/workflows/ci.yml` 删除，
+     仓库根新增 `.github/workflows/ci.yml`（BOOT+APP GCC 构建、BOOT/APP ctest、
+     HOST 测试、后门扫描、工作流文件版本化检查）。
+- **验证**：APP Keil 发布构建 0 Error/0 Warning（APP.bin≈187.5KB）；APP GCC
+  构建通过（text≈197KB < OTA 232KB 上限）；APP/BOOT ctest 全部通过；
+  HOST VLink/LogicAnalyzer/EthLab 单测通过；`self_check.ps1` 全绿
+  （除"工作流已入库"项，随提交消除）。
+- **待办（硬件未在线）**：本轮 SWD 探针未连接（No debug probe detected），
+  烧录/日志验证/OTA 冒烟未能执行；恢复探针后必须补跑 `-Mode full -IncludeOta`
+  完成实机确认再宣称发版。LogicAnalyzer `test_robustness.py` 为硬件接线集成测试
+  （60 组 × 实机采样），已移出 CI，由 `auto_hosttest.ps1 -Robustness` 显式触发；
+  当前 I2C 组因无 ADDR 失败，需确认 PE2/PE3 与逻辑分析仪通道接线后复测。

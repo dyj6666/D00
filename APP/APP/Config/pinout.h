@@ -3,7 +3,7 @@
 #include "main.h"
 #include "usart.h"
 
-#define DEBUG_UART          huart3      /* µ÷ÊÔ/Shell£ºUSART3(PC10=TX PC11=RX) */
+#define DEBUG_UART          huart3      /* è°ƒè¯•/Shellï¼šUSART3(PC10=TX PC11=RX) */
 #define DEBUG_UART_IRQn     USART3_IRQn
 
 #define LED0_GPIO_Port      GPIOF
@@ -17,7 +17,7 @@
 #define KEY0_Pin            GPIO_PIN_4
 #define KEY0_PRESSED_STATE  GPIO_PIN_RESET
 
-/* ´¥ÃþÆÁ£¨XPT2046 µç×èÊ½£¬Ì½Ë÷ÕßV3 LCD ´¥Ãþ½Ó¿Ú£© */
+/* è§¦æ‘¸å±ï¼ˆXPT2046 ç”µé˜»Ê½ï¼ŒÌ½ç´¢è€…V3 LCD è§¦æ‘¸æŽ¥å£ï¼‰ */
 #define TOUCH_CLK_GPIO_Port  GPIOB
 #define TOUCH_CLK_Pin        GPIO_PIN_0
 #define TOUCH_PEN_GPIO_Port  GPIOB
@@ -29,22 +29,22 @@
 #define TOUCH_MOSI_GPIO_Port GPIOF
 #define TOUCH_MOSI_Pin       GPIO_PIN_11
 
-/* °åÔØÓÐÔ´·äÃùÆ÷£¨¸ßµçÆ½·¢Éù£© */
+/* æ¿è½½æœ‰Ô´èœ‚é¸£å™¨ï¼ˆé«˜ç”µÆ½å‘å£°ï¼‰ */
 #define BEEP_GPIO_Port       GPIOF
 #define BEEP_Pin             GPIO_PIN_8
 
-/* Íâ½Ó MPU6050£¨I2C1 Ó²¼þ£¬400kHz£© */
+/* å¤–æŽ¥ MPU6050ï¼ˆI2C1 Ó²ä»¶ï¼Œ400kHzï¼‰ */
 #define MPU6050_SCL_Port     GPIOB
 #define MPU6050_SCL_Pin      GPIO_PIN_6
 #define MPU6050_SDA_Port     GPIOB
 #define MPU6050_SDA_Pin      GPIO_PIN_7
 
-/* ´®¿Ú×ÊÔ´¹æ»®£¨ETH ½ÓÈëºó£©£º
+/* ä¸²å£èµ„Ô´è§„åˆ’ï¼ˆETH æŽ¥å…¥åŽï¼‰ï¼š
  *   USART1 PA9/PA10  HOSTLINK
- *   USART3 PC10/PC11 µ÷ÊÔ/Shell£¨USART2 ÈÃÎ»¸ø ETH£©
- *   UART5  PC12/PD2  ÉãÏñÍ·£¨Ô¤Áô£©
- *   USART6 PC6/PC7   ESP32-S3£¨Ô¤Áô£©
- *   UART4  PA0/PA1   ÎþÉü¸ø ETH */
+ *   USART3 PC10/PC11 è°ƒè¯•/Shellï¼ˆUSART2 è®©Î»ç»™ ETHï¼‰
+ *   UART5  PC12/PD2  æ‘„åƒÍ·ï¼ˆÔ¤ç•™ï¼‰
+ *   USART6 PC6/PC7   ESP32-S3ï¼ˆÔ¤ç•™ï¼‰
+ *   UART4  PA0/PA1   ç‰ºç‰²ç»™ ETH */
 #define DBG_TX_Port         GPIOC
 #define DBG_TX_Pin          GPIO_PIN_10
 #define DBG_RX_Port         GPIOC

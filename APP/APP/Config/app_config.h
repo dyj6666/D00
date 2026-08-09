@@ -71,9 +71,10 @@
 #endif
 
 /* 崩溃注入测试命令（crash <bus|undef|stack|assert>）：
- * 仅开发调试用，生产发布必须置 0（否则固件含崩溃后门）。 */
+ * 跟随 APP_DEBUG_MODE：发布构建（0）自动禁用，避免固件含崩溃后门；
+ * 开发调试用 -DAPP_DEBUG_MODE=1 重新启用。 */
 #ifndef CRASH_INJECT_ENABLE
-#define CRASH_INJECT_ENABLE         1
+#define CRASH_INJECT_ENABLE         APP_DEBUG_MODE
 #endif
 
 

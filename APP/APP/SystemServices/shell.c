@@ -18,6 +18,7 @@
 #include "imu_svc.h"
 #include "eth_app.h"
 #include "tcp_svc.h"
+#include "cmd_shell.h"
 #include "lwip/ip4_addr.h"
 #include "stream_buffer.h"
 #include "task.h"
@@ -26,13 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef void (*cmd_func_t)(const char *args);
-
-typedef struct {
-    const char *name;    /* 命令�?*/
-    const char *brief;   /* 用途说明（help 显示�?*/
-    cmd_func_t  func;
-} cmd_entry_t;
+/* cmd_func_t / cmd_entry_t provided by cmd_shell.h */
 
 static void cmd_help(const char *args);
 static void cmd_info(const char *args);
@@ -104,18 +99,33 @@ static void cmd_net(const char *args)
             m++;
         }
         if (strncmp(m, "on", 2) == 0) {
-            const char *ip = m + 2;
-            while (*ip == ' ' || *ip == '\t') {
-                ip++;
-            }
             ip4_addr_t peer;
-            if (*ip == '\0' || !ip4addr_aton(ip, &peer)) {
-                LOG_Printf("Usage: net cap on <a.b.c.d>\r\n");
-                return;
+            uint8_t peer4[4];
+            int have_peer = 0;
+            if (Cmd_ActiveTransport() == CMD_TRANSPORT_TCP) {
+                tcp_cli_t *cli = (tcp_cli_t *)Cmd_ActiveUser();
+                if (cli != NULL && TcpSvc_ClientPeerIP(cli, peer4) == 0) {
+                    have_peer = 1;
+                }
+            }
+            if (have_peer) {
+                IP4_ADDR(&peer, peer4[0], peer4[1], peer4[2], peer4[3]);
+                LOG_Printf("CAPTURE ON -> %u.%u.%u.%u:7778 (EthLab)\r\n",
+                           (unsigned)peer4[0], (unsigned)peer4[1],
+                           (unsigned)peer4[2], (unsigned)peer4[3]);
+            } else {
+                const char *ip = m + 2;
+                while (*ip == ' ' || *ip == '\t') {
+                    ip++;
+                }
+                if (*ip == '\0' || !ip4addr_aton(ip, &peer)) {
+                    LOG_Printf("Usage: net cap on <a.b.c.d> (TCP auto-peer)\r\n");
+                    return;
+                }
+                LOG_Printf("CAPTURE ON -> %s:7778 (EthLab)\r\n", ip);
             }
             EthApp_SetCapturePeer(&peer);
             EthApp_SetCapture(1);
-            LOG_Printf("CAPTURE ON -> %s:7778 (EthLab)\r\n", ip);
         } else if (strncmp(m, "off", 3) == 0) {
             EthApp_SetCapture(0);
             LOG_Printf("CAPTURE OFF\r\n");
@@ -196,6 +206,9 @@ static void cmd_lcd(const char *args);
 static void cmd_touch(const char *args);
 static void cmd_beep(const char *args);
 static void cmd_mpu(const char *args);
+static void cmd_ver(const char *args);
+static void cmd_echo(const char *args);
+static void cmd_stream(const char *args);
 #if CRASH_INJECT_ENABLE
 static void cmd_crash(const char *args);
 #endif
@@ -211,43 +224,47 @@ static void cmd_tcp(const char *args)
 }
 
 static const cmd_entry_t cmd_table[] = {
-    {"help",         "Show command help", cmd_help},
-    {"info",         "System info (version/kernel/tasks)", cmd_info},
-    {"reset",        "Software reset", cmd_reset},
-    {"led",          "LED control (on/off/toggle/blink)", cmd_led},
-    {"taskstats",    "Task list & stack usage", cmd_taskstats},
-    {"ota",          "Enter BOOT upgrade mode", cmd_ota},
-    {"sysmon",       "System monitor report", cmd_sysmon},
-    {"la_start",     "LA start (timestamp mode)", cmd_la_start},
-    {"la_stop",      "LA stop", cmd_la_stop},
-    {"la_first",     "Show first sample", cmd_la_first},
-    {"la_trig",      "Configure trigger", cmd_la_trig},
-    {"la_dma_start", "Start DMA sampling <rate>", cmd_la_dma_start},
-    {"la_dma_stop",  "Stop DMA sampling", cmd_la_dma_stop},
-    {"la_dump",      "Export samples <count>", cmd_la_dump},
-    {"la_dma_stat",  "DMA sampling stats", cmd_la_dma_stat},
-    {"la_info",      "LA info", cmd_la_info},
-    {"la_state",     "LA state", cmd_la_state},
-    {"la_peek",      "Peek sample at index", cmd_la_peek},
-    {"sg_uart_start", "UART generator <baud> <text> <ms>", cmd_sg_uart_start},
-    {"tcp",          "TCP console status (port 9000)", cmd_tcp},
-    {"net",          "ETH status / ping <ip>", cmd_net},
-    {"sg_uart_stop", "Stop UART generator", cmd_sg_uart_stop},
-    {"sg_uart_hex",  "UART hex frame generator", cmd_sg_uart_hex},
-    {"sg_spi_start", "SPI generator <hex> <ms>", cmd_sg_spi_start},
-    {"sg_spi_stop",  "Stop SPI generator", cmd_sg_spi_stop},
-    {"sg_i2c_start", "I2C generator <addr> <hex> <ms>", cmd_sg_i2c_start},
-    {"sg_i2c_stop",  "Stop I2C generator", cmd_sg_i2c_stop},
-    {"sg_i2c_complex","I2C complex frame demo", cmd_sg_i2c_complex},
-    {"ota_rbtest",   "OTA rollback self-test (danger)", cmd_ota_rbtest},
-    {"eb_stress",    "Event bus stress <n> <payload> <mode>", cmd_eb_stress},
-    {"lcd",          "LCD test/info <info|test|clear|bench|dir|bl>", cmd_lcd},
-    {"touch",        "Touch <info|cal|test>", cmd_touch},
-    {"beep",         "Buzzer beep <ms|test|off>", cmd_beep},
-    {"mpu",          "IMU MPU6050 <info|test|cal>", cmd_mpu},
+    {"help",         "Show command help", CMD_TRANSPORT_ALL, cmd_help},
+    {"info",         "System info (version/kernel/tasks)", CMD_TRANSPORT_ALL, cmd_info},
+    {"reset",        "Software reset", CMD_TRANSPORT_ALL, cmd_reset},
+    {"led",          "LED control (on/off/toggle/blink)", CMD_TRANSPORT_ALL, cmd_led},
+    {"taskstats",    "Task list & stack usage", CMD_TRANSPORT_ALL, cmd_taskstats},
+    {"ota",          "Enter BOOT upgrade mode", CMD_TRANSPORT_UART, cmd_ota},
+    {"sysmon",       "System monitor report", CMD_TRANSPORT_ALL, cmd_sysmon},
+    {"la_start",     "LA start (timestamp mode)", CMD_TRANSPORT_ALL, cmd_la_start},
+    {"la_stop",      "LA stop", CMD_TRANSPORT_ALL, cmd_la_stop},
+    {"la_first",     "Show first sample", CMD_TRANSPORT_ALL, cmd_la_first},
+    {"la_trig",      "Configure trigger", CMD_TRANSPORT_ALL, cmd_la_trig},
+    {"la_dma_start", "Start DMA sampling <rate>", CMD_TRANSPORT_ALL, cmd_la_dma_start},
+    {"la_dma_stop",  "Stop DMA sampling", CMD_TRANSPORT_ALL, cmd_la_dma_stop},
+    {"la_dump",      "Export samples <count>", CMD_TRANSPORT_ALL, cmd_la_dump},
+    {"la_dma_stat",  "DMA sampling stats", CMD_TRANSPORT_ALL, cmd_la_dma_stat},
+    {"la_info",      "LA info", CMD_TRANSPORT_ALL, cmd_la_info},
+    {"la_state",     "LA state", CMD_TRANSPORT_ALL, cmd_la_state},
+    {"la_peek",      "Peek sample at index", CMD_TRANSPORT_ALL, cmd_la_peek},
+    {"sg_uart_start", "UART generator <baud> <text> <ms>", CMD_TRANSPORT_ALL, cmd_sg_uart_start},
+    {"tcp",          "TCP console status (port 9000)", CMD_TRANSPORT_ALL, cmd_tcp},
+    {"net",          "ETH status / ping <ip>", CMD_TRANSPORT_ALL, cmd_net},
+    {"sg_uart_stop", "Stop UART generator", CMD_TRANSPORT_ALL, cmd_sg_uart_stop},
+    {"sg_uart_hex",  "UART hex frame generator", CMD_TRANSPORT_ALL, cmd_sg_uart_hex},
+    {"sg_spi_start", "SPI generator <hex> <ms>", CMD_TRANSPORT_ALL, cmd_sg_spi_start},
+    {"sg_spi_stop",  "Stop SPI generator", CMD_TRANSPORT_ALL, cmd_sg_spi_stop},
+    {"sg_i2c_start", "I2C generator <addr> <hex> <ms>", CMD_TRANSPORT_ALL, cmd_sg_i2c_start},
+    {"sg_i2c_stop",  "Stop I2C generator", CMD_TRANSPORT_ALL, cmd_sg_i2c_stop},
+    {"sg_i2c_complex","I2C complex frame demo", CMD_TRANSPORT_ALL, cmd_sg_i2c_complex},
+    {"ota_rbtest",   "OTA rollback self-test (danger)", CMD_TRANSPORT_UART, cmd_ota_rbtest},
+    {"eb_stress",    "Event bus stress <n> <payload> <mode>", CMD_TRANSPORT_ALL, cmd_eb_stress},
+    {"lcd",          "LCD test/info <info|test|clear|bench|dir|bl>", CMD_TRANSPORT_ALL, cmd_lcd},
+    {"touch",        "Touch <info|cal|test>", CMD_TRANSPORT_ALL, cmd_touch},
+    {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
+    {"mpu",          "IMU MPU6050 <info|test|cal>", CMD_TRANSPORT_ALL, cmd_mpu},
 #if CRASH_INJECT_ENABLE
-    {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", cmd_crash},
+    {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", CMD_TRANSPORT_UART, cmd_crash},
 #endif
+
+    {"ver",          "Firmware version", CMD_TRANSPORT_ALL, cmd_ver},
+    {"echo",         "Echo text (connectivity test)", CMD_TRANSPORT_ALL, cmd_echo},
+    {"stream",       "Telemetry stream <on|off> (TCP)", CMD_TRANSPORT_TCP, cmd_stream},
 };
 #define CMD_COUNT (sizeof(cmd_table) / sizeof(cmd_table[0]))
 
@@ -260,8 +277,8 @@ static char shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];
 static int  shell_hist_count = 0;
 static int  shell_hist_pos = -1;      /* -1 = 正在编辑新行 */
 
-/* ---------- ESC 序列状态机（方向键�?---------- */
-static int shell_esc_state = 0;       /* 0=普�?1=收到ESC 2=收到ESC[ */
+/* ---------- ESC 序列状态机（方向键）---------- */
+static int shell_esc_state = 0;       /* 0=普通 1=收到ESC 2=收到ESC[ */
 
 static void shell_prompt(void)
 {
@@ -301,7 +318,7 @@ static void shell_history_save(void)
     }
 }
 
-static void shell_history_nav(int dir)   /* -1 上一�? +1 下一�?*/
+static void shell_history_nav(int dir)   /* -1 上一行 +1 下一行*/
 {
     if (shell_hist_count == 0) return;
     if (dir < 0) {
@@ -328,7 +345,7 @@ static void shell_history_nav(int dir)   /* -1 上一�? +1 下一�?*/
     shell_redraw();
 }
 
-/* Tab 命令补全：唯一匹配补全，多匹配列出候�?*/
+/* Tab 命令补全：唯一匹配补全，多匹配列出候选*/
 static void shell_complete(void)
 {
     int wlen = 0;
@@ -339,22 +356,23 @@ static void shell_complete(void)
 
     int match_count = 0;
     int match_idx = -1;
-    for (size_t i = 0; i < CMD_COUNT; i++) {
-        if (strncmp(cmd_table[i].name, cmd_line, (size_t)wlen) == 0) {
+    for (uint32_t i = 0; i < Cmd_Count(); i++) {
+        const cmd_entry_t *e = Cmd_Get(i);
+        if (e != NULL && strncmp(e->name, cmd_line, (size_t)wlen) == 0) {
             match_count++;
             match_idx = (int)i;
         }
     }
     if (match_count == 1) {
-        strcpy(cmd_line, cmd_table[match_idx].name);
+        strcpy(cmd_line, Cmd_Get((uint32_t)match_idx)->name);
         cmd_len = (int)strlen(cmd_line);
         shell_redraw();
     } else if (match_count > 1) {
         LOG_Printf("\r\n");
-        for (size_t i = 0; i < CMD_COUNT; i++) {
-            if (strncmp(cmd_table[i].name, cmd_line, (size_t)wlen) == 0) {
-                LOG_Printf("  %-16s %s\r\n", cmd_table[i].name,
-                           cmd_table[i].brief);
+        for (uint32_t i = 0; i < Cmd_Count(); i++) {
+            const cmd_entry_t *e = Cmd_Get(i);
+            if (e != NULL && strncmp(e->name, cmd_line, (size_t)wlen) == 0) {
+                LOG_Printf("  %-16s %s\r\n", e->name, e->brief);
             }
         }
         shell_redraw();
@@ -362,44 +380,31 @@ static void shell_complete(void)
 }
 
 /* ================== 命令执行 ================== */
+/* UART adapter output: route LOG_Printf to debug UART */
+static void shell_uart_out(cmd_ctx_t *ctx, const char *s, uint16_t len)
+{
+    (void)ctx;
+    LOG_WriteRaw(s, len);
+}
+
+/* Execute a line via the unified command framework (UART ctx) */
 static void shell_execute(void)
 {
-    if (cmd_len == 0) return;
-
-    /* 拆分命令名与参数 */
-    char cmd[32], *args = NULL;
-    int i = 0;
-    while (i < cmd_len && !isspace((unsigned char)cmd_line[i]) && (i < (int)sizeof(cmd) - 1)) {
-        cmd[i] = cmd_line[i];
-        i++;
+    cmd_ctx_t ctx;
+    if (cmd_len == 0) {
+        return;
     }
-    cmd[i] = '\0';
-
-    if (i < cmd_len) {
-        args = &cmd_line[i];
-        while (*args && isspace((unsigned char)*args)) args++;
-        if (*args == '\0') args = NULL;
-    }
-
-    const cmd_entry_t *p = NULL;
-    for (size_t n = 0; n < CMD_COUNT; n++) {
-        if (strcmp(cmd, cmd_table[n].name) == 0) {
-            p = &cmd_table[n];
-            break;
-        }
-    }
-
-    if (p) {
-        p->func(args);
-    } else {
-        LOG_Printf("Unknown command: %s (type 'help' for list)\r\n", cmd);
-    }
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.transport = CMD_TRANSPORT_UART;
+    ctx.out = shell_uart_out;
+    Cmd_DispatchLine(cmd_line, &ctx);
 }
+
 
 /* 处理每个接收字符 */
 void Shell_ProcessChar(uint8_t ch)
 {
-    /* ESC 序列状态机（方向键�?*/
+    /* ESC 序列状态机（方向键）*/
     if (shell_esc_state == 1) {
         shell_esc_state = (ch == '[') ? 2 : 0;
         return;
@@ -416,7 +421,7 @@ void Shell_ProcessChar(uint8_t ch)
     }
 
     if (ch == '\r' || ch == '\n') {
-        /* 回车执行：换�?�?存历�?�?执行 �?分隔�?�?提示�?*/
+        /* 回车执行：换行 → 存历史 → 执行 → 分隔行 → 提示符*/
         LOG_Printf("\r\n");
         shell_history_save();
         shell_execute();
@@ -451,10 +456,16 @@ void Shell_ProcessChar(uint8_t ch)
     }
 }
 
+/* Register the unified command table (shared by all adapters) */
+void Shell_Init(void)
+{
+    Cmd_Register(cmd_table, CMD_COUNT);
+}
+
 void ShellTaskFunction(void)
 {
     StreamBufferHandle_t rx = LOG_GetRxStream();
-    shell_prompt();   /* 初始提示�?*/
+    shell_prompt();   /* 初始提示符*/
     for (;;) {
         uint8_t ch;
         if (xStreamBufferReceive(rx, &ch, 1, portMAX_DELAY) > 0) {
@@ -467,22 +478,17 @@ void ShellTaskFunction(void)
 static void cmd_help(const char *args)
 {
     if (args != NULL && *args != '\0') {
-        /* help <cmd>：显示单命令说明 */
-        for (size_t i = 0; i < CMD_COUNT; i++) {
-            if (strcmp(cmd_table[i].name, args) == 0) {
-                LOG_Printf("%s - %s\r\n", cmd_table[i].name,
-                           cmd_table[i].brief);
+        for (uint32_t i = 0; i < Cmd_Count(); i++) {
+            const cmd_entry_t *e = Cmd_Get(i);
+            if (e != NULL && strcmp(e->name, args) == 0) {
+                LOG_Printf("%s - %s\r\n", e->name, e->brief);
                 return;
             }
         }
         LOG_Printf("Unknown command: %s\r\n", args);
         return;
     }
-    LOG_Printf("Available commands:\r\n");
-    LOG_Printf("  %-16s %s\r\n", "----------------", "----------------");
-    for (size_t i = 0; i < CMD_COUNT; i++) {
-        LOG_Printf("  %-16s %s\r\n", cmd_table[i].name, cmd_table[i].brief);
-    }
+    Cmd_Help(NULL);
     LOG_Printf("Tip: Tab = complete, Up/Down = history\r\n");
 }
 
@@ -493,6 +499,38 @@ static void cmd_info(const char *args)
     LOG_Printf("FreeRTOS %s\r\n", tskKERNEL_VERSION_NUMBER);
     LOG_Printf("Tasks: %ld\r\n", uxTaskGetNumberOfTasks());
     LOG_Printf("Free heap: %lu bytes\r\n", (unsigned long)xPortGetFreeHeapSize());
+}
+
+static void cmd_ver(const char *args)
+{
+    (void)args;
+    LOG_Printf("v%lu\r\n",
+               (unsigned long)(*(volatile uint32_t *)OTA_APP_VERSION_ADDR));
+}
+
+static void cmd_echo(const char *args)
+{
+    LOG_Printf("%s\r\n", args != NULL ? args : "");
+}
+
+static void cmd_stream(const char *args)
+{
+    if (Cmd_ActiveTransport() != CMD_TRANSPORT_TCP) {
+        LOG_Printf("stream: TCP console only\r\n");
+        return;
+    }
+    tcp_cli_t *cli = (tcp_cli_t *)Cmd_ActiveUser();
+    if (args != NULL && strncmp(args, "on", 2) == 0) {
+        if (TcpSvc_ClientSetStream(cli, 1) == 0) {
+            LOG_Printf("stream ON\r\n");
+        }
+    } else if (args != NULL && strncmp(args, "off", 3) == 0) {
+        if (TcpSvc_ClientSetStream(cli, 0) == 0) {
+            LOG_Printf("stream OFF\r\n");
+        }
+    } else {
+        LOG_Printf("Usage: stream <on|off>\r\n");
+    }
 }
 
 static void cmd_reset(const char *args)
@@ -589,7 +627,9 @@ static void cmd_la_trig(const char *args)
 {
     /* 格式：la_trig <type> <ch> [post] [cond_ch] [cond_level]
        type: 0=off 1=rising 2=falling 3=any
-       post: 触发后采样点数（默认 2048�?       cond_ch/cond_level: 条件通道与电平（可选，�?I2C START�?       la_trig 2 0 2048 1 1 = CH0 下降沿且 CH1 为高时触发） */
+       post: 触发后采样点数（默认 2048）
+       cond_ch/cond_level: 条件通道与电平（可选，如 I2C START）
+       la_trig 2 0 2048 1 1 = CH0 下降沿且 CH1 为高时触发） */
     la_trigger_cfg_t cfg;
     LA_Trigger_GetConfig(&cfg);
     int type = 0, channel = 0, post = 0, cond_ch = -1, cond_level = 1;
@@ -640,7 +680,7 @@ static void cmd_la_dma_stop(const char *args)
 
 static void cmd_la_dump(const char *args)
 {
-    /* 格式：la_dump <count>（默�?512，上限为缓冲深度），导出 DMA 采样�?*/
+    /* 格式：la_dump <count>（默认 512，上限为缓冲深度），导出 DMA 采样值*/
     uint32_t count = 512;
     if (args) count = (uint32_t)atoi(args);
     if (count == 0) count = 1;
@@ -662,8 +702,8 @@ static void cmd_la_dump(const char *args)
                    (unsigned long)buf[2], (unsigned long)buf[3],
                    (unsigned long)buf[4], (unsigned long)buf[5],
                    (unsigned long)buf[6], (unsigned long)buf[7]);
-        /* 限速：日志 TX �?115200 波特率排空（�?11.5 KB/s），
-         * 不延时会�?2 KB 流缓冲灌满并静默丢帧 */
+        /* 限速：日志 TX 按 115200 波特率排空（约 11.5 KB/s），
+         * 不延时会导致 2 KB 流缓冲灌满并静默丢帧 */
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
@@ -711,8 +751,9 @@ static void cmd_la_peek(const char *args)
 {
     (void)args;
     uint8_t states = LA_Sample_GetChannelStates();
-    LOG_Printf("states=0x%02X, ch0=%d, ch3=%d, la_samples=%lu\r\n",
-               states, (states & 0x01) ? 1 : 0, la_ch3_state, la_samples);
+    LOG_Printf("states=0x%02X, ch0=%d, ch3=%lu, la_samples=%lu\r\n",
+               states, (states & 0x01) ? 1 : 0,
+               (unsigned long)la_ch3_state, la_samples);
 }
 
 static void cmd_sg_uart_start(const char *args)
@@ -816,8 +857,8 @@ static void cmd_ota_rbtest(const char *args)
     Ota_ForceRollbackTest();
 }
 
-/* ================== IMU ���� ==================
- * �÷���mpu <info|test|cal> */
+/* ================== IMU 命令 ==================
+ * 用法：mpu <info|test|cal> */
 static void cmd_mpu(const char *args)
 {
     const imu_svc_state_t *s = ImuSvc_GetState();
@@ -849,8 +890,8 @@ static void cmd_mpu(const char *args)
     }
     LOG_Printf("Usage: mpu <info|test|cal>\r\n");
 }
-/* ================== ���������� ==================
- * �÷���beep [<ms>|test|off] */
+/* ================== 蜂鸣器命令 ==================
+ * 用法：beep [<ms>|test|off] */
 static void cmd_beep(const char *args)
 {
     if (args == NULL || strcmp(args, "test") == 0) {
@@ -868,8 +909,8 @@ static void cmd_beep(const char *args)
     Buzzer_Beep((uint16_t)ms);
     LOG_Printf("BEEP: %d ms\r\n", ms);
 }
-/* ================== ���������� ==================
- * �÷���touch <info|cal|test> */
+/* ================== 触摸屏命令 ==================
+ * 用法：touch <info|cal|test> */
 static void cmd_touch(const char *args)
 {
     if (args == NULL || strcmp(args, "info") == 0) {
@@ -909,15 +950,15 @@ static void cmd_touch(const char *args)
         return;
     }
     if (strcmp(args, "test") == 0) {
-        LcdUI_ShowPage(3);   /* TOUCH ����ҳ */
+        LcdUI_ShowPage(3);   /* TOUCH 测试ҳ */
         LOG_Printf("TOUCH: test page shown, touch the screen\r\n");
         return;
     }
     LOG_Printf("Usage: touch <info|cal|nudge <dx> <dy>|test>\r\n");
 }
-/* ================== LCD �������� ==================
- * �÷���lcd <info|test|clear|bench|dir <0-7>|bl <0|1>>
- * ���в��Ի��ƾ��� LcdUI ��Ⱦ�����ڴ���ִ�У������ˢ����ȫ���⡣ */
+/* ================== LCD 测试命令 ==================
+ * 用法：lcd <info|test|clear|bench|dir <0-7>|bl <0|1>>
+ * 所有测试绘制均在 LcdUI 渲Ⱦ任务内串行ִ行，与面板ˢ新完ȫ互斥。 */
 static uint8_t s_lcd_dir = 0;
 static uint16_t s_lcd_soak_sec = 30;
 
@@ -939,7 +980,7 @@ static void lcd_test_bench(void)
 static void lcd_test_dir(void)
 {
     BSP_LCD_ScanDir(s_lcd_dir);
-    /* �ػ�������ԣ��ı�ɫ��߿򣨺���/����/����/���ң�+ ����ʮ�� */
+    /* 重画方向测试：四边ɫ块边框（红上/绿下/蓝左/黄右）+ 中心ʮ字 */
     uint16_t w = BSP_LCD_GetWidth(), h = BSP_LCD_GetHeight();
     BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
     BSP_LCD_Fill(0, 0, (uint16_t)(w - 1), 9, BSP_LCD_COLOR_RED);
@@ -963,11 +1004,11 @@ static void lcd_test_pattern(void)
         BSP_LCD_COLOR_YELLOW, BSP_LCD_COLOR_CYAN, BSP_LCD_COLOR_MAGENTA,
         BSP_LCD_COLOR_WHITE, 0xFBE0
     };
-    /* �����������������ʾ�غ� */
+    /* 先清屏避免与既有显ʾ重合 */
     BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
     uint16_t w = BSP_LCD_GetWidth();
     uint16_t h = BSP_LCD_GetHeight();
-    /* �ϰ������� */
+    /* 上半屏彩条 */
     for (int i = 0; i < 8; i++) {
         BSP_LCD_Fill((uint16_t)(i * w / 8), 0,
                      (uint16_t)((i + 1) * w / 8 - 1),
@@ -997,7 +1038,7 @@ static void cmd_lcd(const char *args)
     if (strcmp(args, "clear") == 0) {
         LcdUI_EnterTest();
         LcdUI_RunTest(lcd_test_clear);
-        LcdUI_ExitTest();   /* �ػ����ָ��ɾ���ʾ */
+        LcdUI_ExitTest();   /* 重绘面板恢复干净显ʾ */
         LOG_Printf("LCD: cleared\r\n");
         return;
     }
@@ -1014,7 +1055,7 @@ static void cmd_lcd(const char *args)
     if (strcmp(args, "bench") == 0) {
         LcdUI_EnterTest();
         LcdUI_RunTest(lcd_test_bench);
-        /* ���ֲ��Ի��湩�۲죻�����ָ� HOME */
+        /* 保持测试画面供观察；按键恢复 HOME */
         return;
     }
     if (strncmp(args, "dir", 3) == 0) {
@@ -1060,9 +1101,11 @@ static void cmd_lcd(const char *args)
 }
 #if CRASH_INJECT_ENABLE
 /* ================== 崩溃注入（仅调试构建，用于验证纠错系统） ==================
- * 用法�? *   crash bus     -> 写非法地址触发 BusFault
+ * 用法：
+ *   crash bus     -> 写非法地址触发 BusFault
  *   crash undef   -> 跳转非法指令触发 UsageFault/HardFault
- *   crash stack   -> 无限递归触发 FreeRTOS 栈溢出检�? *   crash assert  -> 直接调用 ERR_HandleAssert 模拟 RTOS 断言失败 */
+ *   crash stack   -> 无限递归触发 FreeRTOS 栈溢出检测
+ *   crash assert  -> 直接调用 ERR_HandleAssert 模拟 RTOS 断言失败 */
 __attribute__((noinline)) static void crash_bus(void)
 {
     *(volatile uint32_t *)0xDEADBEEFu = 0x55u;
@@ -1079,7 +1122,7 @@ __attribute__((noinline)) static void crash_stack(int depth)
     pad[0] = (uint8_t)0xAA;
     (void)pad;
     if (depth > 0) {
-        taskYIELD();          /* 让调度器在递归间隙做栈溢出检�?*/
+        taskYIELD();          /* 让调度器在递归间隙做栈溢出检查*/
         crash_stack(depth - 1);
     }
 }
@@ -1096,11 +1139,11 @@ static void cmd_crash(const char *args)
     } else if (strcmp(args, "undef") == 0) {
         crash_undef();
     } else if (strcmp(args, "stack") == 0) {
-        crash_stack(200);     /* 128B×200 远超 2KB 任务栈，触发溢出检�?*/
+        crash_stack(200);     /* 128B×200 远超 2KB 任务栈，触发溢出检测*/
     } else if (strcmp(args, "assert") == 0) {
         ERR_HandleAssert(0xBADFu);
     } else if (strcmp(args, "irq") == 0) {
-        /* 使能并置位一个未实现处理器的中断，触�?Default_Handler 诊断 */
+        /* 使能并置位一个未实现处理器的中断，触发 Default_Handler 诊断 */
         NVIC_EnableIRQ(TIM4_IRQn);
         NVIC_SetPendingIRQ(TIM4_IRQn);
     } else if (strcmp(args, "unhandled") == 0) {
@@ -1113,9 +1156,11 @@ static void cmd_crash(const char *args)
 #endif
 
 /* ================== 事件总线极限负载测试 ==================
- * 用法�? *   eb_stress <count> [payload] [burst|steady]
- *   - burst ：挂�?eventBusTask 后连发，测纯发布速率与缓�?池上限；
- *   - steady：不挂起连发，测系统稳态吞吐（消费者实时消化）与丢包拐点�? * payload 为每条消息字节数�?= EVENT_BUS_MSG_MAX_PAYLOAD）�?*/
+ * 用法：
+ *   eb_stress <count> [payload] [burst|steady]
+ *   - burst ：挂起 eventBusTask 后连发，测纯发布速率与缓冲池上限；
+ *   - steady：不挂起连发，测系统稳态吞吐（消费者实时消化）与丢包拐点。
+ * payload 为每条消息字节数（≤ EVENT_BUS_MSG_MAX_PAYLOAD）。*/
 extern TaskHandle_t eventBusTaskHandle;
 
 static volatile uint32_t g_eb_processed = 0;
@@ -1148,7 +1193,7 @@ static void cmd_eb_stress(const char *args)
         g_eb_subscribed = 1;
     }
 
-    /* DWT 周期计数�?68MHz�?*/
+    /* DWT 周期计数（@168MHz）*/
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 
@@ -1179,7 +1224,7 @@ static void cmd_eb_stress(const char *args)
         vTaskResume(eventBusTaskHandle);
     }
 
-    /* 等待消费者消化完成（最�?5s�?*/
+    /* 等待消费者消化完成（最大 5s）*/
     uint32_t wait_ms = 0;
     while (g_eb_processed - proc0 < pub_ok && wait_ms < 5000) {
         vTaskDelay(pdMS_TO_TICKS(2));
@@ -1188,10 +1233,10 @@ static void cmd_eb_stress(const char *args)
     uint32_t proc_done = g_eb_processed - proc0;
     uint32_t lost_delta = EventBus_GetLostCount() - lost0;
 
-    /* 速率（整数计算，@168MHz�?*/
-    uint32_t cpmsg = pub_cycles / count;              /* cycles/msg（含失败路径�?*/
+    /* 速率（整数计算，@168MHz）*/
+    uint32_t cpmsg = pub_cycles / count;              /* cycles/msg（含失败路径）*/
     uint32_t pub_rate = cpmsg ? (168000000u / cpmsg) : 0;   /* 发布 msg/s */
-    uint32_t total_us = pub_cycles / 168u + wait_ms * 1000u; /* 总耗时（µs�?*/
+    uint32_t total_us = pub_cycles / 168u + wait_ms * 1000u; /* 总耗时（µs锛?*/
     uint64_t sys_rate64 = total_us ? ((uint64_t)proc_done * 1000000u / total_us) : 0;
     uint32_t sys_rate = (uint32_t)sys_rate64;
 

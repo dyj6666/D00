@@ -1,6 +1,7 @@
 #include "logger.h"
 #include "bsp.h"
 #include "app_config.h"
+#include "main.h"
 #include "cmsis_os.h"
 #include "stream_buffer.h"
 
@@ -42,6 +43,20 @@ static void logger_rx_isr(bsp_uart_id_t id, const uint8_t *data,
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+static log_sink_fn s_sink = NULL;
+
+void LOG_SetSink(log_sink_fn fn)
+{
+    s_sink = fn;
+}
+
+void LOG_WriteRaw(const char *s, uint16_t len)
+{
+    if (s != NULL && len > 0) {
+        xStreamBufferSend(global_tx_stream, s, len, 0);
+    }
+}
+
 void LOG_Init(void)
 {
     BSP_UART_Init(BSP_UART_DBG);
@@ -62,7 +77,13 @@ void LOG_Printf(const char *format, ...)
         len = (int)sizeof(buf) - 1;
     }
     if (len > 0) {
-        xStreamBufferSend(global_tx_stream, buf, len, 0);
+        /* 命令分发期间由统一命令框架把输出路由到当前适配器；
+         * 中断上下文（如崩溃记录）永远走原始串口，避免在 ISR 写网络。 */
+        if (s_sink != NULL && __get_IPSR() == 0U) {
+            s_sink(buf, (uint16_t)len);
+        } else {
+            LOG_WriteRaw(buf, (uint16_t)len);
+        }
     }
 }
 

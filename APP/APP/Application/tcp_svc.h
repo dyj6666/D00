@@ -18,4 +18,15 @@ typedef struct {
 void TcpSvc_Init(void);
 const tcp_svc_stat_t *TcpSvc_GetStat(void);
 
+/* TCP 客户端会话（不透明）：统一命令框架 ctx->user 指向它。
+ * shell 命令通过 TcpSvc_Client* 接口读取/控制，不直接访问内部。 */
+typedef struct tcp_cli tcp_cli_t;
+
+/* 供统一命令表使用：设置/查询当前 TCP 客户端的遥测流开关 */
+int     TcpSvc_ClientSetStream(tcp_cli_t *cli, uint8_t on);
+uint8_t TcpSvc_ClientStream(tcp_cli_t *cli);
+
+/* 取 TCP 对端 IPv4 地址（抓帧目标自动探测用），成功返回 0 */
+int TcpSvc_ClientPeerIP(tcp_cli_t *cli, uint8_t ip[4]);
+
 #endif

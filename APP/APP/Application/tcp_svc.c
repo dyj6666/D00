@@ -1,11 +1,13 @@
 /* ================================================================
- * TCP 服务实现：netconn 阻塞式服务器任务 + 每客户端处理任务
+ * TCP 服务：统一命令框架的 TCP 适配器（netconn API）
+ *   - 端口 9000，行协议（CR/LF 结束），最多 2 个并发客户端
+ *   - 命令统一由 cmd_shell 注册表分发，LOG_Printf 经路由写到连接
+ *   - stream on：每秒推送关键遥测（uptime/heap/tasks/ETH）
  * ================================================================ */
 #include "tcp_svc.h"
 
-#include <stdio.h>
-#include <stdlib.h>
 #include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "main.h"
@@ -18,13 +20,8 @@
 #include "lwip/pbuf.h"
 #include "lwip/ip_addr.h"
 #include "logger.h"
-#include "event_bus.h"
-#include "data_link.h"
 #include "eth_app.h"
-#include "imu_svc.h"
-#include "bsp_gpio.h"
-#include "buzzer_app.h"
-#include "err_mgr.h"
+#include "cmd_shell.h"
 
 #define TCP_SVC_PORT          9000
 #define TCP_SVC_BACKLOG       2
@@ -34,6 +31,13 @@
 #define TCP_SVC_MAX_LINE      160
 #define TCP_SVC_IDLE_MS       120000
 #define TCP_SVC_STREAM_MS     1000
+
+/* TCP 客户端会话：统一命令框架 ctx->user 指向它 */
+struct tcp_cli {
+    struct netconn *conn;
+    uint8_t         stream_on;
+    uint8_t         peer_ip[4];
+};
 
 static tcp_svc_stat_t s_stat;
 static osThreadId_t s_server_task = NULL;
@@ -63,7 +67,41 @@ static void svc_writef(struct netconn *conn, const char *fmt, ...)
     svc_write(conn, buf);
 }
 
-/* ---------------- 遥测 ---------------- */
+/* 统一命令框架适配器输出：LOG_Printf 路由到当前 TCP 连接 */
+static void tcp_ctx_out(cmd_ctx_t *ctx, const char *s, uint16_t len)
+{
+    struct tcp_cli *cli = (struct tcp_cli *)ctx->user;
+    if (cli != NULL && cli->conn != NULL && s != NULL && len > 0) {
+        netconn_write(cli->conn, s, len, NETCONN_COPY);
+    }
+}
+
+/* ---------------- 客户端会话接口（供统一命令表） ---------------- */
+
+int TcpSvc_ClientSetStream(tcp_cli_t *cli, uint8_t on)
+{
+    if (cli == NULL) {
+        return -1;
+    }
+    cli->stream_on = on ? 1u : 0u;
+    return 0;
+}
+
+uint8_t TcpSvc_ClientStream(tcp_cli_t *cli)
+{
+    return (cli != NULL) ? cli->stream_on : 0;
+}
+
+int TcpSvc_ClientPeerIP(tcp_cli_t *cli, uint8_t ip[4])
+{
+    if (cli == NULL || ip == NULL) {
+        return -1;
+    }
+    memcpy(ip, cli->peer_ip, 4);
+    return 0;
+}
+
+/* ---------------- 遥测流 ---------------- */
 
 static void tcp_stream_tick(struct netconn *conn)
 {
@@ -79,281 +117,33 @@ static void tcp_stream_tick(struct netconn *conn)
                st->ip[0], st->ip[1], st->ip[2], st->ip[3]);
 }
 
-/* ---------------- 命令 ---------------- */
-
-static void tcp_cmd_help(struct netconn *conn)
-{
-    svc_write(conn,
-              "help       list commands\r\n"
-              "info       system summary\r\n"
-              "ver        firmware version\r\n"
-              "sysmon     system monitor\r\n"
-              "taskstats  task list & stack usage\r\n"
-              "net        ethernet status\r\n"
-              "net cap    live capture to EthLab (UDP 7778)\r\n"
-              "led <on|off|toggle>\r\n"
-              "beep <ms>\r\n"
-              "mpu        IMU status\r\n"
-              "echo <txt> connectivity test\r\n"
-              "stream <on|off> periodic telemetry\r\n");
-}
-
-static void tcp_cmd_info(struct netconn *conn)
-{
-    uint32_t ver = *(volatile uint32_t *)OTA_APP_VERSION_ADDR;
-    uint32_t uptime = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
-    const eth_status_t *st = EthApp_GetStatus();
-    svc_writef(conn,
-               "Firmware v%lu | uptime %lus | heap %luB | tasks %u\r\n"
-               "ETH: %s %u.%u.%u.%u | RX %lu TX %lu\r\n",
-               (unsigned long)ver, (unsigned long)(uptime / 1000u),
-               (unsigned long)xPortGetFreeHeapSize(),
-               (unsigned)uxTaskGetNumberOfTasks(),
-               st->link_up ? "UP" : "DOWN",
-               st->ip[0], st->ip[1], st->ip[2], st->ip[3],
-               (unsigned long)st->rx_packets,
-               (unsigned long)st->tx_packets);
-}
-
-static void tcp_cmd_sysmon(struct netconn *conn)
-{
-    svc_writef(conn,
-               "HEAP %luB | TASKS %u | EVT_LOST %lu | CMD_LOST %lu | TX_LOST %lu\r\n"
-               "CRASH_SEQ %lu | IWDG active\r\n",
-               (unsigned long)xPortGetFreeHeapSize(),
-               (unsigned)uxTaskGetNumberOfTasks(),
-               (unsigned long)EventBus_GetLostCount(),
-               (unsigned long)DataLink_GetCmdLostCount(),
-               (unsigned long)DataLink_GetTxLostCount(),
-               (unsigned long)ERR_GetCrashSeq());
-}
-
-static void tcp_cmd_taskstats(struct netconn *conn)
-{
-    UBaseType_t size = uxTaskGetNumberOfTasks();
-    TaskStatus_t *arr = pvPortMalloc(size * sizeof(TaskStatus_t));
-    if (arr == NULL) {
-        svc_write(conn, "(no memory)\r\n");
-        return;
-    }
-    size = uxTaskGetSystemState(arr, size, NULL);
-    svc_write(conn, "Task\tState\tPrio\tStack\t#\r\n");
-    for (UBaseType_t i = 0; i < size; i++) {
-        char st = 'X';
-        switch (arr[i].eCurrentState) {
-            case eRunning:   st = 'R'; break;
-            case eBlocked:   st = 'B'; break;
-            case eSuspended: st = 'S'; break;
-            case eDeleted:   st = 'D'; break;
-            default:         break;
-        }
-        svc_writef(conn, "%-12s\t%c\t%u\t%u\t%u\r\n",
-                   arr[i].pcTaskName, st,
-                   (unsigned)arr[i].uxCurrentPriority,
-                   (unsigned)arr[i].usStackHighWaterMark,
-                   (unsigned)arr[i].xTaskNumber);
-    }
-    vPortFree(arr);
-}
-
-static void tcp_cmd_net(struct netconn *conn, const char *args)
-{
-    if (strncmp(args, "cap ", 4) == 0 || strcmp(args, "cap") == 0) {
-        const char *m = args + 4;
-        while (*m == ' ') {
-            m++;
-        }
-        if (strcmp(m, "on") == 0 || strcmp(m, "all") == 0 ||
-            strcmp(m, "1") == 0) {
-            ip_addr_t peer;
-            u16_t peer_port = 0;
-            if (netconn_peer(conn, &peer, &peer_port) != ERR_OK) {
-                svc_write(conn, "cap: cannot read peer addr\r\n");
-                return;
-            }
-            EthApp_SetCapturePeer(ip_2_ip4(&peer));
-            EthApp_SetCapture(1);
-            svc_writef(conn, "CAPTURE ON -> %s:7778\r\n",
-                       ipaddr_ntoa(&peer));
-        } else if (strcmp(m, "off") == 0 || strcmp(m, "0") == 0) {
-            EthApp_SetCapture(0);
-            svc_write(conn, "CAPTURE OFF\r\n");
-        } else {
-            EthApp_RefreshStatus();
-            const eth_status_t *st = EthApp_GetStatus();
-            (void)st;
-            svc_writef(conn,
-                       "CAPTURE %s | SENT %lu DROP %lu | link %s %u.%u.%u.%u\r\n"
-                       "Usage: net cap <on|off>\r\n",
-                       EthApp_GetCaptureOn() ? "ON" : "OFF",
-                       (unsigned long)EthApp_GetCapSent(),
-                       (unsigned long)EthApp_GetCapDrop(),
-                       st->link_up ? "UP" : "DOWN",
-                       st->ip[0], st->ip[1], st->ip[2], st->ip[3]);
-        }
-        return;
-    }
-    if (strncmp(args, "dbg ", 4) == 0 || strcmp(args, "dbg") == 0) {
-        const char *m = args + 4;
-        while (*m == ' ') {
-            m++;
-        }
-        if (strcmp(m, "all") == 0 || strcmp(m, "tx") == 0 ||
-            strcmp(m, "1") == 0 || strcmp(m, "on") == 0) {
-            EthApp_SetTxDbg(1);
-            EthApp_SetRxDbg(strcmp(m, "all") == 0 ? 1 : 0);
-            svc_writef(conn, "TX debug ON%s\r\n",
-                       strcmp(m, "all") == 0 ? ", RX debug ON" : "");
-        } else if (strcmp(m, "rx") == 0) {
-            EthApp_SetTxDbg(0);
-            EthApp_SetRxDbg(1);
-            svc_write(conn, "RX debug ON\r\n");
-        } else {
-            EthApp_SetTxDbg(0);
-            EthApp_SetRxDbg(0);
-            svc_write(conn, "frame debug OFF\r\n");
-        }
-        return;
-    }
-    if (strncmp(args, "ip ", 3) == 0) {
-        const char *ip = args + 3;
-        while (*ip == ' ') {
-            ip++;
-        }
-        if (EthApp_SetStaticIP(ip) == 0) {
-            svc_writef(conn, "IP set to %s/24\r\n", ip);
-        } else {
-            svc_write(conn, "Invalid IP\r\n");
-        }
-        return;
-    }
-    EthApp_RefreshStatus();
-    const eth_status_t *st = EthApp_GetStatus();
-    svc_writef(conn,
-               "Link %s | IP %u.%u.%u.%u | GW %u.%u.%u.%u\r\n"
-               "MAC %02X:%02X:%02X:%02X:%02X:%02X | RX %lu TX %lu | UP %lus\r\n"
-               "CAP %s | SENT %lu DROP %lu\r\n",
-               st->link_up ? "UP" : "DOWN",
-               st->ip[0], st->ip[1], st->ip[2], st->ip[3],
-               st->gw[0], st->gw[1], st->gw[2], st->gw[3],
-               st->mac[0], st->mac[1], st->mac[2],
-               st->mac[3], st->mac[4], st->mac[5],
-               (unsigned long)st->rx_packets,
-               (unsigned long)st->tx_packets,
-               (unsigned long)st->link_uptime_s,
-               EthApp_GetCaptureOn() ? "ON" : "OFF",
-               (unsigned long)EthApp_GetCapSent(),
-               (unsigned long)EthApp_GetCapDrop());
-}
-
-static void tcp_cmd_led(struct netconn *conn, const char *arg)
-{
-    if (strcmp(arg, "on") == 0) {
-        BSP_LED_Set(0, 1);
-        svc_write(conn, "LED ON\r\n");
-    } else if (strcmp(arg, "off") == 0) {
-        BSP_LED_Set(0, 0);
-        svc_write(conn, "LED OFF\r\n");
-    } else if (strcmp(arg, "toggle") == 0) {
-        BSP_LED_Toggle(0);
-        svc_write(conn, "LED TOGGLED\r\n");
-    } else {
-        svc_write(conn, "Usage: led <on|off|toggle>\r\n");
-    }
-}
-
-static void tcp_cmd_beep(struct netconn *conn, const char *arg)
-{
-    unsigned long ms = 200;
-    if (arg[0] != '\0') {
-        char *end = NULL;
-        ms = strtoul(arg, &end, 10);
-        if (end == arg) {
-            svc_write(conn, "Usage: beep <ms>\r\n");
-            return;
-        }
-    }
-    Buzzer_Beep((uint16_t)ms);
-    svc_writef(conn, "BEEP %lu ms\r\n", ms);
-}
-
-static void tcp_cmd_mpu(struct netconn *conn)
-{
-    const imu_svc_state_t *s = ImuSvc_GetState();
-    svc_writef(conn,
-               "MPU: ready=%u samples=%lu faults=%lu\r\n"
-               "R=%+.2f P=%+.2f Y=%+.2f deg\r\n"
-               "A=(%+.3f,%+.3f,%+.3f)g G=(%+.2f,%+.2f,%+.2f)dps T=%+.1fC\r\n",
-               (unsigned)s->ready, (unsigned long)s->sample_count,
-               (unsigned long)s->fault_count,
-               (double)s->roll, (double)s->pitch, (double)s->yaw,
-               (double)s->ax, (double)s->ay, (double)s->az,
-               (double)s->gx, (double)s->gy, (double)s->gz,
-               (double)s->temp);
-}
-
-static void tcp_dispatch(struct netconn *conn, const char *line, uint8_t *stream_on)
-{
-    const char *args = line;
-    while (*args == ' ') {
-        args++;
-    }
-    char cmd[24];
-    size_t n = 0;
-    while (args[n] != '\0' && args[n] != ' ' && n < sizeof(cmd) - 1) {
-        cmd[n] = args[n];
-        n++;
-    }
-    cmd[n] = '\0';
-    const char *rest = args + n;
-    while (*rest == ' ') {
-        rest++;
-    }
-
-    if (strcmp(cmd, "help") == 0) {
-        tcp_cmd_help(conn);
-    } else if (strcmp(cmd, "info") == 0) {
-        tcp_cmd_info(conn);
-    } else if (strcmp(cmd, "ver") == 0) {
-        svc_writef(conn, "v%lu\r\n",
-                   (unsigned long)(*(volatile uint32_t *)OTA_APP_VERSION_ADDR));
-    } else if (strcmp(cmd, "sysmon") == 0) {
-        tcp_cmd_sysmon(conn);
-    } else if (strcmp(cmd, "taskstats") == 0) {
-        tcp_cmd_taskstats(conn);
-    } else if (strcmp(cmd, "net") == 0) {
-        tcp_cmd_net(conn, rest);
-    } else if (strcmp(cmd, "led") == 0) {
-        tcp_cmd_led(conn, rest);
-    } else if (strcmp(cmd, "beep") == 0) {
-        tcp_cmd_beep(conn, rest);
-    } else if (strcmp(cmd, "mpu") == 0) {
-        tcp_cmd_mpu(conn);
-    } else if (strcmp(cmd, "echo") == 0) {
-        svc_writef(conn, "%s\r\n", rest);
-    } else if (strcmp(cmd, "stream") == 0) {
-        if (strncmp(rest, "on", 2) == 0) {
-            *stream_on = 1;
-            svc_write(conn, "stream ON\r\n");
-        } else if (strncmp(rest, "off", 3) == 0) {
-            *stream_on = 0;
-            svc_write(conn, "stream OFF\r\n");
-        } else {
-            svc_write(conn, "Usage: stream <on|off>\r\n");
-        }
-    } else if (cmd[0] != '\0') {
-        svc_writef(conn, "Unknown: %s (type help)\r\n", cmd);
-    }
-}
-
 /* ---------------- 客户端处理 ---------------- */
 
 static void tcp_client_task(void *arg)
 {
     struct netconn *conn = (struct netconn *)arg;
+    struct tcp_cli cli;
+    cmd_ctx_t ctx;
     char line[TCP_SVC_MAX_LINE];
     size_t line_len = 0;
-    uint8_t stream_on = 0;
+
+    memset(&cli, 0, sizeof(cli));
+    cli.conn = conn;
+
+    ip_addr_t peer;
+    u16_t peer_port = 0;
+    if (netconn_peer(conn, &peer, &peer_port) == ERR_OK) {
+        const ip4_addr_t *p4 = ip_2_ip4(&peer);
+        cli.peer_ip[0] = ip4_addr1(p4);
+        cli.peer_ip[1] = ip4_addr2(p4);
+        cli.peer_ip[2] = ip4_addr3(p4);
+        cli.peer_ip[3] = ip4_addr4(p4);
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.transport = CMD_TRANSPORT_TCP;
+    ctx.user = &cli;
+    ctx.out = tcp_ctx_out;
 
     svc_write(conn, "D00 Embedded Platform TCP Console\r\n");
     svc_write(conn, "Type 'help' for commands.\r\n> ");
@@ -362,7 +152,7 @@ static void tcp_client_task(void *arg)
         struct pbuf *p = NULL;
         err_t err = netconn_recv_tcp_pbuf(conn, &p);
         if (err == ERR_TIMEOUT) {
-            if (stream_on) {
+            if (cli.stream_on) {
                 tcp_stream_tick(conn);
                 svc_write(conn, "> ");
             }
@@ -395,7 +185,7 @@ static void tcp_client_task(void *arg)
                     l--;
                 }
                 line[l] = '\0';
-                tcp_dispatch(conn, line, &stream_on);
+                Cmd_DispatchLine(line, &ctx);
                 size_t consumed = (size_t)(nl - line) + 1;
                 line_len -= consumed;
                 memmove(line, nl + 1, line_len);
@@ -404,9 +194,8 @@ static void tcp_client_task(void *arg)
         pbuf_free(p);
         svc_write(conn, "> ");
 
-        /* 流模式用 1s 超时驱动遥测；普通模式 120s 空闲断开 */
-        netconn_set_recvtimeout(conn, stream_on ? TCP_SVC_STREAM_MS
-                                               : TCP_SVC_IDLE_MS);
+        netconn_set_recvtimeout(conn, cli.stream_on ? TCP_SVC_STREAM_MS
+                                                    : TCP_SVC_IDLE_MS);
     }
 
     s_stat.clients--;

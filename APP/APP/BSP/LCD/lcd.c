@@ -1073,9 +1073,9 @@ void lcd_show_char(uint16_t x, uint16_t y, char chr, uint8_t size, uint8_t mode,
 
     chr = (char)(chr - ' ');
     switch (size) {
-        case 12: pfont = (uint8_t *)asc2_1206[chr]; w = 6;  h = 12; bpc = 2; break;
-        case 16: pfont = (uint8_t *)asc2_1608[chr]; w = 8;  h = 16; bpc = 2; break;
-        case 24: pfont = (uint8_t *)asc2_2412[chr]; w = 12; h = 24; bpc = 3; break;
+        case 12: pfont = (uint8_t *)asc2_1206[(uint8_t)chr]; w = 6;  h = 12; bpc = 2; break;
+        case 16: pfont = (uint8_t *)asc2_1608[(uint8_t)chr]; w = 8;  h = 16; bpc = 2; break;
+        case 24: pfont = (uint8_t *)asc2_2412[(uint8_t)chr]; w = 12; h = 24; bpc = 3; break;
         default: return;
     }
     if ((uint32_t)x + w > lcddev.width ||

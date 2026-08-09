@@ -1968,6 +1968,16 @@
               <FilePath>..\SystemServices\shell.c</FilePath>
             </File>
             <File>
+              <FileName>cmd_shell.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\cmd_shell.c</FilePath>
+            </File>
+            <File>
+              <FileName>cmd_shell.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\SystemServices\cmd_shell.h</FilePath>
+            </File>
+            <File>
               <FileName>event_bus.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\SystemServices\event_bus.c</FilePath>

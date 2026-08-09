@@ -76,7 +76,7 @@ static void ota_session_save(uint32_t slot, uint32_t version,
     bool ok = ota_flash_write(OTA_SESSION_BASE + slot * 32,
                               (const uint8_t *)&s, sizeof(s));
     if (!ok) {
-        LOG_Printf("OTA: sess save FAIL slot=%lu addr=0x%08X\r\n",
+        LOG_Printf("OTA: sess save FAIL slot=%lu addr=0x%08lX\r\n",
                    (unsigned long)slot,
                    (unsigned long)(OTA_SESSION_BASE + slot * 32));
     }
