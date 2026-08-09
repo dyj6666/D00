@@ -2,6 +2,7 @@
 #include "bsp_touch.h"
 #include "bsp_lcd.h"
 #include "lcd_ui.h"
+#include "kv_store.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "cmsis_os2.h"
@@ -204,6 +205,13 @@ void TouchSvc_Calibrate(void)
         cal.yc = pts[0].ry - cal.yfac * (int32_t)(pts[0].ly - 160);
         cal.valid = (cal.xfac != 0 && cal.yfac != 0) ? 1u : 0u;
         BSP_Touch_SetCal(&cal);
+        if (cal.valid) {
+            if (KV_Set(KV_KEY_TOUCH_CAL, &cal, sizeof(cal)) == 0) {
+                LOG_Printf("[TOUCH] cal saved to EEPROM\r\n");
+            } else {
+                LOG_Printf("[TOUCH] WARN cal save to EEPROM failed\r\n");
+            }
+        }
         LOG_Printf("[TOUCH] cal: done xfac=%ld yfac=%ld xc=%ld yc=%ld %s\r\n",
                    (long)cal.xfac, (long)cal.yfac, (long)cal.xc, (long)cal.yc,
                    cal.valid ? "OK" : "FAIL");
@@ -218,6 +226,16 @@ void TouchSvc_Calibrate(void)
 void TouchSvc_Init(void)
 {
     BSP_Touch_Init();
+    /* 从 EEPROM 恢复上次校准（若存在） */
+    bsp_touch_cal_t cal;
+    if (KV_Get(KV_KEY_TOUCH_CAL, &cal, sizeof(cal)) == (int)sizeof(cal) &&
+        cal.valid) {
+        BSP_Touch_SetCal(&cal);
+        LOG_Printf("[TOUCH] cal restored from EEPROM "
+                   "(xfac=%ld yfac=%ld xc=%ld yc=%ld)\r\n",
+                   (long)cal.xfac, (long)cal.yfac,
+                   (long)cal.xc, (long)cal.yc);
+    }
     if (s_task != NULL) return;
 
     osThreadAttr_t attr = {

@@ -25,6 +25,11 @@
 #include "eth_app.h"
 #include "tcp_svc.h"
 #include "cmd_shell.h"
+#include "kv_store.h"
+#include "bsp_eeprom.h"
+#include "bsp_mpu6050.h"
+#include "bsp_i2c.h"
+#include "i2c.h"
 #include "lwip/ip4_addr.h"
 #include "task.h"
 #include <ctype.h>
@@ -220,6 +225,7 @@ static void cmd_mpu(const char *args);
 static void cmd_ver(const char *args);
 static void cmd_echo(const char *args);
 static void cmd_stream(const char *args);
+static void cmd_kv(const char *args);
 #if CRASH_INJECT_ENABLE
 static void cmd_crash(const char *args);
 #endif
@@ -267,6 +273,7 @@ static const cmd_entry_t cmd_table[] = {
     {"eb_stress",    "Event bus stress <n> <payload> <mode>", CMD_TRANSPORT_ALL, cmd_eb_stress},
     {"lcd",          "LCD test/info <info|test|clear|bench|dir|bl>", CMD_TRANSPORT_ALL, cmd_lcd},
     {"touch",        "Touch <info|cal|test>", CMD_TRANSPORT_ALL, cmd_touch},
+    {"kv",           "EEPROM KV <scan|list|get|set|reset>", CMD_TRANSPORT_ALL, cmd_kv},
     {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
     {"mpu",          "IMU MPU6050 <info|test|cal>", CMD_TRANSPORT_ALL, cmd_mpu},
 #if CRASH_INJECT_ENABLE
@@ -746,6 +753,7 @@ static void cmd_touch(const char *args)
         if (cal.xfac != 0) cal.xc += (int32_t)dx * cal.xfac;
         if (cal.yfac != 0) cal.yc += (int32_t)dy * cal.yfac;
         BSP_Touch_SetCal(&cal);
+        (void)KV_Set(KV_KEY_TOUCH_CAL, &cal, sizeof(cal));
         LOG_Printf("TOUCH: nudge (%d,%d) -> xc=%ld yc=%ld\r\n",
                    dx, dy, (long)cal.xc, (long)cal.yc);
         return;
@@ -932,6 +940,7 @@ __attribute__((noinline)) static void crash_stack(int depth)
     }
 }
 
+
 static void cmd_crash(const char *args)
 {
     if (args == NULL) {
@@ -959,6 +968,84 @@ static void cmd_crash(const char *args)
     }
 }
 #endif
+
+/* ================== EEPROM KV（存储自检/调试） ================== */
+static void cmd_kv(const char *args)
+{
+    if (args == NULL || *args == '\0' || strncmp(args, "info", 4) == 0) {
+        LOG_Printf("KV: valid=%d count=%lu eeprom=%s mpu=%s\r\n",
+                   KV_Valid(), (unsigned long)KV_Count(),
+                   BSP_EEPROM_Probe() == 0 ? "OK" : "MISS",
+                   BSP_MPU6050_Check() == 0 ? "OK" : "MISS");
+        return;
+    }
+    if (strncmp(args, "scan", 4) == 0) {
+        LOG_Printf("I2C bus scan (7-bit):\r\n");
+        for (uint8_t bus = 1; bus <= 2; bus++) {
+            LOG_Printf("  I2C%u:", (unsigned)bus);
+            int lock = (bus == 1) ? BSP_I2C1_Lock(100) : BSP_I2C2_Lock(100);
+            if (lock == 0) {
+                I2C_HandleTypeDef *hi = (bus == 1) ? &hi2c1 : &hi2c2;
+                for (uint8_t a = 0x40; a <= 0x77; a++) {
+                    if (HAL_I2C_IsDeviceReady(hi, (uint16_t)(a << 1), 1,
+                                              100) == HAL_OK) {
+                        LOG_Printf(" 0x%02X", (unsigned)a);
+                    }
+                }
+                if (bus == 1) { BSP_I2C1_Unlock(); } else { BSP_I2C2_Unlock(); }
+            } else {
+                LOG_Printf(" lock-fail");
+            }
+            LOG_Printf("\r\n");
+        }
+        return;
+    }
+    if (strncmp(args, "get", 3) == 0) {
+        int key = atoi(args + 3);
+        uint8_t buf[20];
+        int n = KV_Get((uint8_t)key, buf, sizeof(buf));
+        if (n < 0) {
+            LOG_Printf("KV: key %d not found\r\n", key);
+        } else {
+            LOG_Printf("KV: key %d len=%d data=", key, n);
+            for (int i = 0; i < n; i++) {
+                LOG_Printf("%02X", buf[i]);
+            }
+            LOG_Printf("\r\n");
+        }
+        return;
+    }
+    if (strncmp(args, "set", 3) == 0) {
+        const char *p = args + 3;
+        int key = atoi(p);
+        while (*p == ' ' || *p == '\t') p++;
+        while ((*p >= '0' && *p <= '9') || *p == '-') p++;
+        while (*p == ' ' || *p == '\t') p++;
+        uint8_t buf[20];
+        uint16_t n = 0;
+        while (isxdigit((unsigned char)p[0]) && isxdigit((unsigned char)p[1])) {
+            unsigned int v = 0;
+            sscanf(p, "%2x", &v);
+            if (n < sizeof(buf)) {
+                buf[n++] = (uint8_t)v;
+            }
+            p += 2;
+        }
+        int r = KV_Set((uint8_t)key, buf, n);
+        LOG_Printf("KV: set key %d len=%u -> %d\r\n", key, (unsigned)n, r);
+        return;
+    }
+    if (strncmp(args, "erase", 5) == 0) {
+        int key = atoi(args + 5);
+        LOG_Printf("KV: erase key %d -> %d\r\n", key, KV_Erase((uint8_t)key));
+        return;
+    }
+    if (strncmp(args, "reset", 5) == 0) {
+        LOG_Printf("KV: reset -> %d\r\n", KV_Reset());
+        return;
+    }
+    LOG_Printf("Usage: kv <info|scan|get <key>|set <key> <hex>|erase <key>|reset>\r\n");
+}
 
 /* ================== 事件总线极限负载测试 ==================
  * 用法：

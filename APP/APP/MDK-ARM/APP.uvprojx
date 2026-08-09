@@ -2008,6 +2008,16 @@
               <FilePath>..\SystemServices\net_config.h</FilePath>
             </File>
             <File>
+              <FileName>kv_store.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\kv_store.c</FilePath>
+            </File>
+            <File>
+              <FileName>kv_store.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\SystemServices\kv_store.h</FilePath>
+            </File>
+            <File>
               <FileName>event_bus.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\SystemServices\event_bus.c</FilePath>
@@ -2171,6 +2181,26 @@
               <FileName>bsp_nvm.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\BSP\bsp_nvm.h</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_i2c.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_i2c.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_i2c.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\bsp_i2c.h</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_eeprom.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_eeprom.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_eeprom.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\bsp_eeprom.h</FilePath>
             </File>
             <File>
               <FileName>bsp_watchdog.c</FileName>

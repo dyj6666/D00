@@ -1681,3 +1681,25 @@ auto-stop）全部按设计工作。
   通过；`net ip 192.168.10.10` 保存→复位日志 `NVM cfg: saved IP` + `app ready
   (saved IP ...)`→TCP 可达；`net ip default`→复位恢复静态 192.168.1.10；
   D00Term 探测命中 192.168.10.10，无参 `tcp -x ver` 返回 v192。
+
+### 12.84 EEPROM 存储架构（驱动 + KV + 触摸校准，build 238~241）
+- **引脚排查（实测结论，纠正旧记录）**：
+  - 工程日志 12.6 曾记录"I2C1(PB8/PB9) 接板载 24C02"——**实测证伪**：
+    在 PB8/PB9 使能 I2C1 AF4 后整条 I2C1 总线故障（MPU6050 也掉线），
+    回退后恢复 → PB8/PB9 为 **CAN1_RX/TX（带收发器，输出推挽对打）**；
+  - 双总线扫描（0x40-0x77）：I2C1 仅 0x68（MPU6050）+ 0x77（疑似外接
+    BMP280 类）；I2C2（PB10/PB11）为空；**0x50 两总线均无应答 →
+    本板无可用板载 24C02**（或未贴片/损坏）。
+- **存储架构（分层，已实现）**：
+  - `BSP/bsp_i2c`：I2C1/I2C2 双总线互斥（HAL 非线程安全）；
+  - `BSP/bsp_eeprom`：AT24C02 驱动（0x50，256B，8B 页写、总线自恢复），
+    挂 **I2C2（PB10/PB11，空闲无冲突）**；
+  - `SystemServices/kv_store`：EEPROM KV（头 16B + 10 槽 ×24B，
+    key/len/crc16/data≤20B，任意字节就地改写）；
+  - APP 集成：`touch cal`/`touch nudge` 完成即写 KV（key1），
+    TouchSvc 上电恢复校准（工程日志 12.60 遗留项落地）；
+    `kv <info|scan|get|set|erase|reset>` 命令（含双总线地址扫描）。
+- **验证**：Keil/GCC 0 警告；OTA build 238→241 通过；MPU6050 总线正常
+  （0x68 应答）；KV 命令优雅降级（EEPROM 缺席时 valid=0，触摸校准回落内存态）。
+- **待办**：外接 AT24C02 模块至 PB10/PB11（I2C2，0x50）即可实机验证
+  KV 读写/掉电保持/触摸校准恢复全链路；0x77 器件待确认型号。

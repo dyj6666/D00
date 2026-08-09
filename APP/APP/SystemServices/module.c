@@ -17,6 +17,7 @@
 #include "tcp_svc.h"
 #include "cmd_shell.h"
 #include "shell.h"
+#include "kv_store.h"
 
 #include <string.h>
 
@@ -24,6 +25,7 @@
  * 依赖顺序：VAR -> DataLink -> LA_Buffer -> LA_Sample -> 应用模块 -> SysMon/DataAgent */
 static module_desc_t module_table[] = {
     MODULE_INIT("Cmd",    2,  Cmd_Init),
+    MODULE_INIT("KV",     3,  KV_Init),
     MODULE_INIT("Shell",  4,  Shell_Init),
     MODULE_INIT("VAR",       0,  VAR_Init),
     MODULE_INIT("DataLink", 10,  DataLink_Init),
