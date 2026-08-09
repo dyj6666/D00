@@ -15,6 +15,7 @@ CMD_OTA_DATA = 0x09
 CMD_OTA_END = 0x0A
 CMD_OTA_STATUS = 0x0B
 CMD_OTA_BOOT_STATUS = 0x0C   # BOOT 升级状态广播
+CMD_OTA_RESET = 0x0D         # 强制复位 OTA 会话（清下载会话槽）
 
 OTA_CHUNK_MAX = 240
 
@@ -45,6 +46,10 @@ def build_ota_data(offset: int, chunk: bytes) -> bytes:
 
 def build_ota_end() -> bytes:
     return build_frame(CMD_OTA_END)
+
+
+def build_ota_reset() -> bytes:
+    return build_frame(CMD_OTA_RESET)
 
 
 def build_ota_status() -> bytes:

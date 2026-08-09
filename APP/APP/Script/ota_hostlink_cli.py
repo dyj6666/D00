@@ -6,6 +6,7 @@
 
 用法:
     python ota_hostlink_cli.py [APP.bin] [version] [build_no] [port]
+    python ota_hostlink_cli.py --no-resume ...   # 强制全新下载（默认续传）
 
 安全说明:
     - 私钥仅从环境变量 OTA_PRIVKEY 注入（64 位十六进制 ECDSA 私钥）；
@@ -25,7 +26,7 @@ sys.path.insert(0, HOST_TOOL)
 from core.hostlink import (           # noqa: E402
     FrameParser, OTA_CHUNK_MAX,
     build_ota_begin, build_ota_data,
-    build_ota_end, build_ota_status,
+    build_ota_end, build_ota_status, build_ota_reset,
     CMD_OTA_BOOT_STATUS,
 )
 from core.ymodem_sender import encrypt_and_sign, derive_aes_key_from_uid  # noqa: E402
@@ -36,7 +37,9 @@ LEGACY_PRIVKEY = ("53360076d1539e52f9cd5cb9f1ca5076"
 
 
 def main() -> int:
-    args = sys.argv[1:]
+    raw_args = sys.argv[1:]
+    no_resume = "--no-resume" in raw_args
+    args = [a for a in raw_args if a != "--no-resume"]
     app_bin = args[0] if args else r"D:\GIT-SPACE\D00\APP\APP\MDK-ARM\Output\APP.bin"
     version = int(args[1]) if len(args) > 1 else 76
     build_no = int(args[2]) if len(args) > 2 else 56
@@ -83,6 +86,12 @@ def main() -> int:
                 time.sleep(0.002)
         return None
 
+    # 0) 强制全新下载：先复位设备端 OTA 会话（旧版本固件无此命令，忽略即可）
+    if no_resume:
+        print("[OTA] reset device OTA session ...")
+        cmd(build_ota_reset(), 0x0D, timeout=0.8, retries=2)
+        time.sleep(0.2)
+
     # 1) BEGIN
     print("[OTA] send BEGIN ...")
     r = cmd(build_ota_begin(version, len(pkg)), 0x08)
@@ -94,13 +103,16 @@ def main() -> int:
 
     # 2) 断点续传查询
     start_off = 0
-    r = cmd(build_ota_status(), 0x0B)
-    if r is not None:
-        st = r[5]
-        rx, total = struct.unpack("<II", r[6:14])
-        if st == 1 and 0 < rx < len(pkg):
-            start_off = rx
-            print(f"[OTA] resume from {rx} bytes")
+    if not no_resume:
+        r = cmd(build_ota_status(), 0x0B)
+        if r is not None:
+            st = r[5]
+            rx, total = struct.unpack("<II", r[6:14])
+            if st == 1 and 0 < rx < len(pkg):
+                start_off = rx
+                print(f"[OTA] resume from {rx} bytes")
+    else:
+        print("[OTA] fresh download (--no-resume)")
 
     # 3) DATA 分块
     for off in range(start_off, len(pkg), OTA_CHUNK_MAX):

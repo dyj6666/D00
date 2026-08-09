@@ -82,7 +82,7 @@ HOST 测试、发布固件崩溃后门扫描、工作流文件版本化检查。
 | 脚本 | 作用 | 关键参数 | 产出 |
 | --- | --- | --- | --- |
 | self_check.ps1 | 工具链/串口/约定一致性 + 编码/崩溃后门/版本单一事实源/可复现性/文档漂移检查 | `-TestHw` 探测 SWD | 退出码 0/1/2 |
-| auto_build.ps1 | Keil/GCC 构建 BOOT+APP | `-Project APP/BOOT/ALL` `-Toolchain Keil/GCC` `-Clean` | `workflow\logs\build_*.log` |
+| auto_build.ps1 | Keil/GCC 构建 BOOT+APP（**默认增量**：Keil `-b` / GCC ninja；`-Clean` 才全量） | `-Project APP/BOOT/ALL` `-Toolchain Keil/GCC` `-Clean` | `workflow\logs\build_*.log` |
 | auto_flash.ps1 | 生成带魔数镜像并 SWD 烧录 | `-SkipBoot -SkipApp -KeepImage -Version N` | `workflow\logs\flash.log` |
 | auto_verify.ps1 | 复位抓 COM9 日志并判定 | `-Seconds 25 -NoReset -SerialReset`（DAP-only 环境用串口复位） | `APP\_auto_boot.txt` |
 | auto_ota.ps1 | HOSTLINK 安全升级冒烟 | `-Version N -BuildNo N -Port COM13` | `workflow\logs\ota_hostlink.log` |
@@ -129,6 +129,8 @@ HOST 测试、发布固件崩溃后门扫描、工作流文件版本化检查。
 ## 七、常见问题
 
 - **UV4 构建超时**：关闭 Keil IDE 再跑（UV4.exe 与 IDE 共用进程名）。
+- **构建速度**：全链路默认增量（Keil `-b` + `-j0` 并行、GCC ninja 只编改动文件）；
+  改 `.h` 头文件会触发依赖文件重编属正常；确需全量加 `-Clean`。
 - **verify 报 MISSING**：确认 COM9 是调试串口、波特率 115200；或调整 `VerifyExpect`。
 - **flash 失败**：确认 SWD 线/供电/目标未占用；重试前先跑 `self_check.ps1 -TestHw`。
 - **OTA 拒绝降级**：`-Version` 必须大于等于板上当前版本。

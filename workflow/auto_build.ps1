@@ -27,7 +27,11 @@ function Build-Keil {
     param([string]$ProjectPath, [string]$Tag)
     $log = Join-Path $script:LogDir ("build_" + $Tag + "_keil.log")
     Write-Step ("Keil build " + $Tag)
-    $r = Invoke-UV4 -Project $ProjectPath -LogFile $log
+    if ($Clean) {
+        $r = Invoke-UV4 -Project $ProjectPath -LogFile $log -Rebuild
+    } else {
+        $r = Invoke-UV4 -Project $ProjectPath -LogFile $log
+    }
     $t = Test-KeilLog $log
     $ok = $t.Ok
     $report.stages[$Tag] = $(if ($ok) { "OK" } else { "FAIL" })

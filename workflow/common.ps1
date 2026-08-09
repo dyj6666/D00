@@ -151,12 +151,16 @@ function Invoke-UV4 {
     param(
         [string]$Project,
         [string]$LogFile,
-        [int]$TimeoutSec = 300
+        [int]$TimeoutSec = 300,
+        [switch]$Rebuild
     )
     $ErrorActionPreference = "Stop"
     Assert-File $Project "UV4 project"
     Remove-Item -LiteralPath $LogFile -Force -ErrorAction SilentlyContinue
-    $p = Start-Process -FilePath $script:UV4 -ArgumentList @("-j0", "-r", $Project, "-o", $LogFile) `
+    # Default: incremental build (-b). -Rebuild forces full rebuild (-r).
+    $mode = "-b"
+    if ($Rebuild) { $mode = "-r" }
+    $p = Start-Process -FilePath $script:UV4 -ArgumentList @("-j0", $mode, $Project, "-o", $LogFile) `
         -WindowStyle Hidden -PassThru
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {

@@ -45,7 +45,8 @@
 
 1. 环境自检：`workflow\self_check.ps1`（工具链/串口/硬件在线 + 源码编码/崩溃后门/
    版本单一事实源/可复现性/文档漂移一致性检查）
-2. 构建：`workflow\auto_build.ps1 -Project ALL -Toolchain Keil`（BOOT + APP 都必须过）
+2. 构建：`workflow\auto_build.ps1 -Project ALL -Toolchain Keil`（BOOT + APP 都必须过；
+   **默认增量** Keil `-b` / GCC ninja，确需全量时加 `-Clean`）
 3. 若硬件在线：`workflow\auto_flash.ps1`（SWD 烧 BOOT + 带魔数 APP 镜像，逐扇区擦写并校验）
 4. 日志验证：`workflow\auto_verify.ps1`（复位后抓 COM9，检查启动完成/ETH ready/OTA Agent ready，
    且无活动态 CRASH/硬错误；历史崩溃恢复记录只提醒、不计失败）

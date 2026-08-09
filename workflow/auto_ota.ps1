@@ -21,7 +21,7 @@ $otaLog = Join-Path $script:LogDir "ota_hostlink.log"
 Write-Step ("OTA smoke: version=" + $v + " build=" + $b + " port=" + $Port)
 $logger = Start-Com9Logger -OutFile $debugLog -Seconds $CaptureSeconds
 Start-Sleep -Seconds 2
-$r = Invoke-Exe -FilePath $script:Python -Arguments @($script:OtaCli, $script:AppBin, "$v", "$b", $Port) -LogFile $otaLog -TimeoutSec 900
+$r = Invoke-Exe -FilePath $script:Python -Arguments @($script:OtaCli, "--no-resume", $script:AppBin, "$v", "$b", $Port) -LogFile $otaLog -TimeoutSec 900
 try { $logger.WaitForExit(($CaptureSeconds + 30) * 1000) } catch {}
 Stop-Logger $logger
 
