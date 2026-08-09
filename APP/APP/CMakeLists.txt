@@ -92,6 +92,7 @@ if(CMAKE_CROSSCOMPILING)
     SystemServices/cmd_shell.c
     SystemServices/cmd_catalog.c
     SystemServices/cmd_can.c
+    SystemServices/net_config.c
     SystemServices/event_bus.c
     SystemServices/module.c
     SystemServices/sysmon.c
@@ -121,6 +122,7 @@ if(CMAKE_CROSSCOMPILING)
     Application/tcp_svc.c
     BSP/bsp_system.c
     BSP/bsp_uart.c
+    BSP/bsp_nvm.c
     BSP/bsp_watchdog.c
     BSP/bsp_rtc.c
     BSP/bsp_gpio.c

@@ -26,6 +26,7 @@
 #include "logger.h"
 #include "var_manager.h"
 #include "var_ids.h"
+#include "net_config.h"
 
 extern struct netif gnetif;   /* lwip.c 全局网络接口 */
 
@@ -33,6 +34,7 @@ static eth_status_t s_eth;
 static uint32_t s_link_start_ms = 0;
 static volatile uint8_t s_tx_dbg = 0;
 static volatile uint8_t s_rx_dbg = 0;
+static net_cfg_t s_boot_cfg;      /* 上电加载的持久化配置（tcpip 回调用） */
 
 /* ---------------- 实时抓帧通道（EthLab UDP :7778） ---------------- */
 #define ETH_CAP_PORT   7778
@@ -354,6 +356,17 @@ static void netif_set_addr_cb(void *arg)
     netif_set_addr(&gnetif, &a->ip, &a->mask, &a->gw);
 }
 
+/* tcpip 线程内执行：上电应用持久化配置 */
+static void eth_apply_cfg_cb(void *arg)
+{
+    const net_cfg_t *c = (const net_cfg_t *)arg;
+    ip4_addr_t ip, mask, gw;
+    IP4_ADDR(&ip, c->ip[0], c->ip[1], c->ip[2], c->ip[3]);
+    IP4_ADDR(&mask, c->mask[0], c->mask[1], c->mask[2], c->mask[3]);
+    IP4_ADDR(&gw, c->gw[0], c->gw[1], c->gw[2], c->gw[3]);
+    netif_set_addr(&gnetif, &ip, &mask, &gw);
+}
+
 int EthApp_SetStaticIP(const char *addr_str)
 {
     ip4_addr_t ip;
@@ -367,6 +380,40 @@ int EthApp_SetStaticIP(const char *addr_str)
         return -2;
     }
     return 0;
+}
+
+int EthApp_SetStaticIPPersist(const char *addr_str)
+{
+    ip4_addr_t ip;
+    if (addr_str == NULL || !ip4addr_aton(addr_str, &ip)) {
+        return -1;
+    }
+    s_net_addr.ip = ip;
+    IP4_ADDR(&s_net_addr.mask, 255, 255, 255, 0);
+    IP4_ADDR(&s_net_addr.gw, 0, 0, 0, 0);
+    if (tcpip_callback(netif_set_addr_cb, &s_net_addr) != ERR_OK) {
+        return -2;
+    }
+
+    net_cfg_t cfg;
+    cfg.ip[0] = ip4_addr1(&ip);
+    cfg.ip[1] = ip4_addr2(&ip);
+    cfg.ip[2] = ip4_addr3(&ip);
+    cfg.ip[3] = ip4_addr4(&ip);
+    cfg.mask[0] = 255; cfg.mask[1] = 255; cfg.mask[2] = 255; cfg.mask[3] = 0;
+    cfg.gw[0] = cfg.gw[1] = cfg.gw[2] = cfg.gw[3] = 0;
+    int r = NvConfig_Save(&cfg);
+    LOG_Printf("IP %u.%u.%u.%u %s\r\n",
+               (unsigned)cfg.ip[0], (unsigned)cfg.ip[1],
+               (unsigned)cfg.ip[2], (unsigned)cfg.ip[3],
+               (r == 0) ? "saved to flash" : "applied, save FAILED");
+    return 0;
+}
+
+int EthApp_SetStaticIPDefault(void)
+{
+    NvConfig_Clear();
+    return EthApp_SetStaticIP("192.168.1.10");
 }
 
 /* ---------------- UDP 诊断发送（raw API，checksum=0） ---------------- */
@@ -567,5 +614,14 @@ void EthApp_Init(void)
     } else {
         LOG_Printf("ETH  : WARN udp echo pcb alloc failed\r\n");
     }
-    LOG_Printf("ETH  : app ready (static IP 192.168.1.10/24)\r\n");
+    /* 网络配置持久化：上电应用上次保存的 IP（若有） */
+    NvConfig_Init();
+    if (NvConfig_Load(&s_boot_cfg)) {
+        tcpip_callback(eth_apply_cfg_cb, &s_boot_cfg);
+        LOG_Printf("ETH  : app ready (saved IP %u.%u.%u.%u/24)\r\n",
+                   (unsigned)s_boot_cfg.ip[0], (unsigned)s_boot_cfg.ip[1],
+                   (unsigned)s_boot_cfg.ip[2], (unsigned)s_boot_cfg.ip[3]);
+    } else {
+        LOG_Printf("ETH  : app ready (static IP 192.168.1.10/24)\r\n");
+    }
 }

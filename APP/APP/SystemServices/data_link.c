@@ -431,6 +431,12 @@ static void handle_command(const uint8_t *data, uint16_t len)
             break;
         }
 
+        case CMD_OTA_RESET: {
+            uint8_t st = Ota_Reset();
+            DataLink_SendFrame(CMD_OTA_RESET, &st, 1);
+            break;
+        }
+
         default:
             send_error_response(f.cmd, PROTO_ERR_UNKNOWN_CMD);
             break;

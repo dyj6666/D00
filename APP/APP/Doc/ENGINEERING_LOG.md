@@ -1657,3 +1657,27 @@ auto-stop）全部按设计工作。
   板子 IP 测试后已恢复 192.168.1.10。
 - **修复**：交互菜单选 UART 后原先直接取枚举第一个串口（可能非 COM9）——
   改为二次提示选择串口（默认优先 COM9），连接失败时提示可用串口清单。
+
+### 12.83 构建全增量 + IP 持久化 + ETH 同网段默认（v192/build 237）
+- **构建全增量（硬性要求）**：`Invoke-UV4` 默认 `-b`（只编改动文件）+ `-j0`
+  并行，`-Clean` 才全量 `-r`；GCC 走 ninja 增量。实测 BOOT+APP 全量约 8 分钟
+  → 增量约 21 秒（只改 1 个 .c 时）。
+- **IP 持久化（`net ip`）**：
+  - 新增 `BSP/bsp_nvm`（PARAM 扇区 11 flash 抽象：擦除/编程/读，互斥串行化）；
+  - 新增 `SystemServices/net_config`（日志式 NVM：32B 槽 ×128，magic+seq+CRC，
+    追加写免频繁擦除；满 128 次整扇区维护并保留 BOOT 参数双槽原样重写）；
+  - `net ip <a.b.c.d>` 立即生效并保存 flash；上电自动应用上次配置；
+    `net ip default` 清除并恢复出厂 192.168.1.10；
+  - **CRC 长度 bug**：初版 `NET_CFG_CRC_LEN=22` 把 crc 字段自身算入导致扫描
+    永远无效（复位后回默认），改为 20（magic..gw）后复位实测恢复成功。
+- **OTA 会话残留修复**：BOOT 升级提交成功后失效全部 DOWNLOAD 会话槽
+  （768×魔数写 0），杜绝"同版本+同尺寸"旧包续传混合（实测 err=3 根因）；
+  新增协议 `CMD_OTA_RESET`（0x0D）+ CLI `--no-resume`（先复位会话再全新下载），
+  auto_ota 默认走全新下载；版本升 v192。
+- **D00Term ETH 同网段**：自动枚举电脑物理网卡（过滤 VMware/ICS/APIPA），
+  依次探测"出厂 IP 可达→各网段 .10 可达→兜底首个网段"，无参 `tcp` 即连；
+  配合 `net ip` 持久化：UART 设置一次，之后 TCP 每次上电即用。
+- **验证**：Keil/GCC 0 警告；BOOT DAP 烧录通过；OTA v192/build 237 全新下载
+  通过；`net ip 192.168.10.10` 保存→复位日志 `NVM cfg: saved IP` + `app ready
+  (saved IP ...)`→TCP 可达；`net ip default`→复位恢复静态 192.168.1.10；
+  D00Term 探测命中 192.168.10.10，无参 `tcp -x ver` 返回 v192。

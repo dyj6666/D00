@@ -45,6 +45,8 @@
 - BACKUP 尾部 `0x0807FFF8`：有效魔数（BACKUP 区独立有效性，恢复时补写 RUN 尾部）。
 - PARAM 双份冗余（slot0/slot1，间距 1KB），CRC-32 只覆盖 `crc32` 字段之前的数据（避免自引用）。
 - DOWNLOAD 尾部 24KB 为会话槽区：`magic 0x4F54414D + version + total + received + crc32`，每块精确记录进度（覆盖 ≤184KB 固件）。
+- PARAM 区 0x080E1000 起 4KB 为 APP 网络配置 NVM 日志（`net ip` 持久化，
+  32B 槽 ×128，追加写；BOOT 升级提交后失效全部 DOWNLOAD 会话槽防旧包续传）。
 
 ---
 

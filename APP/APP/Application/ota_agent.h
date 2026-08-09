@@ -15,6 +15,8 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size);
 uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len);
 uint8_t Ota_End(void);
 uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total);
+/* 强制复位：回到 IDLE 并失效全部下载会话槽（配合 CLI --no-resume） */
+uint8_t Ota_Reset(void);
 
 /* 调试/测试：把参数区置为 PENDING+count=MAX，复位后 BOOT 将触发回滚 */
 void Ota_ForceRollbackTest(void);

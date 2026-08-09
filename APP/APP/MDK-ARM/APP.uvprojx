@@ -1998,6 +1998,16 @@
               <FilePath>..\SystemServices\cmd_can.h</FilePath>
             </File>
             <File>
+              <FileName>net_config.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\net_config.c</FilePath>
+            </File>
+            <File>
+              <FileName>net_config.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\SystemServices\net_config.h</FilePath>
+            </File>
+            <File>
               <FileName>event_bus.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\SystemServices\event_bus.c</FilePath>
@@ -2151,6 +2161,16 @@
               <FileName>bsp_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\bsp_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_nvm.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_nvm.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_nvm.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\bsp_nvm.h</FilePath>
             </File>
             <File>
               <FileName>bsp_watchdog.c</FileName>

@@ -36,6 +36,7 @@
 #define CMD_OTA_DATA        0x09
 #define CMD_OTA_END         0x0A
 #define CMD_OTA_STATUS      0x0B
+#define CMD_OTA_RESET       0x0D   /* 强制复位 OTA 会话（清下载会话槽） */
 #define CMD_ERROR           0xFE
 
 /* ---------------- 错误码 ---------------- */

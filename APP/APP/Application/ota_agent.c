@@ -100,6 +100,15 @@ static bool ota_session_latest(ota_session_t *out)
             best.received < best.total);
 }
 
+/* 失效全部会话槽：魔数写 0（1→0，无需擦除），约几十毫秒 */
+static void ota_session_clear(void)
+{
+    uint8_t zero[4] = {0, 0, 0, 0};
+    for (uint32_t i = 0; i < OTA_SESSION_SLOTS; i++) {
+        (void)ota_flash_write(OTA_SESSION_BASE + i * 32, zero, sizeof(zero));
+    }
+}
+
 /* shell "ota" 命令：写 BKP 升级标志并复位，触发 BOOT 升级模式 */
 static void handle_ota_start_msg(const message_t *msg)
 {
@@ -378,6 +387,16 @@ uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total)
     *state = ota_state;
     *received = ota_received;
     *total = ota_total;
+    return 0;
+}
+
+uint8_t Ota_Reset(void)
+{
+    ota_state = OTA_ST_IDLE;
+    ota_received = 0;
+    ota_total = 0;
+    ota_session_clear();
+    LOG_Printf("OTA: session reset (fresh download required)\r\n");
     return 0;
 }
 

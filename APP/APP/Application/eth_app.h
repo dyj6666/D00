@@ -39,6 +39,12 @@ int EthApp_Ping(const char *host, uint32_t timeout_ms);
  * 返回 0 成功 / -1 地址无效 / -2 回调投递失败 */
 int EthApp_SetStaticIP(const char *addr_str);
 
+/* 修改静态 IP 并持久化到 flash（上电自动恢复）；`net ip <a.b.c.d>` */
+int EthApp_SetStaticIPPersist(const char *addr_str);
+
+/* 恢复出厂默认 IP 192.168.1.10 并清除保存配置；`net ip default` */
+int EthApp_SetStaticIPDefault(void);
+
 /* 发送一帧 UDP（原始套接字，checksum=0，IPv4 合法）。返回 0 成功 / 负错误码 */
 int EthApp_UdpSend(const char *host, uint16_t port,
                    const uint8_t *data, uint16_t len);

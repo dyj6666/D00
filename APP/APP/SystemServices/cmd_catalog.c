@@ -88,11 +88,17 @@ static void cmd_net(const char *args)
         const char *ip = args + 3;
         while (*ip == ' ' || *ip == '\t') ip++;
         if (*ip == '\0') {
-            LOG_Printf("Usage: net ip <a.b.c.d>\r\n");
+            LOG_Printf("Usage: net ip <a.b.c.d> | default\r\n");
             return;
         }
-        if (EthApp_SetStaticIP(ip) == 0) {
-            LOG_Printf("IP set to %s/24 (no gw)\r\n", ip);
+        if (strcmp(ip, "default") == 0) {
+            EthApp_SetStaticIPDefault();
+            LOG_Printf("IP restored to default 192.168.1.10/24, "
+                       "saved config cleared\r\n");
+            return;
+        }
+        if (EthApp_SetStaticIPPersist(ip) == 0) {
+            LOG_Printf("IP set to %s/24 (saved to flash)\r\n", ip);
         } else {
             LOG_Printf("Invalid IP: %s\r\n", ip);
         }
