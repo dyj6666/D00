@@ -1,8 +1,8 @@
 #include "bsp_mpu6050.h"
+#include "bsp_i2c.h"
 #include "i2c.h"
 #include "FreeRTOS.h"
 #include "task.h"
-#include "semphr.h"
 
 /* ================================================================
  * MPU6050 驱动实现
@@ -23,14 +23,12 @@
 
 static uint16_t s_addr = MPU6050_ADDR;
 static mpu6050_cal_t s_cal;
-static SemaphoreHandle_t s_i2c_lock = NULL;
 
 /* ---------- 寄存器读写（带互斥 + 总线自恢复） ---------- */
 static uint8_t reg_op(uint8_t reg, uint8_t *data, uint16_t len, uint8_t is_write)
 {
     uint8_t ok = 1;
-    if (s_i2c_lock == NULL ||
-        xSemaphoreTake(s_i2c_lock, pdMS_TO_TICKS(50)) == pdTRUE) {
+    if (BSP_I2C1_Lock(50) == 0) {
         HAL_StatusTypeDef st;
         if (is_write) {
             st = HAL_I2C_Mem_Write(&hi2c1, s_addr, reg, I2C_MEMADD_SIZE_8BIT,
@@ -54,7 +52,7 @@ static uint8_t reg_op(uint8_t reg, uint8_t *data, uint16_t len, uint8_t is_write
             }
             if (st == HAL_OK) ok = 0;
         }
-        if (s_i2c_lock != NULL) xSemaphoreGive(s_i2c_lock);
+        BSP_I2C1_Unlock();
     }
     return ok;
 }
@@ -79,9 +77,7 @@ uint8_t BSP_MPU6050_Check(void)
 
 uint8_t BSP_MPU6050_Init(void)
 {
-    if (s_i2c_lock == NULL) {
-        s_i2c_lock = xSemaphoreCreateMutex();
-    }
+    BSP_I2C1_Init();
 
     s_addr = MPU6050_ADDR;
     if (BSP_MPU6050_Check()) {
