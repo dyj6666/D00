@@ -18,6 +18,12 @@
 /* ---- 键注册表：新增用户数据只需在这里登记一个键 ---- */
 #define USR_KEY_TOUCH_CAL   1   /* bsp_touch_cal_t（17B） */
 #define USR_KEY_NET_CFG     2   /* net_cfg_t（12B） */
+#define USR_KEY_DNS_SERVER  3   /* uint8_t[4] */
+#define USR_KEY_SNTP_SERVER 4   /* uint8_t[4] */
+#define USR_KEY_MQTT_BROKER 5   /* uint8_t[4]+port(2) */
+#define USR_KEY_DNS_SERVER  3   /* uint8_t[4] */
+#define USR_KEY_SNTP_SERVER 4   /* uint8_t[4] */
+#define USR_KEY_MQTT_BROKER 5   /* uint8_t[4]+port(2) */
 
 #define USR_EEPROM_SIZE     256
 #define USR_DATA_MAX        200  /* 单记录数据上限（还受剩余空间约束） */

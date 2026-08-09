@@ -20,6 +20,8 @@
 #include "lwip/pbuf.h"
 #include "lwip/err.h"
 #include "lwip/tcpip.h"
+#include "lwip/dhcp.h"
+#include "lwip/prot/dhcp.h"
 #include "cmsis_os2.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -35,6 +37,101 @@ static uint32_t s_link_start_ms = 0;
 static volatile uint8_t s_tx_dbg = 0;
 static volatile uint8_t s_rx_dbg = 0;
 static net_cfg_t s_boot_cfg;      /* 上电加载的持久化配置（tcpip 回调用） */
+static uint8_t  s_has_boot_cfg = 0;
+static uint8_t  s_dhcp_on = 0;
+static osTimerId_t s_dhcp_fb = NULL;
+
+/* ---------------- DHCP（动态/静态回退） ---------------- */
+static void eth_apply_cfg_cb(void *arg);   /* 见"运行时改 IP"节 */
+
+static void dhcp_start_cb(void *arg)
+{
+    (void)arg;
+    dhcp_start(&gnetif);
+}
+
+static void dhcp_stop_cb(void *arg)
+{
+    (void)arg;
+    dhcp_stop(&gnetif);
+}
+
+static void dhcp_fallback_cb(void *arg)
+{
+    (void)arg;
+    if (!s_dhcp_on) {
+        return;
+    }
+    struct dhcp *d = netif_dhcp_data(&gnetif);
+    if (d != NULL && d->state == DHCP_STATE_BOUND) {
+        return;
+    }
+    s_dhcp_on = 0;
+    tcpip_callback(dhcp_stop_cb, NULL);
+    if (!s_has_boot_cfg) {
+        net_cfg_t def;
+        memset(&def, 0, sizeof(def));
+        def.ip[0] = 192; def.ip[1] = 168; def.ip[2] = 1; def.ip[3] = 10;
+        def.mask[0] = 255; def.mask[1] = 255; def.mask[2] = 255;
+        s_boot_cfg = def;
+    }
+    tcpip_callback(eth_apply_cfg_cb, &s_boot_cfg);
+    LOG_Printf("ETH  : DHCP timeout, fallback %u.%u.%u.%u\r\n",
+               (unsigned)s_boot_cfg.ip[0], (unsigned)s_boot_cfg.ip[1],
+               (unsigned)s_boot_cfg.ip[2], (unsigned)s_boot_cfg.ip[3]);
+}
+
+int EthApp_DhcpStart(void)
+{
+    if (s_dhcp_on) {
+        return 0;
+    }
+    s_dhcp_on = 1;
+    tcpip_callback(dhcp_start_cb, NULL);
+    if (s_dhcp_fb == NULL) {
+        s_dhcp_fb = osTimerNew(dhcp_fallback_cb, osTimerOnce, NULL, NULL);
+    }
+    if (s_dhcp_fb != NULL) {
+        osTimerStart(s_dhcp_fb, ETH_DHCP_FALLBACK_MS);
+    }
+    return 0;
+}
+
+int EthApp_DhcpStop(void)
+{
+    if (!s_dhcp_on) {
+        return 0;
+    }
+    s_dhcp_on = 0;
+    if (s_dhcp_fb != NULL) {
+        osTimerStop(s_dhcp_fb);
+    }
+    tcpip_callback(dhcp_stop_cb, NULL);
+    tcpip_callback(eth_apply_cfg_cb, &s_boot_cfg);
+    return 0;
+}
+
+uint8_t EthApp_DhcpActive(void)
+{
+    return s_dhcp_on;
+}
+
+const char *EthApp_DhcpState(void)
+{
+    struct dhcp *d = netif_dhcp_data(&gnetif);
+    if (!s_dhcp_on || d == NULL) {
+        return "off";
+    }
+    switch (d->state) {
+        case DHCP_STATE_BOUND:       return "bound";
+        case DHCP_STATE_REQUESTING:
+        case DHCP_STATE_SELECTING:
+        case DHCP_STATE_REBOOTING:   return "requesting";
+        case DHCP_STATE_INIT:
+        case DHCP_STATE_BACKING_OFF: return "discovering";
+        default:                     return "in-progress";
+    }
+}
 
 /* ---------------- 实时抓帧通道（EthLab UDP :7778） ---------------- */
 #define ETH_CAP_PORT   7778
@@ -617,6 +714,7 @@ void EthApp_Init(void)
     /* 网络配置持久化：上电应用上次保存的 IP（若有） */
     NetConfig_Init();
     if (NetConfig_Load(&s_boot_cfg)) {
+        s_has_boot_cfg = 1;
         tcpip_callback(eth_apply_cfg_cb, &s_boot_cfg);
         LOG_Printf("ETH  : app ready (saved IP %u.%u.%u.%u/24)\r\n",
                    (unsigned)s_boot_cfg.ip[0], (unsigned)s_boot_cfg.ip[1],

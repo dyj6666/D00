@@ -16,6 +16,10 @@
 #include "eth_app.h"
 #include "tcp_svc.h"
 #include "icmp_svc.h"
+#include "dns_svc.h"
+#include "sntp_svc.h"
+#include "mqtt_svc.h"
+#include "http_svc.h"
 #include "cmd_shell.h"
 #include "shell.h"
 #include "usr_store.h"
@@ -28,6 +32,8 @@ static module_desc_t module_table[] = {
     MODULE_INIT("Cmd",    2,  Cmd_Init),
     MODULE_INIT("USR",    3,  UsrStore_Init),
     MODULE_INIT("Shell",  4,  Shell_Init),
+    MODULE_INIT("DNS",    5,  DnsSvc_Init),
+    MODULE_INIT("SNTP",   6,  SntpSvc_Init),
     MODULE_INIT("VAR",       0,  VAR_Init),
     MODULE_INIT("DataLink", 10,  DataLink_Init),
     MODULE_INIT("LA_Buffer",20,  LA_Buffer_Init),
@@ -42,6 +48,8 @@ static module_desc_t module_table[] = {
     MODULE_INIT("EthApp",   65,  EthApp_Init),
     MODULE_INIT("IcmpSvc",  66,  IcmpSvc_Init),
     MODULE_INIT("TcpSvc",   67,  TcpSvc_Init),
+    MODULE_INIT("MqttSvc",  68,  MqttSvc_Init),
+    MODULE_INIT("HttpSvc",  69,  HttpSvc_Init),
     MODULE_INIT("SysMon",   70,  SysMon_Init),
     MODULE_INIT("DataAgent",80,  DataAgent_Init),
 };

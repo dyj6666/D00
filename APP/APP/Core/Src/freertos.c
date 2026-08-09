@@ -21,6 +21,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "main.h"
+#include "usart.h"
 #include "cmsis_os.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -56,11 +57,11 @@
 /* USER CODE END Variables */
 /* Definitions for startupTask */
 osThreadId_t startupTaskHandle;
-const osThreadAttr_t startupTask_attributes = {
-  .name = "startupTask",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityHigh,
-};
+  const osThreadAttr_t startupTask_attributes = {
+    .name = "startupTask",
+    .stack_size = 1024 * 4,  /* MX_LWIP_Init(lwip_init+dns_init+ETH)调用链深 */
+    .priority = (osPriority_t) osPriorityHigh,
+  };
 /* Definitions for shellTask */
 osThreadId_t shellTaskHandle;
 const osThreadAttr_t shellTask_attributes = {
@@ -188,11 +189,11 @@ void MX_FREERTOS_Init(void) {
   * @retval None
   */
 /* USER CODE END Header_StartStartupTask */
-void StartStartupTask(void *argument)
-{
-  /* init code for LWIP */
-  MX_LWIP_Init();
-  /* USER CODE BEGIN StartStartupTask */
+  void StartStartupTask(void *argument)
+  {
+    /* init code for LWIP */
+    MX_LWIP_Init();
+    /* USER CODE BEGIN StartStartupTask */
   LOG_Init();
 
   /* 启动横幅：ASCII logo + 平台信息（与 BOOT 统一视觉风格）。

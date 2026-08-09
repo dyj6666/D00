@@ -122,6 +122,10 @@ if(CMAKE_CROSSCOMPILING)
     Application/eth_app.c
     Application/tcp_svc.c
     Application/icmp_svc.c
+    Application/dns_svc.c
+    Application/sntp_svc.c
+    Application/mqtt_svc.c
+    Application/http_svc.c
     BSP/bsp_system.c
     BSP/bsp_uart.c
     BSP/bsp_i2c.c

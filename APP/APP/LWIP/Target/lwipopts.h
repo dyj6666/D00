@@ -132,6 +132,10 @@
 #define MEMP_NUM_ARP_QUEUE          16
 #define LWIP_RAW                    1   /* ICMP ping（raw API） */
 #define LWIP_SOCKET                 0   /* 未用 POSIX socket：省 flash，服务用 netconn/raw */
+#define LWIP_DNS                    1   /* DNS 客户端（net dns resolve） */
+#define LWIP_MQTT                   1   /* MQTT 客户端（mqtt 服务，工业遥测） */
+#undef  MEMP_NUM_SYS_TIMEOUT
+#define MEMP_NUM_SYS_TIMEOUT        8   /* TCP+ARP+DHCP×2+DNS+MQTT 心跳等 */
 #undef  CHECKSUM_GEN_ICMP
 #define CHECKSUM_GEN_ICMP           1   /* F4 MAC 不卸载 ICMP 校验和，必须软件计算 */
 #undef  CHECKSUM_GEN_IP

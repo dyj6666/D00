@@ -108,6 +108,7 @@ SECTIONS
     . = ALIGN(4);
   } > CCMRAM
 
+
   /DISCARD/ :
   {
     libc.a (*)

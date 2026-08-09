@@ -111,15 +111,15 @@ typedef struct
   uint8_t buff[(ETH_RX_BUF_SIZE + 31) & ~31] __ALIGNED(32);
 } RxBuff_t;
 
-/* Memory Pool Declaration */
-#define ETH_RX_BUFFER_CNT             8U   /* 收包池 12→8：省 6KB SRAM，仍满足零拷贝 2x 描述符 */
-LWIP_MEMPOOL_DECLARE(RX_POOL, ETH_RX_BUFFER_CNT, sizeof(RxBuff_t), "Zero-copy RX PBUF pool");
+  /* Memory Pool Declaration */
+  #define ETH_RX_BUFFER_CNT             8U
+  LWIP_MEMPOOL_DECLARE(RX_POOL, ETH_RX_BUFFER_CNT, sizeof(RxBuff_t), "Zero-copy RX PBUF pool");
 
-/* Variable Definitions */
-static uint8_t RxAllocStatus;
+  /* Variable Definitions */
+  static uint8_t RxAllocStatus;
 
-ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT]; /* Ethernet Rx DMA Descriptors */
-ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT]; /* Ethernet Tx DMA Descriptors */
+  ETH_DMADescTypeDef  DMARxDscrTab[ETH_RX_DESC_CNT];
+  ETH_DMADescTypeDef  DMATxDscrTab[ETH_TX_DESC_CNT];
 
 /* USER CODE BEGIN 2 */
 
@@ -231,8 +231,8 @@ static void low_level_init(struct netif *netif)
 
   /* End ETH HAL Init */
 
-  /* Initialize the RX POOL */
-  LWIP_MEMPOOL_INIT(RX_POOL);
+    /* Initialize the RX POOL */
+    LWIP_MEMPOOL_INIT(RX_POOL);
 
 #if LWIP_ARP || LWIP_ETHERNET
 
@@ -529,7 +529,7 @@ err_t ethernetif_init(struct netif *netif)
 void pbuf_free_custom(struct pbuf *p)
 {
   struct pbuf_custom* custom_pbuf = (struct pbuf_custom*)p;
-  LWIP_MEMPOOL_FREE(RX_POOL, custom_pbuf);
+    LWIP_MEMPOOL_FREE(RX_POOL, custom_pbuf);
 
   /* If the Rx Buffer Pool was exhausted, signal the ethernetif_input task to
    * call HAL_ETH_GetRxDataBuffer to rebuild the Rx descriptors. */
@@ -635,7 +635,7 @@ void ethernet_link_thread(void* argument)
 void HAL_ETH_RxAllocateCallback(uint8_t **buff)
 {
 /* USER CODE BEGIN HAL ETH RxAllocateCallback */
-  struct pbuf_custom *p = LWIP_MEMPOOL_ALLOC(RX_POOL);
+    struct pbuf_custom *p = LWIP_MEMPOOL_ALLOC(RX_POOL);
   if (p)
   {
     /* Get the buff from the struct pbuf address. */

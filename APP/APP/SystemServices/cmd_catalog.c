@@ -25,6 +25,10 @@
 #include "eth_app.h"
 #include "tcp_svc.h"
 #include "icmp_svc.h"
+#include "dns_svc.h"
+#include "sntp_svc.h"
+#include "mqtt_svc.h"
+#include "http_svc.h"
 #include "cmd_shell.h"
 #include "usr_store.h"
 #include "bsp_eeprom.h"
@@ -58,6 +62,11 @@ static void cmd_la_dma_stat(const char *args);
 static void cmd_net(const char *args);
 static void cmd_tcp(const char *args);
 static void cmd_icmp(const char *args);
+static void cmd_dhcp(const char *args);
+static void cmd_dns(const char *args);
+static void cmd_sntp(const char *args);
+static void cmd_mqtt(const char *args);
+static void cmd_http(const char *args);
 static void cmd_la_info(const char *args);
 static void cmd_la_state(const char *args);
 static void cmd_la_peek(const char *args);
@@ -300,6 +309,230 @@ static void cmd_icmp(const char *args)
     LOG_Printf("Usage: icmp <info|reset|reply <on|off>|limit <pps>>\r\n");
 }
 
+static void cmd_dhcp(const char *args)
+{
+    if (args == NULL || *args == '\0' || strncmp(args, "status", 6) == 0) {
+        LOG_Printf("DHCP: %s\r\n", EthApp_DhcpState());
+        return;
+    }
+    if (strncmp(args, "on", 2) == 0) {
+        EthApp_DhcpStart();
+        LOG_Printf("DHCP: starting, fallback %us\r\n",
+                   (unsigned)(ETH_DHCP_FALLBACK_MS / 1000u));
+        return;
+    }
+    if (strncmp(args, "off", 3) == 0) {
+        EthApp_DhcpStop();
+        LOG_Printf("DHCP: stopped, static IP restored\r\n");
+        return;
+    }
+    LOG_Printf("Usage: dhcp <on|off|status>\r\n");
+}
+
+static void cmd_dns(const char *args)
+{
+    if (args == NULL || *args == '\0' || strncmp(args, "info", 4) == 0) {
+        const uint8_t *s = DnsSvc_GetServer();
+        if (s != NULL) {
+            LOG_Printf("DNS: server %u.%u.%u.%u\r\n",
+                       (unsigned)s[0], (unsigned)s[1],
+                       (unsigned)s[2], (unsigned)s[3]);
+        } else {
+            LOG_Printf("DNS: no server configured\r\n");
+        }
+        return;
+    }
+    if (strncmp(args, "server", 6) == 0) {
+        const char *ip = args + 6;
+        while (*ip == ' ' || *ip == '\t') ip++;
+        if (*ip == '\0') {
+            LOG_Printf("Usage: dns server <ip>\r\n");
+            return;
+        }
+        LOG_Printf("DNS: server set -> %d\r\n", DnsSvc_SetServer(ip));
+        return;
+    }
+    if (strncmp(args, "resolve", 7) == 0) {
+        const char *h = args + 7;
+        while (*h == ' ' || *h == '\t') h++;
+        if (*h == '\0') {
+            LOG_Printf("Usage: dns resolve <host>\r\n");
+            return;
+        }
+        LOG_Printf("DNS: resolving %s ...\r\n", h);
+        uint8_t ip[4];
+        int r = DnsSvc_Resolve(h, 3000u, ip);
+        if (r == 0) {
+            LOG_Printf("DNS: %s = %u.%u.%u.%u\r\n",
+                       h, (unsigned)ip[0], (unsigned)ip[1],
+                       (unsigned)ip[2], (unsigned)ip[3]);
+        } else {
+            LOG_Printf("DNS: %s -> err=%d\r\n", h, r);
+        }
+        return;
+    }
+    LOG_Printf("Usage: dns <info|server <ip>|resolve <host>>\r\n");
+}
+
+static void cmd_sntp(const char *args)
+{
+    if (args == NULL || *args == '\0' || strncmp(args, "info", 4) == 0) {
+        const uint8_t *s = SntpSvc_GetServer();
+        char ts[32];
+        SntpSvc_GetTimeStr(ts, sizeof(ts));
+        if (s != NULL) {
+            LOG_Printf("SNTP: server %u.%u.%u.%u auto=%u\r\n",
+                       (unsigned)s[0], (unsigned)s[1],
+                       (unsigned)s[2], (unsigned)s[3],
+                       (unsigned)SntpSvc_Auto());
+        } else {
+            LOG_Printf("SNTP: no server, auto=%u\r\n",
+                       (unsigned)SntpSvc_Auto());
+        }
+        LOG_Printf("SNTP: RTC %s\r\n", ts);
+        return;
+    }
+    if (strncmp(args, "sync", 4) == 0) {
+        const char *p = args + 4;
+        while (*p == ' ' || *p == '\t') p++;
+        const uint8_t *srv = SntpSvc_GetServer();
+        uint8_t local[4];
+        if (*p != '\0') {
+            if (SntpSvc_SetServer(p) != 0) {
+                LOG_Printf("SNTP: invalid server %s\r\n", p);
+                return;
+            }
+            srv = SntpSvc_GetServer();
+        }
+        if (srv == NULL) {
+            LOG_Printf("SNTP: no server (use sntp sync <ip>)\r\n");
+            return;
+        }
+        memcpy(local, srv, 4);
+        LOG_Printf("SNTP: syncing %u.%u.%u.%u ...\r\n",
+                   (unsigned)local[0], (unsigned)local[1],
+                   (unsigned)local[2], (unsigned)local[3]);
+        int r = SntpSvc_Sync(local, 3000u);
+        char ts[32];
+        SntpSvc_GetTimeStr(ts, sizeof(ts));
+        LOG_Printf("SNTP: %s, RTC=%s\r\n", (r == 0) ? "OK" : "FAIL", ts);
+        return;
+    }
+    if (strncmp(args, "auto", 4) == 0) {
+        const char *p = args + 4;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "on", 2) == 0) {
+            SntpSvc_SetAuto(1);
+            LOG_Printf("SNTP: auto ON\r\n");
+        } else if (strncmp(p, "off", 3) == 0) {
+            SntpSvc_SetAuto(0);
+            LOG_Printf("SNTP: auto OFF\r\n");
+        } else {
+            LOG_Printf("Usage: sntp auto <on|off>\r\n");
+        }
+        return;
+    }
+    LOG_Printf("Usage: sntp <info|sync [server]|auto <on|off>>\r\n");
+}
+
+static void cmd_mqtt(const char *args)
+{
+    if (args == NULL || *args == '\0' || strncmp(args, "info", 4) == 0) {
+        const mqtt_svc_stat_t *st = MqttSvc_GetStat();
+        static const char *state_str[] = {"IDLE", "CONNECTING", "CONNECTED", "ERR"};
+        const char *st_s = (st->state < 4u) ? state_str[st->state] : "?";
+        LOG_Printf("MQTT: state=%s client=%s\r\n", st_s, st->client_id);
+        LOG_Printf("MQTT: broker %u.%u.%u.%u:%u\r\n",
+                   (unsigned)st->broker[0], (unsigned)st->broker[1],
+                   (unsigned)st->broker[2], (unsigned)st->broker[3],
+                   (unsigned)st->port);
+        LOG_Printf("MQTT: conn=%lu disc=%lu pub=%lu sub=%lu err=%lu\r\n",
+                   (unsigned long)st->connect_cnt,
+                   (unsigned long)st->disconnect_cnt,
+                   (unsigned long)st->pub_cnt,
+                   (unsigned long)st->sub_cnt,
+                   (unsigned long)st->err_cnt);
+        return;
+    }
+    if (strncmp(args, "connect", 7) == 0) {
+        const char *p = args + 7;
+        while (*p == ' ' || *p == '\t') p++;
+        char ip[32];
+        uint16_t port = 0;
+        if (*p != '\0') {
+            const char *sp = p;
+            char *dst = ip;
+            while (*sp != '\0' && *sp != ' ' && *sp != '\t' &&
+                   (dst - ip) < 31) {
+                *dst++ = *sp++;
+            }
+            *dst = '\0';
+            if (*sp != '\0') port = (uint16_t)atoi(sp);
+            int r = MqttSvc_Connect(ip, port);
+            LOG_Printf("MQTT: connect %s -> %d\r\n", ip, r);
+        } else {
+            LOG_Printf("MQTT: connect -> %d\r\n", MqttSvc_Connect(NULL, 0));
+        }
+        return;
+    }
+    if (strncmp(args, "disconnect", 10) == 0) {
+        MqttSvc_Disconnect();
+        LOG_Printf("MQTT: disconnecting\r\n");
+        return;
+    }
+    if (strncmp(args, "pub", 3) == 0) {
+        const char *p = args + 3;
+        while (*p == ' ' || *p == '\t') p++;
+        const char *topic = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') p++;
+        if (topic == p) {
+            LOG_Printf("Usage: mqtt pub <topic> <data>\r\n");
+            return;
+        }
+        char tbuf[48];
+        int tl = (int)(p - topic);
+        if (tl > 47) tl = 47;
+        memcpy(tbuf, topic, tl);
+        tbuf[tl] = '\0';
+        while (*p == ' ' || *p == '\t') p++;
+        LOG_Printf("MQTT: pub %s -> %d\r\n", tbuf,
+                   MqttSvc_Publish(tbuf, *p ? p : ""));
+        return;
+    }
+    if (strncmp(args, "sub", 3) == 0) {
+        const char *p = args + 3;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') {
+            LOG_Printf("Usage: mqtt sub <topic>\r\n");
+            return;
+        }
+        LOG_Printf("MQTT: sub %s -> %d\r\n", p, MqttSvc_Subscribe(p));
+        return;
+    }
+    LOG_Printf("Usage: mqtt <connect [ip] [port]|disconnect|pub <t> <d>|sub <t>|info>\r\n");
+}
+
+static void cmd_http(const char *args)
+{
+    if (args == NULL || *args == '\0' || strncmp(args, "info", 4) == 0) {
+        LOG_Printf("HTTP: %s, requests=%lu, port=8080\r\n",
+                   HttpSvc_Enabled() ? "ON" : "OFF",
+                   (unsigned long)HttpSvc_GetRequests());
+        return;
+    }
+    if (strncmp(args, "on", 2) == 0) {
+        HttpSvc_SetEnabled(1);
+        LOG_Printf("HTTP: ON\r\n");
+        return;
+    }
+    if (strncmp(args, "off", 3) == 0) {
+        HttpSvc_SetEnabled(0);
+        LOG_Printf("HTTP: OFF\r\n");
+        return;
+    }
+    LOG_Printf("Usage: http <info|on|off>\r\n");
+}
+
 static const cmd_entry_t cmd_table[] = {
     {"help",         "Show command help", CMD_TRANSPORT_ALL, cmd_help},
     {"info",         "System info (version/kernel/tasks)", CMD_TRANSPORT_ALL, cmd_info},
@@ -323,6 +556,11 @@ static const cmd_entry_t cmd_table[] = {
     {"tcp",          "TCP console status (port 9000)", CMD_TRANSPORT_ALL, cmd_tcp},
     {"net",          "ETH status / ping <ip>", CMD_TRANSPORT_ALL, cmd_net},
     {"icmp",         "ICMP service <info|reset|reply on|off|limit pps>", CMD_TRANSPORT_ALL, cmd_icmp},
+    {"dhcp",         "DHCP client <on|off|status>", CMD_TRANSPORT_ALL, cmd_dhcp},
+    {"dns",          "DNS <info|server <ip>|resolve <host>>", CMD_TRANSPORT_ALL, cmd_dns},
+    {"sntp",         "SNTP <info|sync [server]|auto on|off>", CMD_TRANSPORT_ALL, cmd_sntp},
+    {"mqtt",         "MQTT <connect [ip] [port]|disconnect|pub <t> <d>|sub <t>|info>", CMD_TRANSPORT_ALL, cmd_mqtt},
+    {"http",         "HTTP status server <info|on|off>", CMD_TRANSPORT_ALL, cmd_http},
     {"sg_uart_stop", "Stop UART generator", CMD_TRANSPORT_ALL, cmd_sg_uart_stop},
     {"sg_uart_hex",  "UART hex frame generator", CMD_TRANSPORT_ALL, cmd_sg_uart_hex},
     {"sg_spi_start", "SPI generator <hex> <ms>", CMD_TRANSPORT_ALL, cmd_sg_spi_start},

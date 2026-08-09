@@ -45,6 +45,13 @@ int EthApp_SetStaticIPPersist(const char *addr_str);
 /* 恢复出厂默认 IP 192.168.1.10 并清除保存配置；`net ip default` */
 int EthApp_SetStaticIPDefault(void);
 
+/* DHCP 客户端：开启后自动获取，超时（15s）回退保存的静态 IP */
+#define ETH_DHCP_FALLBACK_MS   15000u
+int      EthApp_DhcpStart(void);
+int      EthApp_DhcpStop(void);
+uint8_t  EthApp_DhcpActive(void);
+const char *EthApp_DhcpState(void);
+
 /* 发送一帧 UDP（原始套接字，checksum=0，IPv4 合法）。返回 0 成功 / 负错误码 */
 int EthApp_UdpSend(const char *host, uint16_t port,
                    const uint8_t *data, uint16_t len);

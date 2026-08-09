@@ -1799,3 +1799,38 @@ auto-stop）全部按设计工作。
     复位回 192.168.1.10；
   - PC ping 3/3（RTT 1-2ms）不受影响；Keil/GCC 0 警告；
     OTA build 245→248 连续三次成功（BOOT 参数/会话槽不受影响）。
+
+### 12.89 ETH 全层服务打通 + 内存优化（build 273）
+- **新增服务（Application 层，模块注册/命令/sysmon 全接入）**：
+  - `dns_svc`：`dns <info|server <ip>|resolve <host>>`，服务器地址持久化 EEPROM；
+  - `sntp_svc`：RFC4330 最小客户端，`sntp <info|sync [server]|auto on|off>`，
+    同步写入 RTC（UTC+8），周期自动校时；
+  - `mqtt_svc`：lwIP MQTT 客户端，`mqtt <connect|disconnect|pub|sub|info>`，
+    连接成功后每 5s 自动发布设备遥测 JSON（d00/status）；
+  - `http_svc`：最小 HTTP/1.0 状态服务（:8080），`GET /` HTML 页 +
+    `GET /api/status` JSON；
+  - `dhcp`：`dhcp <on|off|status>`，15s 无服务器自动回退保存的静态 IP。
+- **内存优化（实测生效）**：
+  - FreeRTOS 堆 48KB→52KB（CCM），启动任务栈 1KB→4KB（lwip_init 链深）；
+  - 启用 LWIP_DNS/LWIP_MQTT（MEMP_NUM_SYS_TIMEOUT 5→8 编译校验）；
+  - 板载资源：SRAM1 44KB/128KB、CCM 64KB（堆52KB+事件总线+LA）、ROM 218KB/320KB、
+    运行时 free heap ≈15KB（全服务在线）。
+- **排障记录（重要教训）**：
+  - `.sram2` 段必须 `zero_init`（与 `.ccmram` 一致）：UNINIT 区若携带加载镜像，
+    __main 启动加载崩溃；加 zero_init 后 SRAM2 布局可正常启动（build 262 验证）；
+  - **DNS×SRAM2 组合会导致启动 HardFault（IMPRECISERR，ETH_DMATxDescListInit，
+    startupTask 18ms）**：LWIP_DNS 开启且 ETH 描述符/RX 池置于 SRAM2 时崩溃；
+    DNS 关闭或描述符回 .bss 均正常。机理待进一步定位（疑似 DNS 使 lwip 初始化
+    与 SRAM2 描述符写产生竞态/总线异常），**当前交付配置：描述符/RX 池留在
+    SRAM1 .bss，SRAM2 暂不启用**；堆优化与服务不受影响；
+  - 调试用 KEIL DAP（UV4 `-d` + 调试 ini 可刷写/读现场）；
+    STM32CubeProgrammer 识别不到该 CMSIS-DAP。
+- **验证（build 273，全链路实测）**：
+  - `http://192.168.10.10:8080/` HTML 200 + `/api/status` JSON；
+  - `dns resolve dev.local` → 192.168.10.10（PC 临时 DNS 服务器 :53）；
+  - `sntp sync` 逻辑与换算算法验证正确（PC :123 被 w32time 占用，需真实
+    SNTP 服务器或管理员权限停用 w32time 后复测）；
+  - `dhcp on` → 15s 超时 → 自动回退静态 192.168.10.10（实测）；
+  - `mqtt connect` 无 broker → 状态机 CONNECTING→DISCONNECTED→IDLE（计数正确），
+    待真实 broker 复测 pub/sub/遥测；
+  - ICMP ping 3/3（1-2ms）、TCP 控制台、UDP 回显均正常；Keil/GCC 0 警告。
