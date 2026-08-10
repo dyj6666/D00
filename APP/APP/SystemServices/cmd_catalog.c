@@ -29,6 +29,10 @@
 #include "sntp_svc.h"
 #include "mqtt_svc.h"
 #include "http_svc.h"
+#include "ota_agent.h"
+#include "ota_transport.h"
+#include "ota_tcp_svc.h"
+#include "ota_http_svc.h"
 #include "cmd_shell.h"
 #include "usr_store.h"
 #include "bsp_eeprom.h"
@@ -552,7 +556,7 @@ static const cmd_entry_t cmd_table[] = {
     {"reset",        "Software reset", CMD_TRANSPORT_ALL, cmd_reset},
     {"led",          "LED control (on/off/toggle/blink)", CMD_TRANSPORT_ALL, cmd_led},
     {"taskstats",    "Task list & stack usage", CMD_TRANSPORT_ALL, cmd_taskstats},
-    {"ota",          "Enter BOOT upgrade mode", CMD_TRANSPORT_UART, cmd_ota},
+    {"ota",          "OTA <enter BOOT|status|abort|tcp|http <url>>", CMD_TRANSPORT_ALL, cmd_ota},
     {"sysmon",       "System monitor report", CMD_TRANSPORT_ALL, cmd_sysmon},
     {"la_start",     "LA start (timestamp mode)", CMD_TRANSPORT_ALL, cmd_la_start},
     {"la_stop",      "LA stop", CMD_TRANSPORT_ALL, cmd_la_stop},
@@ -704,11 +708,90 @@ static void cmd_taskstats(const char *args)
     LOG_Printf("Free heap: %lu bytes\r\n", (unsigned long)xPortGetFreeHeapSize());
 }
 
+/* 精确匹配子命令（后随空白或结尾，避免 "statusx" 误匹配 "status"） */
+static int arg_match(const char *s, const char *w)
+{
+    size_t n = strlen(w);
+    return (strncmp(s, w, n) == 0 &&
+            (s[n] == '\0' || s[n] == ' ' || s[n] == '\t'));
+}
+
 static void cmd_ota(const char *args)
 {
-    (void)args;
-    LOG_Printf("OTA command received, publishing event...\r\n");
-    MSG_SEND_SIMPLE(MODULE_SHELL, MSG_CMD_OTA_START);
+    if (args == NULL || *args == '\0') {
+        /* 原行为：进入 BOOT 升级模式（串口 HOSTLINK 流程） */
+        LOG_Printf("OTA command received, publishing event...\r\n");
+        MSG_SEND_SIMPLE(MODULE_SHELL, MSG_CMD_OTA_START);
+        return;
+    }
+    if (arg_match(args, "status") || arg_match(args, "info")) {
+        uint8_t state;
+        uint32_t rx = 0, total = 0;
+        Ota_Status(&state, &rx, &total);
+        static const char *stn[] = {"IDLE", "RECEIVING", "DONE"};
+        LOG_Printf("OTA: state=%s %lu/%lu bytes\r\n",
+                   (state < 3u) ? stn[state] : "?",
+                   (unsigned long)rx, (unsigned long)total);
+        LOG_Printf("OTA transports:\r\n");
+        for (uint8_t i = 0; i < OtaMgr_Count(); i++) {
+            const ota_transport_t *t = OtaMgr_Get(i);
+            if (t != NULL) {
+                LOG_Printf("  [%u] %-8s %-24s %s\r\n",
+                           (unsigned)t->id, t->name, t->desc,
+                           t->available ? "ready" : "reserved");
+            }
+        }
+        return;
+    }
+    if (arg_match(args, "abort")) {
+        LOG_Printf("OTA: abort -> %u\r\n", (unsigned)Ota_Reset());
+        return;
+    }
+    if (arg_match(args, "tcp")) {
+        LOG_Printf("OTA-TCP: server :%u sessions=%lu\r\n",
+                   (unsigned)OTA_TCP_PORT,
+                   (unsigned long)OtaTcpSvc_GetSessions());
+        return;
+    }
+    if (arg_match(args, "http")) {
+        const char *p = args + 4;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') {
+            LOG_Printf("Usage: ota http <ip[:port]>/<path>\r\n");
+            return;
+        }
+        char url[96];
+        int ul = 0;
+        while (*p != '\0' && ul < 95) {
+            url[ul++] = *p++;
+        }
+        url[ul] = '\0';
+        /* 解析 ip[:port]/path */
+        char host[48];
+        uint16_t port = 80u;
+        const char *hp = url;
+        const char *slash = strchr(hp, '/');
+        if (slash == NULL) {
+            LOG_Printf("Usage: ota http <ip[:port]>/<path>\r\n");
+            return;
+        }
+        int hl = (int)(slash - hp);
+        if (hl <= 0 || hl >= (int)sizeof(host)) {
+            LOG_Printf("OTA-HTTP: bad url %s\r\n", url);
+            return;
+        }
+        memcpy(host, hp, hl);
+        host[hl] = '\0';
+        const char *colon = strchr(host, ':');
+        if (colon != NULL) {
+            *((char *)colon) = '\0';
+            port = (uint16_t)atoi(colon + 1);
+        }
+        int r = OtaHttp_Download(host, port, slash);
+        LOG_Printf("OTA-HTTP: download -> %d\r\n", r);
+        return;
+    }
+    LOG_Printf("Usage: ota <enter BOOT|status|abort|tcp|http <ip[:port]>/<path>>\r\n");
 }
 
 static void cmd_sysmon(const char *args)

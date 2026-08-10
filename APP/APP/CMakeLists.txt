@@ -126,6 +126,9 @@ if(CMAKE_CROSSCOMPILING)
     Application/sntp_svc.c
     Application/mqtt_svc.c
     Application/http_svc.c
+    Application/ota_mgr.c
+    Application/ota_tcp_svc.c
+    Application/ota_http_svc.c
     BSP/bsp_system.c
     BSP/bsp_uart.c
     BSP/bsp_i2c.c

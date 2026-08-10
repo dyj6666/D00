@@ -2406,6 +2406,21 @@
               <FileType>1</FileType>
               <FilePath>..\Application\http_svc.c</FilePath>
             </File>
+            <File>
+              <FileName>ota_mgr.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Application\ota_mgr.c</FilePath>
+            </File>
+            <File>
+              <FileName>ota_tcp_svc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Application\ota_tcp_svc.c</FilePath>
+            </File>
+            <File>
+              <FileName>ota_http_svc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Application\ota_http_svc.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

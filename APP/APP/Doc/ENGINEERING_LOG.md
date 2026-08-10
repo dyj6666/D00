@@ -1879,3 +1879,47 @@ auto-stop）全部按设计工作。
     （95 pkt/s ≈ 1.33MB/s）；
   - **稳定性**：全套压测后堆 15216→15056B（无泄漏），全部任务栈水位健康，
     无新增崩溃记录。
+
+---
+
+## 8. 多协议 OTA 升级体系（ETH TCP/HTTP + CAN 预留）
+
+> 2026-08-10 · build 281 → 297 · 三条升级通道端到端实测通过
+
+### 8.1 架构
+- **传输注册表** `ota_transport.h / ota_mgr.c`：UART(HOSTLINK) / ETH-TCP /
+  ETH-HTTP / CAN(预留) 四种传输统一登记，`ota status` 一览；
+  未来 CAN 只需实现传输服务 + `OtaMgr_Register` 一行，命令层零改动。
+- **下载核心零改动**：所有传输都喂给现有 `Ota_Begin/Data/End`
+  （会话槽/断点续传/DOWNLOAD 区/BOOT 触发），安全校验（AES/ECDSA/防回滚）
+  仍由 BOOT 统一完成。
+- **TCP OTA 服务器** `ota_tcp_svc.c`（:9020）：`0x5A|cmd|len(2BE)|payload|crc8`
+  帧协议，BEGIN/DATA/END/STATUS/RESET，支持断点续传（STATUS 上报真实状态）。
+- **HTTP OTA 客户端** `ota_http_svc.c`：`ota http <ip[:port]>/<path>` 拉取
+  签名包，解析 Content-Length + 包首部版本号 → 流式喂下载核心；
+  遍历 pbuf 链、头尾进位处理，任意 TCP 分界不丢数据。
+- **命令扩展** `cmd_ota`：`ota <enter BOOT|status|abort|tcp|http <url>>`
+  （原无参行为保留）。
+- **PC 工具** `Script/ota_tcp_cli.py`：与 HOSTLINK CLI 同构，`--no-resume`
+  可选；BEGIN 超时放宽（擦除 2×128KB 扇区约 2-4s）。
+
+### 8.2 实测发现并修复的问题
+| 问题 | 根因 | 修复 |
+| --- | --- | --- |
+| TCP ACK 全部校验失败 | 服务器 ACK 的 CRC 用分段 XOR，对端按整段连续 CRC 校验 | 改为增量连续 CRC（seed 链式） |
+| DATA 帧无响应 | 帧缓冲 245B < 实际 DATA 帧 249B，超长帧被丢弃 | 缓冲扩为 4+244+1=249B |
+| HTTP 版本号解析成 0xC0000000 | 包头部为小端，按大端解析了字节 4..7 | 改小端解析，实测 `begin v192` |
+| HTTP 中途断连误杀 | 偶发丢包+重传延迟 >5s 收包超时即中止 | 15s 超时 + 连续 6 次重试，仍无数据才失败 |
+| 单请求往返 43ms（性能） | ACK 分 3 次 `netconn_write` 小写触发 Nagle/延迟 ACK 交互 | 整帧一次写入，实测 43ms→1.7ms |
+| TCP STATUS 状态失真 | ACK 首字节硬编码传入值而非真实 OTA 状态 | STATUS 上报真实 state（供续传判断） |
+| OtaTcp 任务优先级低 | BelowNormal 相比 :9000 的 Normal 有调度劣势 | 对齐 Normal |
+
+### 8.3 验证结果（build 297 最终固件）
+- **UART HOSTLINK**：build 295/297 全量推送，BOOT 阶段 0-7 err=0，切换成功。
+- **ETH-TCP**：229160B 全量经 :9020 上传（**47s → 6.9s**），STATUS state=1，
+  END 触发 BOOT 校验（build 296>295）→ 新固件启动，`[OTA-TCP] server listening :9020`。
+- **ETH-HTTP**：PC `http.server`(:8080) 提供 `_ota_v297.bin`，
+  `ota http` 拉取 229160B → `begin v192` → 完整下载 → 复位 → BOOT 校验 →
+  `Agent ready (last build 297)`。
+- 防重放回归：推相同 build 号被 BOOT 拒绝（`phase=255 err=3`）→ 必须严格递增。
+- 主机单测/自检全绿；OtaMgr 注册 4 传输（CAN reserved）启动日志确认。
