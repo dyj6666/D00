@@ -1,3 +1,8 @@
+/* ================================================================
+ * buzzer_app —— 蜂鸣器应用：提示音/告警音控制
+ *
+ * 架构位置：APP 应用层；交互反馈
+ * ================================================================ */
 #include "buzzer_app.h"
 #include "bsp_buzzer.h"
 #include "event_bus.h"
@@ -5,16 +10,19 @@
 #include "timers.h"
 
 /* ================================================================
- * 蜂鸣时序状态机：Tmr Svc 回调逐段驱动 响→间隙→响...
+ * 蜂鸣时序状态机：Tmr Svc 回调按"响/停"序列逐段驱动。
+ * 序列以 [on0,gap0,on1,gap1,...] 表示，段间 gap 播停、末段后自然结束。
  * 所有调用均非阻塞（立即返回，时长由定时器控制）。
  * ================================================================ */
 
+#define BUZZER_SEQ_MAX   8   /* 最多 8 段（OTA 旋律最多 4 段，余量充足） */
+
 typedef struct {
     TimerHandle_t timer;
-    uint8_t  phase;        /* 0=响 1=间隙 */
-    uint8_t  count;        /* 剩余响次数 */
-    uint16_t on_ms;
-    uint16_t gap_ms;
+    uint16_t seq[BUZZER_SEQ_MAX];  /* on/gap 交替 */
+    uint8_t  len;                  /* 段数 */
+    uint8_t  idx;                  /* 当前段 */
+    uint8_t  phase;                /* 0=响 1=间隙 */
 } buzzer_seq_t;
 
 static buzzer_seq_t s_bz;
@@ -23,39 +31,62 @@ static void buzzer_timer_cb(TimerHandle_t xTimer)
 {
     (void)xTimer;
     if (s_bz.phase == 0) {
-        /* 响结束：关蜂鸣，若有后续则进入间隙 */
+        /* 响结束：关蜂鸣；若还有下一段则进入段间间隙 */
         BSP_Buzzer_Off();
-        s_bz.phase = 1;
-        if (s_bz.count > 1) {
-            xTimerChangePeriod(s_bz.timer, pdMS_TO_TICKS(s_bz.gap_ms), 0);
+        if (s_bz.idx + 1u < s_bz.len) {
+            s_bz.phase = 1;
+            xTimerChangePeriod(s_bz.timer,
+                               pdMS_TO_TICKS(s_bz.seq[s_bz.idx * 2u + 1u]), 0);
         }
     } else {
-        /* 间隙结束：下一响 */
-        s_bz.count--;
-        if (s_bz.count > 0) {
+        /* 间隙结束：进入下一段响 */
+        s_bz.idx++;
+        if (s_bz.idx < s_bz.len) {
             BSP_Buzzer_On();
             s_bz.phase = 0;
-            xTimerChangePeriod(s_bz.timer, pdMS_TO_TICKS(s_bz.on_ms), 0);
+            xTimerChangePeriod(s_bz.timer,
+                               pdMS_TO_TICKS(s_bz.seq[s_bz.idx * 2u]), 0);
         }
     }
 }
 
 void Buzzer_Beep(uint16_t ms)
 {
-    Buzzer_BeepPattern(1, ms, 0);
+    uint16_t seq[2] = { ms, 1 };
+    Buzzer_PlaySequence(seq, 1);
 }
 
 void Buzzer_BeepPattern(uint8_t count, uint16_t on_ms, uint16_t gap_ms)
 {
-    if (s_bz.timer == NULL) return;
+    uint16_t seq[BUZZER_SEQ_MAX * 2u];
+    uint8_t n = (count > BUZZER_SEQ_MAX) ? BUZZER_SEQ_MAX
+                                          : ((count > 0) ? count : 1);
+    for (uint8_t i = 0; i < n; i++) {
+        seq[i * 2u] = (on_ms > 0) ? on_ms : 10;
+        seq[i * 2u + 1u] = gap_ms;
+    }
+    Buzzer_PlaySequence(seq, n);
+}
+
+/**
+ * @brief  播放任意节奏序列（非阻塞）
+ * @param  on_gap  数组：[on0,gap0,on1,gap1,...]，on/gap 单位 ms
+ * @param  n       段数
+ */
+void Buzzer_PlaySequence(const uint16_t *on_gap, uint8_t n)
+{
+    if (s_bz.timer == NULL || on_gap == NULL || n == 0) return;
+    if (n > BUZZER_SEQ_MAX) n = BUZZER_SEQ_MAX;
 
     xTimerStop(s_bz.timer, 0);        /* 取消进行中的序列 */
-    s_bz.count = (count > 0) ? count : 1;
-    s_bz.on_ms = (on_ms > 0) ? on_ms : 10;
-    s_bz.gap_ms = gap_ms;
+    for (uint8_t i = 0; i < n; i++) {
+        s_bz.seq[i] = (on_gap[i] > 0) ? on_gap[i] : 1;
+    }
+    s_bz.len = n;
+    s_bz.idx = 0;
     s_bz.phase = 0;
     BSP_Buzzer_On();
-    xTimerChangePeriod(s_bz.timer, pdMS_TO_TICKS(s_bz.on_ms), 0);
+    xTimerChangePeriod(s_bz.timer, pdMS_TO_TICKS(s_bz.seq[0]), 0);
 }
 
 void Buzzer_Stop(void)
@@ -63,6 +94,28 @@ void Buzzer_Stop(void)
     if (s_bz.timer == NULL) return;
     xTimerStop(s_bz.timer, 0);
     BSP_Buzzer_Off();
+}
+
+/* ---------- OTA 旋律（有源蜂鸣器：节奏即音高表达） ---------- */
+/** @brief 升级开始：滴-滴-嘟（两短一长，上行收束感） */
+void Buzzer_OtaStart(void)
+{
+    static const uint16_t seq[] = { 80, 50, 80, 50, 160, 0 };
+    Buzzer_PlaySequence(seq, 3);
+}
+
+/** @brief 升级成功（新固件启动确认）：滴-滴-滴-嘟（三短一长） */
+void Buzzer_OtaSuccess(void)
+{
+    static const uint16_t seq[] = { 70, 50, 70, 50, 70, 50, 220, 0 };
+    Buzzer_PlaySequence(seq, 4);
+}
+
+/** @brief 升级失败：滴-滴-滴（三短等间隔，温和警示） */
+void Buzzer_OtaFail(void)
+{
+    static const uint16_t seq[] = { 60, 60, 60, 60, 60, 0 };
+    Buzzer_PlaySequence(seq, 3);
 }
 
 /* ---------- 事件反馈 ---------- */

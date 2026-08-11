@@ -17,6 +17,7 @@
 #include "lwip/ip4_addr.h"
 #include "lwip/err.h"
 #include "app_config.h"
+#include "buzzer_app.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -247,5 +248,8 @@ int OtaHttp_Download(const char *host, uint16_t port, const char *path)
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     netconn_delete(conn);
+    if (ret != 0) {
+        Buzzer_OtaFail();   /* 拉取失败：三短音警示（写失败已在 ota_agent 响应） */
+    }
     return ret;
 }

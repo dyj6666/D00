@@ -20,6 +20,7 @@
 #include "stm32f4xx_hal.h"
 #include "FreeRTOS.h"
 #include "semphr.h"
+#include "buzzer_app.h"
 
 /* ---------------- 参数区（与 BOOT/boot_param.c 结构一致） ---------------- */
 #pragma pack(1)
@@ -296,6 +297,7 @@ static void ota_confirm_startup(void)
                (int)e, (int)w0, (int)w1);
     if (e && w0 && w1) {
         LOG_Printf("OTA: startup confirmed OK\r\n");
+        Buzzer_OtaSuccess();   /* 新固件确认成功：播"三短一长"完成旋律 */
     } else {
         LOG_Printf("OTA: confirm write FAILED\r\n");
     }
@@ -314,11 +316,13 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     ota_mutex_take();
     if (ota_state == OTA_ST_RECEIVING) {
         ota_mutex_give();
+        Buzzer_OtaFail();
         return 1;   /* 已在接收中 */
     }
     if (size == 0 || size > OTA_DOWNLOAD_SAFE) {
         LOG_Printf("OTA: bad size %lu\r\n", (unsigned long)size);
         ota_mutex_give();
+        Buzzer_OtaFail();
         return 2;
     }
     /* 版本降级拦截（BOOT 侧还会二次校验） */
@@ -327,6 +331,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
         LOG_Printf("OTA: version downgrade denied (%lu < %lu)\r\n",
                    (unsigned long)version, (unsigned long)cur);
         ota_mutex_give();
+        Buzzer_OtaFail();
         return 4;
     }
     ota_begin_version = version;
@@ -350,6 +355,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
         ota_received = sess.received;
         ota_state = OTA_ST_RECEIVING;
         ota_mutex_give();
+        Buzzer_OtaStart();
         return 0;
     }
 
@@ -357,6 +363,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     if (!ota_flash_erase(OTA_DOWNLOAD_ADDR, OTA_DOWNLOAD_SIZE)) {
         LOG_Printf("OTA: download erase FAILED\r\n");
         ota_mutex_give();
+        Buzzer_OtaFail();
         return 3;
     }
     ota_total = size;
@@ -365,6 +372,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     ota_session_save(0, version, size, 0);
     LOG_Printf("OTA: download area ready, awaiting data\r\n");
     ota_mutex_give();
+    Buzzer_OtaStart();
     return 0;
 }
 
@@ -397,6 +405,7 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
                    (unsigned)(FLASH->SR));
         ota_state = OTA_ST_IDLE;
         ota_mutex_give();
+        Buzzer_OtaFail();
         return 3;
     }
     ota_received += len;
@@ -430,6 +439,7 @@ uint8_t Ota_End(void)
                    (unsigned long)ota_received, (unsigned long)ota_total);
         ota_state = OTA_ST_IDLE;
         ota_mutex_give();
+        Buzzer_OtaFail();
         return 2;
     }
     ota_state = OTA_ST_DONE;
@@ -525,6 +535,9 @@ void OtaAgent_Init(void)
     if (st.magic == OTA_PARAM_MAGIC && st.crc32 == ota_param_crc(&st)) {
         LOG_Printf("[APP] OTA  : Agent ready (last build %lu)\r\n",
                    (unsigned long)st.last_build_no);
+        if (st.boot_state == OTA_STATE_RECOVERY) {
+            Buzzer_OtaFail();   /* 回滚超限进入恢复模式：三短音提示人工介入 */
+        }
     } else {
         LOG_Printf("[APP] OTA  : Agent ready (param invalid)\r\n");
     }
