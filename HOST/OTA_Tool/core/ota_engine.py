@@ -363,6 +363,7 @@ class OtaEngine(QThread):
             self._log(f"HTTP 服务已启动: {url}", "cyan")
             # 板端 ota http 命令接受 <ip[:port]>/<path>，去掉协议前缀
             cmd = f"ota http {url.split('://', 1)[-1]}\r"
+            self._http_t0 = time.perf_counter()
             ctl = self.cfg.get("ctl_mode", "uart")
             if ctl == "uart":
                 self._http_via_uart(cmd)
@@ -402,7 +403,11 @@ class OtaEngine(QThread):
                         for m in re.finditer(r"\[OTA-HTTP\] (\d+)/(\d+)", text):
                             self._report(int(m.group(1)), int(m.group(2)))
                         if "download complete" in text or "Ota_End" in text:
-                            self._log("板端下载完成，正在复位切换...", "green")
+                            dt = time.perf_counter() - self._http_t0
+                            self._log(
+                                f"✅ 板端拉取完成: {len(self._pkg)}B "
+                                f"@ {dt:.1f}s ({len(self._pkg)/1024/max(dt,0.1):.0f}KB/s)，"
+                                f"正在复位切换...", "green")
                             done = True
                             break
                         if "-> -" in text or "failed" in text.lower():
@@ -445,7 +450,11 @@ class OtaEngine(QThread):
                 for m in re.finditer(r"\[OTA-HTTP\] (\d+)/(\d+)", text):
                     self._report(int(m.group(1)), int(m.group(2)))
                 if "download complete" in text or "Ota_End" in text:
-                    self._log("板端下载完成，正在复位切换...", "green")
+                    dt = time.perf_counter() - self._http_t0
+                    self._log(
+                        f"✅ 板端拉取完成: {len(self._pkg)}B "
+                        f"@ {dt:.1f}s ({len(self._pkg)/1024/max(dt,0.1):.0f}KB/s)，"
+                        f"正在复位切换...", "green")
                     done = True
                     break
                 if "-> -" in text or "failed" in text.lower():

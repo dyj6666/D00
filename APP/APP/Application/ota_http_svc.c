@@ -27,7 +27,7 @@
 /* 包头部 32B（magic|version|len|iv|chip|build），版本号位于偏移 4..7；
  * 只需读前 12B 即可取出版本号，随后整包从偏移 0 顺序写入 */
 #define OTA_PKG_HDR_LEN     12u
-#define OTA_HTTP_PROGRESS   (OTA_CHUNK_MAX * 20u)   /* 每 4800B 打印一次进度 */
+#define OTA_HTTP_PROGRESS   (OTA_CHUNK_MAX * 200u)  /* 每 48KB 打印一次进度：防刷屏 */
 
 typedef struct {
     uint8_t  pre[OTA_PKG_HDR_LEN];   /* 包首部缓冲（取版本号） */
