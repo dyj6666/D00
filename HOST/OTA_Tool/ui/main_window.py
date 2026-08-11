@@ -238,7 +238,7 @@ class MainWindow(QMainWindow):
         g.setContentsMargins(0, 2, 0, 2)
         g.setHorizontalSpacing(10)
         g.setVerticalSpacing(10)
-        g.setColumnMinimumWidth(0, 112)
+        g.setColumnMinimumWidth(0, 128)
 
         g.addWidget(QLabel("服务端口:"), 0, 0)
         self.spin_http_port = QSpinBox()
@@ -246,7 +246,11 @@ class MainWindow(QMainWindow):
         self.spin_http_port.setValue(8080)
         self.spin_http_port.setMinimumWidth(100)
         g.addWidget(self.spin_http_port, 0, 1)
-        g.setColumnStretch(2, 1)
+        self.btn_http_test = QPushButton("测试连接")
+        self.btn_http_test.setObjectName("ghost")
+        self.btn_http_test.clicked.connect(self._test_http)
+        g.addWidget(self.btn_http_test, 0, 2)
+        g.setColumnStretch(3, 1)
 
         g.addWidget(QLabel("板端 IP:"), 1, 0)
         self.edit_board_ip = QLineEdit("192.168.10.10")
@@ -572,6 +576,77 @@ class MainWindow(QMainWindow):
             self._append_log(f"❌ {e}", "red")
         finally:
             t.close()
+
+    def _test_http(self):
+        """HTTP 模式连接测试：①PC 端 HTTP 服务端口可用且正确选路；
+        ②控制通道（COM9 串口 / :9000 TCP）能连上板子 shell。"""
+        import socket
+        from core.transport import HttpOtaServer
+        port = self.spin_http_port.value()
+        board_ip = self.edit_board_ip.text().strip()
+        ctl_mode = "uart" if self.combo_ctl.currentText().startswith("UART") else "tcp"
+        ok = True
+
+        # 1) HTTP 服务可用性（绑定端口 + 按板端 IP 选路）
+        try:
+            srv = HttpOtaServer("", port)
+            url = srv.start(board_ip)
+            srv.stop()
+            self._append_log(f"✅ HTTP 服务可用: {url}", "green")
+        except Exception as e:
+            self._append_log(f"❌ HTTP 服务: {e}", "red")
+            ok = False
+
+        # 2) 控制通道在线性
+        if ctl_mode == "uart":
+            ctl_port = self.edit_ctl.text().strip()
+            u = UartTransport(ctl_port, 115200)
+            try:
+                u.open()
+                u.drain()
+                u.write(b"\r")
+                buf = b""
+                deadline = time.time() + 3
+                while time.time() < deadline and u.is_open:
+                    n = u._ser.in_waiting if u.is_open else 0
+                    if n:
+                        buf += u.read(n)
+                        if b">" in buf:
+                            break
+                    time.sleep(0.05)
+                u.close()
+                if buf:
+                    self._append_log(f"✅ 控制通道 UART 在线: {ctl_port} (shell 有回显)",
+                                     "green")
+                else:
+                    self._append_log(
+                        f"⚠️ 控制通道 {ctl_port} 无回显（确认板子已启动、口未占用）",
+                        "orange")
+                    ok = False
+            except Exception as e:
+                self._append_log(f"❌ 控制通道: {e}", "red")
+                ok = False
+        else:
+            ctl_ip = self.edit_ctl.text().strip()
+            try:
+                s = socket.create_connection((ctl_ip, 9000), timeout=3)
+                s.settimeout(2)
+                welcome = s.recv(256)
+                s.sendall(b"help\r")
+                resp = s.recv(256)
+                s.close()
+                if welcome or resp:
+                    self._append_log(f"✅ 控制通道 TCP 在线: {ctl_ip}:9000", "green")
+                else:
+                    self._append_log(f"⚠️ 控制通道 {ctl_ip}:9000 无响应", "orange")
+                    ok = False
+            except Exception as e:
+                self._append_log(f"❌ 控制通道: {e}", "red")
+                ok = False
+
+        if ok:
+            self.lbl_dev.setText(f"设备: 在线 ({board_ip})")
+            self._append_log("HTTP 通道检查全部通过，可开始升级", "cyan")
 
     # ================================================================
     # 固件/UID
