@@ -11,6 +11,7 @@
 #include "task.h"
 #include "lwip/api.h"
 #include "lwip/err.h"
+#include "lwip/tcp.h"
 
 #include <string.h>
 
@@ -60,8 +61,8 @@ static void tcp_send(struct netconn *conn, uint8_t cmd,
     }
     frame[OTA_TCP_HDR + len] = ota_crc8_seed(
         ota_crc8_seed(0, frame + 1, 3u), payload, len);
-    netconn_write(conn, frame, (u16_t)(OTA_TCP_HDR + len + 1u),
-                  NETCONN_COPY);
+    (void)netconn_write(conn, frame, (u16_t)(OTA_TCP_HDR + len + 1u),
+                        NETCONN_COPY);
 }
 
 static void tcp_ack1(struct netconn *conn, uint8_t status)
@@ -151,46 +152,60 @@ static void ota_tcp_session(struct netconn *conn)
             u16_t l = 0;
             netbuf_data(nb, &d, &l);
             if (d != NULL && l > 0u) {
-                uint16_t n = (l < (u16_t)(sizeof(buf) - have))
-                                 ? l : (u16_t)(sizeof(buf) - have);
-                memcpy(buf + have, d, n);
-                have = (uint16_t)(have + n);
+                const uint8_t *p = (const uint8_t *)d;
+                u16_t off = 0;
+                /* 流式逐帧：当前段灌入缓冲，凑够一帧立即处理。
+                 * 若一次性只拷贝 249B 而丢弃段内剩余帧，流水线
+                 * 多帧同段到达时会导致帧错位（实测 DATA 状态 2）。 */
+                while (off < l) {
+                    uint16_t room = (uint16_t)(sizeof(buf) - have);
+                    uint16_t take = ((l - off) < room) ? (u16_t)(l - off)
+                                                       : room;
+                    memcpy(buf + have, p + off, take);
+                    have = (uint16_t)(have + take);
+                    off = (u16_t)(off + take);
+
+                    /* 处理缓冲内已凑齐的完整帧 */
+                    while (have >= OTA_TCP_HDR + 1u) {
+                        if (buf[0] != OTA_TCP_MAGIC) {
+                            have = 0;                  /* 失步：整帧重同步 */
+                            break;
+                        }
+                        uint16_t plen = (uint16_t)((uint16_t)buf[2] << 8 |
+                                                   buf[3]);
+                        uint16_t total = (uint16_t)(OTA_TCP_HDR + plen + 1u);
+                        if (total > sizeof(buf)) {
+                            have = 0;                  /* 超长帧：防呆 */
+                            break;
+                        }
+                        if (have < total) {
+                            break;                     /* 等待完整帧 */
+                        }
+                        uint8_t crc = ota_crc8(buf + 1,
+                                               (uint16_t)(3u + plen));
+                        if (crc == buf[total - 1u]) {
+                            if (tcp_handle_frame(conn, buf[1],
+                                                 buf + OTA_TCP_HDR, plen)) {
+                                have = 0;
+                                netbuf_delete(nb);
+                                return;
+                            }
+                        } else {
+                            tcp_ack1(conn, 0xFF);      /* CRC 错 */
+                        }
+                        have = (uint16_t)(have - total);
+                        if (have > 0u) {
+                            memmove(buf, buf + total, have);
+                        }
+                    }
+                    if (have == sizeof(buf)) {
+                        have = 0;                      /* 缓冲被灌满仍无完整帧 */
+                        break;
+                    }
+                }
             }
         } while (netbuf_next(nb) >= 0);
         netbuf_delete(nb);
-
-        /* 逐帧解析（帧头 magic/cmd/len + payload + crc） */
-        while (have >= OTA_TCP_HDR + 1u) {
-            if (buf[0] != OTA_TCP_MAGIC) {
-                have = 0;                              /* 失步：整帧重同步 */
-                break;
-            }
-            uint16_t plen = (uint16_t)((uint16_t)buf[2] << 8 | buf[3]);
-            uint16_t total = (uint16_t)(OTA_TCP_HDR + plen + 1u);
-            if (total > sizeof(buf)) {
-                have = 0;
-                break;
-            }
-            if (have < total) {
-                break;                                 /* 等待完整帧 */
-            }
-            uint8_t crc = ota_crc8(buf + 1, (uint16_t)(3u + plen));
-            if (crc == buf[total - 1u]) {
-                if (tcp_handle_frame(conn, buf[1], buf + OTA_TCP_HDR, plen)) {
-                    have = 0;
-                    return;
-                }
-            } else {
-                tcp_ack1(conn, 0xFF);                  /* CRC 错 */
-            }
-            have = (uint16_t)(have - total);
-            if (have > 0u) {
-                memmove(buf, buf + total, have);
-            }
-        }
-        if (have == 0u && buf[0] != OTA_TCP_MAGIC) {
-            /* 清空噪声 */
-        }
     }
 }
 
@@ -212,6 +227,10 @@ static void ota_tcp_task(void *arg)
         struct netconn *cli = NULL;
         if (netconn_accept(srv, &cli) == ERR_OK && cli != NULL) {
             LOG_Printf("[OTA-TCP] client connected\r\n");
+            /* 关闭 Nagle：ACK 帧立即发送，避免流水线突发时小段 ACK 在
+             * 发送队列堆积（TCP_SND_QUEUELEN 满）导致 netconn_write
+             * 永久阻塞、OTA 服务挂死（实测 window>=16 复现）。 */
+            tcp_nagle_disable(cli->pcb.tcp);
             netconn_set_recvtimeout(cli, 10000);
             ota_tcp_session(cli);
             netconn_close(cli);

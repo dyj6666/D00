@@ -1,409 +1,696 @@
-import sys
+"""D00 OTA 升级中心：UART / TCP / HTTP 三通道统一上位机。
+
+界面分区：模式选择 -> 传输设置 -> 固件与安全 -> 实时仪表盘 -> 日志/版本库。
+"""
+
+from __future__ import annotations
+
 import os
 import time
-import serial
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QFrame, QVBoxLayout, QHBoxLayout,
-                             QLabel, QLineEdit, QComboBox, QPushButton,
-                             QTextEdit, QProgressBar, QFileDialog, QMessageBox,
-                             QGroupBox, QFormLayout, QSpinBox, QCheckBox)
+
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QDragEnterEvent, QDropEvent, QFont
-import serial.tools.list_ports
-from core.ota_worker import OtaWorker
-from core.version_lib import load_lib, alloc_build_no, add_entry
-from ui.uid_capture_thread import UidCaptureThread
+from PyQt5.QtGui import QDragEnterEvent, QDropEvent
+from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame,
+                             QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+                             QMessageBox, QProgressBar, QPushButton, QSpinBox,
+                             QStackedWidget, QTextEdit, QVBoxLayout, QWidget)
+
+from core.ota_engine import OtaEngine
+from core.transport import TcpTransport, TransportError, UartTransport
+from core.version_lib import load_lib
 from utils.config import Config
 
-VERSION = "v2.1.0"
+VERSION = "v3.0.0"
 
-# 日志颜色常量（深色系，适配浅色背景）
-COLOR_OK = "#228B22"
-COLOR_ERROR = "#B22222"
-COLOR_WARN = "#B8860B"
-COLOR_INFO = "#2F4F4F"
-COLOR_DEBUG = "#696969"
-COLOR_DEFAULT = "#000000"   # 统一黑色
+# 日志配色（暗色主题）
+_C = {
+    "default": "#cbd5e1",
+    "cyan": "#67e8f9",
+    "green": "#34d399",
+    "yellow": "#fbbf24",
+    "orange": "#fb923c",
+    "red": "#f87171",
+    "gray": "#94a3b8",
+}
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"D00 固件升级上位机 {VERSION} —— 董衍俊")
-        self.resize(900, 760)
-        self.setMinimumSize(820, 660)
+        self.setWindowTitle(f"D00 OTA 升级中心 {VERSION} —— 董衍俊")
+        self.resize(1080, 820)
+        self.setMinimumSize(960, 720)
         self.config = Config()
+        self.engine = None
+        self._batch_engines = []
+        self._batch_running = False
+        self._t0 = 0.0
 
-        # 应用样式
         style_path = os.path.join(os.path.dirname(__file__), "styles.qss")
         if os.path.exists(style_path):
-            with open(style_path, 'r', encoding='utf-8') as f:
+            with open(style_path, "r", encoding="utf-8") as f:
                 self.setStyleSheet(f.read())
-
-        self.worker = None
-        self.lib_data = None
-        self.uid_thread = None
-        self.serial_instance = None
-        self.serial_opened = False
 
         self._init_ui()
         self._load_config()
-
-        # 安装全局事件过滤器，强制捕获拖放
         self.installEventFilter(self)
 
+    # ================================================================
+    # UI 构建
+    # ================================================================
     def _init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setSpacing(16)
-        main_layout.setContentsMargins(24, 24, 24, 24)
+        root = QVBoxLayout(central)
+        root.setSpacing(14)
+        root.setContentsMargins(20, 16, 20, 16)
 
-        # ---- 串口设置 ----
-        serial_group = QGroupBox("串口设置")
-        serial_layout = QHBoxLayout()
-        serial_layout.addWidget(QLabel("端口:"))
+        root.addWidget(self._build_header())
+        root.addWidget(self._build_mode_selector())
+        root.addWidget(self._build_transport_card())
+        root.addWidget(self._build_firmware_card())
+        root.addWidget(self._build_dashboard())
+        root.addWidget(self._build_actions())
+        root.addWidget(self._build_log_card(), 1)
+        root.addLayout(self._build_version_row())
+        self.statusBar().showMessage("就绪 · 选择通信模式并配置固件")
+
+    def _build_header(self) -> QWidget:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        title_box = QVBoxLayout()
+        title = QLabel("D00 OTA 升级中心")
+        title.setObjectName("app_title")
+        sub = QLabel("UART · TCP · HTTP 三通道安全升级 · AES-CTR + ECDSA")
+        sub.setObjectName("app_subtitle")
+        title_box.addWidget(title)
+        title_box.addWidget(sub)
+        lay.addLayout(title_box)
+        lay.addStretch()
+        self.lbl_dev = QLabel("设备: --")
+        self.lbl_dev.setObjectName("device_pill")
+        lay.addWidget(self.lbl_dev)
+        return w
+
+    def _build_mode_selector(self) -> QWidget:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        self.mode_buttons = {}
+        for key, label in (("uart", "🔌 UART (HOSTLINK)"),
+                           ("tcp", "🌐 TCP :9020"),
+                           ("http", "☁ HTTP 拉取")):
+            b = QPushButton(label)
+            b.setObjectName("mode_btn")
+            b.setCheckable(True)
+            b.clicked.connect(lambda _, k=key: self._switch_mode(k))
+            lay.addWidget(b)
+            self.mode_buttons[key] = b
+        lay.addStretch()
+        self.mode_buttons["uart"].setChecked(True)
+        return w
+
+    def _build_transport_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(8)
+
+        title = QLabel("传输设置")
+        title.setObjectName("card_title")
+        lay.addWidget(title)
+
+        self.stack_transport = QStackedWidget()
+        self.stack_transport.addWidget(self._build_uart_page())
+        self.stack_transport.addWidget(self._build_tcp_page())
+        self.stack_transport.addWidget(self._build_http_page())
+        lay.addWidget(self.stack_transport)
+        return card
+
+    def _build_uart_page(self) -> QWidget:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 4, 0, 4)
+        lay.addWidget(QLabel("OTA 端口:"))
         self.combo_port = QComboBox()
         self.combo_port.setMinimumWidth(120)
-        self.combo_port.addItems([p.device for p in serial.tools.list_ports.comports()])
-        serial_layout.addWidget(self.combo_port)
-
-        serial_layout.addWidget(QLabel("波特率:"))
+        lay.addWidget(self.combo_port)
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_refresh.setObjectName("ghost")
+        self.btn_refresh.clicked.connect(self._refresh_ports)
+        lay.addWidget(self.btn_refresh)
+        lay.addWidget(QLabel("波特率:"))
         self.combo_baud = QComboBox()
-        self.combo_baud.addItems(["9600", "115200", "230400", "460800", "921600"])
-        self.combo_baud.setCurrentText("115200")
-        serial_layout.addWidget(self.combo_baud)
+        self.combo_baud.addItems(
+            ["115200", "230400", "460800", "921600", "1500000", "2000000"])
+        self.combo_baud.setCurrentText("921600")
+        lay.addWidget(self.combo_baud)
+        self.btn_uart_test = QPushButton("测试连接")
+        self.btn_uart_test.setObjectName("ghost")
+        self.btn_uart_test.clicked.connect(self._test_uart)
+        lay.addWidget(self.btn_uart_test)
+        lay.addStretch()
+        self.chk_ymodem = QCheckBox("传统 YMODEM(BOOT)")
+        lay.addWidget(self.chk_ymodem)
+        self.chk_verify_log = QCheckBox("验证启动日志")
+        self.chk_verify_log.setChecked(True)
+        lay.addWidget(self.chk_verify_log)
+        self._refresh_ports()
+        return w
 
-        btn_refresh = QPushButton("刷新")
-        btn_refresh.clicked.connect(lambda: self.combo_port.clear() or
-                                    self.combo_port.addItems([p.device for p in serial.tools.list_ports.comports()]))
-        serial_layout.addWidget(btn_refresh)
+    def _build_tcp_page(self) -> QWidget:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 4, 0, 4)
+        lay.addWidget(QLabel("设备 IP:"))
+        self.edit_tcp_ip = QLineEdit("192.168.10.10")
+        self.edit_tcp_ip.setMinimumWidth(150)
+        lay.addWidget(self.edit_tcp_ip)
+        lay.addWidget(QLabel("端口:"))
+        self.spin_tcp_port = QSpinBox()
+        self.spin_tcp_port.setRange(1, 65535)
+        self.spin_tcp_port.setValue(9020)
+        lay.addWidget(self.spin_tcp_port)
+        self.btn_tcp_test = QPushButton("测试连接")
+        self.btn_tcp_test.setObjectName("ghost")
+        self.btn_tcp_test.clicked.connect(self._test_tcp)
+        lay.addWidget(self.btn_tcp_test)
+        lay.addStretch()
+        self.chk_no_resume = QCheckBox("从零开始(清会话)")
+        lay.addWidget(self.chk_no_resume)
+        self.chk_verify_http = QCheckBox("状态页验证")
+        self.chk_verify_http.setChecked(True)
+        lay.addWidget(self.chk_verify_http)
+        return w
 
-        self.btn_serial_toggle = QPushButton("打开串口")
-        self.btn_serial_toggle.setCheckable(True)
-        self.btn_serial_toggle.clicked.connect(self._toggle_serial)
-        serial_layout.addWidget(self.btn_serial_toggle)
+    def _build_http_page(self) -> QWidget:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 4, 0, 4)
+        lay.addWidget(QLabel("服务端口:"))
+        self.spin_http_port = QSpinBox()
+        self.spin_http_port.setRange(1024, 65535)
+        self.spin_http_port.setValue(8080)
+        lay.addWidget(self.spin_http_port)
+        lay.addWidget(QLabel("板端 IP:"))
+        self.edit_board_ip = QLineEdit("192.168.10.10")
+        self.edit_board_ip.setMinimumWidth(120)
+        lay.addWidget(self.edit_board_ip)
+        lay.addWidget(QLabel("控制通道:"))
+        self.combo_ctl = QComboBox()
+        self.combo_ctl.addItems(["UART (COM9)", "TCP :9000"])
+        lay.addWidget(self.combo_ctl)
+        lay.addWidget(QLabel("通道端口/IP:"))
+        self.edit_ctl = QLineEdit("COM9")
+        self.edit_ctl.setMinimumWidth(120)
+        lay.addWidget(self.edit_ctl)
+        lay.addStretch()
+        self.chk_http_verify = QCheckBox("状态页验证")
+        self.chk_http_verify.setChecked(True)
+        lay.addWidget(self.chk_http_verify)
+        return w
 
-        serial_layout.addStretch()
-        serial_group.setLayout(serial_layout)
-        main_layout.addWidget(serial_group)
+    def _build_firmware_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(8)
+        lay.addWidget(QLabel("固件与安全", objectName="card_title"))
 
-        # ---- 固件与安全设置 ----
-        file_group = QGroupBox("固件与安全配置")
-        file_layout = QVBoxLayout()
-
-
-        row0 = QHBoxLayout()
-        row0.addWidget(QLabel("版本库:"))
-        self.combo_lib = QComboBox()
-        self.combo_lib.setMinimumWidth(280)
-        self.combo_lib.currentIndexChanged.connect(self._on_lib_selected)
-        btn_lib_refresh = QPushButton("刷新")
-        btn_lib_refresh.clicked.connect(self._reload_lib)
-        row0.addWidget(self.combo_lib)
-        row0.addWidget(btn_lib_refresh)
-        row0.addStretch()
-        file_layout.addLayout(row0)
-        self._reload_lib()
-        row1 = QHBoxLayout()
-        row1.addWidget(QLabel("固件文件:"))
+        r1 = QHBoxLayout()
+        r1.addWidget(QLabel("固件文件:"))
         self.edit_file = QLineEdit()
-        self.edit_file.setPlaceholderText("选择或拖拽 .bin 文件...")
-        # self.edit_file.setAcceptDrops(True)
-        btn_browse = QPushButton("浏览...")
-        btn_browse.clicked.connect(lambda: self.edit_file.setText(QFileDialog.getOpenFileName()[0]))
-        row1.addWidget(self.edit_file)
-        row1.addWidget(btn_browse)
-        file_layout.addLayout(row1)
+        self.edit_file.setPlaceholderText("选择或拖拽 .bin 文件到此处...")
+        r1.addWidget(self.edit_file, 1)
+        btn = QPushButton("浏览")
+        btn.setObjectName("ghost")
+        btn.clicked.connect(self._browse_file)
+        r1.addWidget(btn)
+        lay.addLayout(r1)
 
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("固件版本:"))
-        self.edit_version = QSpinBox()
-        self.edit_version.setRange(0, 9999)
-        self.edit_version.setValue(1)
-        row2.addWidget(self.edit_version)
-        row2.addStretch()
-        row2.addWidget(QLabel("设备UID:"))
+        r2 = QHBoxLayout()
+        r2.addWidget(QLabel("版本:"))
+        self.spin_version = QSpinBox()
+        self.spin_version.setRange(0, 99999)
+        self.spin_version.setValue(1)
+        r2.addWidget(self.spin_version)
+        r2.addWidget(QLabel("构建号:"))
+        self.lbl_build = QLabel("自动")
+        self.lbl_build.setObjectName("build_badge")
+        r2.addWidget(self.lbl_build)
+        r2.addSpacing(24)
+        r2.addWidget(QLabel("设备 UID:"))
         self.edit_uid = QLineEdit()
         self.edit_uid.setPlaceholderText("24位十六进制")
-        btn_capture = QPushButton("自动获取")
-        btn_capture.clicked.connect(self._capture_uid)
-        row2.addWidget(self.edit_uid)
-        row2.addWidget(btn_capture)
-        file_layout.addLayout(row2)
+        r2.addWidget(self.edit_uid, 1)
+        btn_uid = QPushButton("自动获取")
+        btn_uid.setObjectName("ghost")
+        btn_uid.clicked.connect(self._capture_uid)
+        r2.addWidget(btn_uid)
+        lay.addLayout(r2)
 
-        row3 = QHBoxLayout()
-        row3.addWidget(QLabel("私钥(Hex):"))
+        r3 = QHBoxLayout()
+        r3.addWidget(QLabel("私钥(Hex):"))
         self.edit_key = QLineEdit()
         self.edit_key.setEchoMode(QLineEdit.Password)
-        self.edit_key.setPlaceholderText("64位十六进制私钥（或环境变量 OTA_PRIVKEY）")
-        self.chk_show_key = QCheckBox("显示私钥")
-        self.chk_show_key.stateChanged.connect(self._toggle_key_visibility)
-        row3.addWidget(self.edit_key)
-        row3.addWidget(self.chk_show_key)
-        self.lbl_key_status = QLabel()
-        row3.addWidget(self.lbl_key_status)
-        file_layout.addLayout(row3)
+        self.edit_key.setPlaceholderText("64位十六进制私钥，或环境变量 OTA_PRIVKEY")
+        r3.addWidget(self.edit_key, 1)
+        self.chk_key = QCheckBox("显示")
+        self.chk_key.stateChanged.connect(
+            lambda s: self.edit_key.setEchoMode(
+                QLineEdit.Normal if s == Qt.Checked else QLineEdit.Password))
+        r3.addWidget(self.chk_key)
+        self.lbl_key = QLabel()
+        r3.addWidget(self.lbl_key)
+        lay.addLayout(r3)
+        return card
 
-        file_group.setLayout(file_layout)
-        main_layout.addWidget(file_group)
+    def _build_dashboard(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(10)
 
-        # ---- 控制按钮 ----
-        btn_layout = QHBoxLayout()
-        btn_layout.addWidget(QLabel("升级模式:"))
-        self.combo_mode = QComboBox()
-        self.combo_mode.addItems(["HOSTLINK 运行时", "YMODEM 传统(BOOT)"])
-        self.combo_mode.setCurrentIndex(0)
-        self.combo_mode.currentIndexChanged.connect(self._on_mode_changed)
-        btn_layout.addWidget(self.combo_mode)
-        btn_layout.addStretch()
-        self.btn_start = QPushButton("开始升级")
+        # 阶段流程条
+        self.stage_bar = QWidget()
+        self.stage_lay = QHBoxLayout(self.stage_bar)
+        self.stage_lay.setContentsMargins(0, 0, 0, 0)
+        self.stage_lay.setSpacing(6)
+        self.stage_segs = []
+        for name in ["空闲", "擦除", "下载", "校验", "提交", "运行"]:
+            lbl = QLabel(name)
+            lbl.setAlignment(Qt.AlignCenter)
+            lbl.setObjectName("stage_seg")
+            self.stage_lay.addWidget(lbl, 1)
+            self.stage_segs.append(lbl)
+        lay.addWidget(self.stage_bar)
+
+        # 进度条
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setFormat("%p%")
+        lay.addWidget(self.progress)
+
+        # 统计行
+        stats = QHBoxLayout()
+        self.lbl_stat = QLabel("0 / 0 字节")
+        self.lbl_speed = QLabel("速率 --")
+        self.lbl_eta = QLabel("剩余 --")
+        self.lbl_elapsed = QLabel("耗时 0.0s")
+        for l in (self.lbl_stat, self.lbl_speed, self.lbl_eta, self.lbl_elapsed):
+            l.setObjectName("stat")
+            stats.addWidget(l)
+        stats.addStretch()
+        lay.addLayout(stats)
+        return card
+
+    def _build_actions(self) -> QWidget:
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        r1 = QHBoxLayout()
+        self.btn_start = QPushButton("🚀 开始升级")
         self.btn_start.setObjectName("primary")
-        self.btn_start.setMinimumHeight(42)
+        self.btn_start.setMinimumHeight(44)
         self.btn_start.clicked.connect(self._start_ota)
-        self.btn_stop = QPushButton("停止")
-        self.btn_stop.setMinimumHeight(36)
+        r1.addWidget(self.btn_start, 1)
+        self.btn_stop = QPushButton("⏹ 停止")
+        self.btn_stop.setObjectName("danger")
+        self.btn_stop.setMinimumHeight(40)
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._stop_ota)
-        btn_layout.addWidget(self.btn_start)
-        btn_layout.addWidget(self.btn_stop)
-        main_layout.addLayout(btn_layout)
-        batch_row = QHBoxLayout()
-        batch_row.addWidget(QLabel("批量端口(逗号分隔):"))
-        self.edit_batch_ports = QLineEdit()
-        self.edit_batch_ports.setPlaceholderText("COM13,COM16,...")
-        batch_row.addWidget(self.edit_batch_ports)
+        r1.addWidget(self.btn_stop)
+        lay.addLayout(r1)
+        r2 = QHBoxLayout()
+        r2.addWidget(QLabel("批量端口(逗号分隔):"))
+        self.edit_batch = QLineEdit()
+        self.edit_batch.setPlaceholderText("COM13,COM16,...（仅 UART 模式）")
+        r2.addWidget(self.edit_batch, 1)
         self.btn_batch = QPushButton("批量升级")
         self.btn_batch.setObjectName("batch")
         self.btn_batch.clicked.connect(self._start_batch)
-        batch_row.addWidget(self.btn_batch)
-        batch_row.addStretch()
-        main_layout.addLayout(batch_row)
+        r2.addWidget(self.btn_batch)
+        lay.addLayout(r2)
+        return box
 
-
-        self.lbl_mode_hint = QLabel()
-        self.lbl_mode_hint.setStyleSheet("color: #2F4F4F;")
-        main_layout.addWidget(self.lbl_mode_hint)
-        self._on_mode_changed(0)
-
-
-        # ---- 升级阶段流程条 ----
-        self.stage_bar = QFrame()
-        self.stage_bar.setObjectName("stage_bar")
-        self.stage_layout = QHBoxLayout(self.stage_bar)
-        self.stage_layout.setContentsMargins(0, 0, 0, 0)
-        self.stage_layout.setSpacing(6)
-        self.stage_segments = []
-        for name in ["IDLE", "DOWNLOADING", "VERIFYING", "COMMITTED", "RUNNING"]:
-            lbl = QLabel(name)
-            lbl.setAlignment(Qt.AlignCenter)
-            self.stage_layout.addWidget(lbl, 1)
-            self.stage_segments.append((name, lbl))
-        main_layout.addWidget(self.stage_bar)
-        self._set_stage("IDLE")
-        # ---- 进度条 ----
-        self.progress = QProgressBar()
-        self.progress.setFormat("%p%")
-        main_layout.addWidget(self.progress)
-
-        # ---- 日志区域 ----
-        log_group = QGroupBox("升级日志")
-        log_layout = QVBoxLayout()
+    def _build_log_card(self) -> QWidget:
+        card = QFrame()
+        card.setObjectName("card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(8)
+        head = QHBoxLayout()
+        head.addWidget(QLabel("升级日志", objectName="card_title"))
+        head.addStretch()
+        btn_clear = QPushButton("清空")
+        btn_clear.setObjectName("ghost")
+        btn_clear.clicked.connect(lambda: self.log_edit.clear())
+        head.addWidget(btn_clear)
+        btn_export = QPushButton("导出")
+        btn_export.setObjectName("ghost")
+        btn_export.clicked.connect(self._export_log)
+        head.addWidget(btn_export)
+        lay.addLayout(head)
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        log_layout.addWidget(self.log_edit)
-        log_group.setLayout(log_layout)
-        main_layout.addWidget(log_group, 1)
+        lay.addWidget(self.log_edit)
+        return card
 
-        self.setAcceptDrops(True)                # 主窗口自身可接受拖放
+    def _build_version_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addWidget(QLabel("版本库:"))
+        self.combo_lib = QComboBox()
+        self.combo_lib.setMinimumWidth(360)
+        self.combo_lib.currentIndexChanged.connect(self._on_lib_selected)
+        row.addWidget(self.combo_lib)
+        btn = QPushButton("刷新")
+        btn.setObjectName("ghost")
+        btn.clicked.connect(self._reload_lib)
+        row.addWidget(btn)
+        row.addStretch()
+        self.lbl_dev_info = QLabel("")
+        self.lbl_dev_info.setObjectName("dev_info")
+        row.addWidget(self.lbl_dev_info)
+        return row
 
-    # ---------- 拖拽文件支持 ----------
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-    def dragMoveEvent(self, event):
-        event.acceptProposedAction()
+    # ================================================================
+    # 模式与配置
+    # ================================================================
+    def _switch_mode(self, mode: str):
+        for k, b in self.mode_buttons.items():
+            b.setChecked(k == mode)
+        self.stack_transport.setCurrentIndex(
+            ["uart", "tcp", "http"].index(mode))
+        self._refresh_ports()
 
-    def dropEvent(self, event: QDropEvent):
-        for url in event.mimeData().urls():
-            path = url.toLocalFile()
-            if path.lower().endswith('.bin'):
-                self.edit_file.setText(path)
-                break
+    def _current_mode(self) -> str:
+        for k, b in self.mode_buttons.items():
+            if b.isChecked():
+                return k
+        return "uart"
 
-    # ---------- 配置存取 ----------
+    def _refresh_ports(self):
+        ports = UartTransport.list_ports()
+        cur = self.combo_port.currentText()
+        self.combo_port.blockSignals(True)
+        self.combo_port.clear()
+        self.combo_port.addItems(ports)
+        if cur in ports:
+            self.combo_port.setCurrentText(cur)
+        self.combo_port.blockSignals(False)
+
     def _load_config(self):
         self.edit_file.setText(self.config.get("last_file", ""))
-        self.edit_version.setValue(int(self.config.get("last_version", 1)))
+        self.spin_version.setValue(int(self.config.get("last_version", 1)))
         self.edit_uid.setText(self.config.get("last_uid", ""))
-        # 安全：私钥不落盘；若设置了环境变量 OTA_PRIVKEY 则自动注入
+        self.edit_tcp_ip.setText(self.config.get("last_tcp_ip", "192.168.10.10"))
+        self.spin_tcp_port.setValue(int(self.config.get("last_tcp_port", 9020)))
+        self.spin_http_port.setValue(int(self.config.get("last_http_port", 8080)))
+        self.edit_ctl.setText(self.config.get("last_ctl", "COM9"))
+        self.edit_board_ip.setText(self.config.get("last_board_ip", "192.168.10.10"))
+        port = self.config.get("last_port", "")
+        if port and self.combo_port.findText(port) >= 0:
+            self.combo_port.setCurrentText(port)
+        baud = self.config.get("last_baudrate", "921600")
+        if self.combo_baud.findText(baud) >= 0:
+            self.combo_baud.setCurrentText(baud)
         env_key = os.environ.get("OTA_PRIVKEY", "").strip()
         if env_key:
             self.edit_key.setText(env_key)
-            self.lbl_key_status.setText("✓ 环境变量已注入")
-            self.lbl_key_status.setStyleSheet("color: #228B22;")
+            self.lbl_key.setText("✓ 环境变量已注入")
+            self.lbl_key.setStyleSheet("color:#34d399;")
         else:
-            self.lbl_key_status.setText("未设置(可手动粘贴)")
-            self.lbl_key_status.setStyleSheet("color: #B8860B;")
+            self.lbl_key.setText("未设置（可粘贴或设 OTA_PRIVKEY）")
+            self.lbl_key.setStyleSheet("color:#fbbf24;")
+        self._reload_lib()
+
+    def _persist_current(self):
+        self.config.set("last_tcp_ip", self.edit_tcp_ip.text().strip())
+        self.config.set("last_tcp_port", str(self.spin_tcp_port.value()))
+        self.config.set("last_http_port", str(self.spin_http_port.value()))
+        self.config.set("last_ctl", self.edit_ctl.text().strip())
+        self.config.set("last_board_ip", self.edit_board_ip.text().strip())
 
     def _save_config(self):
         self.config.set("last_port", self.combo_port.currentText())
         self.config.set("last_baudrate", self.combo_baud.currentText())
         self.config.set("last_file", self.edit_file.text())
-        self.config.set("last_version", str(self.edit_version.value()))
+        self.config.set("last_version", str(self.spin_version.value()))
         self.config.set("last_uid", self.edit_uid.text())
-        # 安全：私钥绝不写入配置文件
+        self._persist_current()
 
-    # ---------- 串口控制 ----------
-    def _toggle_serial(self):
-        if not self.serial_opened:
-            port = self.combo_port.currentText()
-            baud = int(self.combo_baud.currentText())
-            try:
-                self.serial_instance = serial.Serial(port, baud, timeout=0.5)
-                self.serial_opened = True
-                self.btn_serial_toggle.setText("关闭串口")
-                self.combo_port.setEnabled(False)
-                self.combo_baud.setEnabled(False)
-                self._append_log(f"串口 {port} 已打开", COLOR_OK)
-            except Exception as e:
-                QMessageBox.critical(self, "串口错误", f"无法打开串口: {str(e)}")
-        else:
-            if self.serial_instance and self.serial_instance.is_open:
-                self.serial_instance.close()
-            self.serial_opened = False
-            self.serial_instance = None
-            self.btn_serial_toggle.setText("打开串口")
-            self.combo_port.setEnabled(True)
-            self.combo_baud.setEnabled(True)
-            self._append_log("串口已关闭", COLOR_DEBUG)
+    # ================================================================
+    # 连接测试
+    # ================================================================
+    def _test_uart(self):
+        u = UartTransport(self.combo_port.currentText(),
+                          int(self.combo_baud.currentText()))
+        try:
+            u.open()
+            u.drain()
+            from core.hostlink import build_get_info, CMD_GET_INFO
+            r = u.cmd(build_get_info(), CMD_GET_INFO, timeout=1.5, retries=2)
+            if r:
+                ver = int.from_bytes(r[5:9], "little")
+                self._append_log(f"✅ 串口在线 · 协议版本 {ver}", "green")
+                self.lbl_dev.setText("设备: 在线 (UART)")
+            else:
+                self._append_log("⚠️ 串口已开但无响应（确认 OTA 口与波特率）",
+                                 "orange")
+        except TransportError as e:
+            self._append_log(f"❌ {e}", "red")
+        finally:
+            u.close()
 
-    def _auto_close_serial(self):
-        if self.serial_opened:
-            self._toggle_serial()
+    def _test_tcp(self):
+        ip = self.edit_tcp_ip.text().strip()
+        t = TcpTransport(ip, self.spin_tcp_port.value())
+        try:
+            t.open()
+            r = t.cmd(4, b"", timeout=3)   # STATUS
+            state = r[0] if r else "?"
+            self._append_log(f"✅ TCP 在线 · OTA 状态 state={state}", "green")
+            self.lbl_dev.setText(f"设备: 在线 ({ip})")
+        except TransportError as e:
+            self._append_log(f"❌ {e}", "red")
+        finally:
+            t.close()
 
-    # ---------- UID 自动获取 ----------
+    # ================================================================
+    # 固件/UID
+    # ================================================================
+    def _browse_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择固件", "",
+                                              "固件文件 (*.bin)")
+        if path:
+            self.edit_file.setText(path)
+
     def _capture_uid(self):
-        if not self.serial_opened:
-            QMessageBox.warning(self, "提示", "请先打开串口")
-            return
-        self.uid_thread = UidCaptureThread(self.serial_instance)
-        self.uid_thread.uid_captured.connect(self.edit_uid.setText)
-        self.uid_thread.log_signal.connect(self._append_log)
-        self.uid_thread.start()
+        port = self.combo_port.currentText()
+        baud = int(self.combo_baud.currentText())
+        self._append_log(f"监听 {port} 等待设备 UID 上报...", "cyan")
+        import threading
+        threading.Thread(target=self._uid_worker, args=(port, baud),
+                         daemon=True).start()
 
-    # ---------- 升级控制 ----------
+    def _uid_worker(self, port, baud):
+        try:
+            u = UartTransport(port, baud)
+            u.open()
+            try:
+                deadline = time.time() + 6
+                buf = b""
+                while time.time() < deadline:
+                    n = u._ser.in_waiting if u.is_open else 0
+                    if n:
+                        buf += u.read(n)
+                        text = buf.decode("utf-8", "replace")
+                        if "DEV_UID:" in text:
+                            uid = text.split("DEV_UID:")[1].strip().split()[0]
+                            if len(uid) == 24:
+                                self.edit_uid.setText(uid)
+                                self._append_log(f"✅ 已获取 UID: {uid}", "green")
+                                return
+                        buf = buf[-1024:]
+                    time.sleep(0.01)
+                self._append_log("⚠️ 未检测到 UID 上报", "orange")
+            finally:
+                u.close()
+        except TransportError as e:
+            self._append_log(f"❌ {e}", "red")
+
+    # ================================================================
+    # 升级控制
+    # ================================================================
+    def _build_cfg(self) -> dict:
+        mode = self._current_mode()
+        cfg = {
+            "mode": mode,
+            "file": self.edit_file.text().strip(),
+            "version": self.spin_version.value(),
+            "build_no": 0,
+            "uid": self.edit_uid.text().strip(),
+            "key": self.edit_key.text().strip(),
+            "verify_http": False,
+            "verify_boot_log": False,
+        }
+        if mode == "uart":
+            cfg.update({
+                "uart_port": self.combo_port.currentText(),
+                "uart_baud": int(self.combo_baud.currentText()),
+                "use_ymodem": self.chk_ymodem.isChecked(),
+                "verify_boot_log": self.chk_verify_log.isChecked(),
+                "debug_port": "COM9",
+                "debug_baud": 115200,
+            })
+        elif mode == "tcp":
+            cfg.update({
+                "tcp_ip": self.edit_tcp_ip.text().strip(),
+                "tcp_port": self.spin_tcp_port.value(),
+                "no_resume": self.chk_no_resume.isChecked(),
+                "verify_http": self.chk_verify_http.isChecked(),
+            })
+        elif mode == "http":
+            ctl = self.combo_ctl.currentText()
+            cfg.update({
+                "http_port": self.spin_http_port.value(),
+                "board_ip": self.edit_board_ip.text().strip(),
+                "ctl_mode": "uart" if ctl.startswith("UART") else "tcp",
+                "ctl_port": self.edit_ctl.text().strip(),
+                "ctl_baud": 115200,
+                "ctl_ip": self.edit_ctl.text().strip(),
+                "verify_http": self.chk_http_verify.isChecked(),
+            })
+        return cfg
+
     def _start_ota(self):
-        if not self.serial_opened:
-            QMessageBox.warning(self, "提示", "请先打开串口")
+        if self.engine and self.engine.isRunning():
             return
-
-        file_path = self.edit_file.text()
-        version = self.edit_version.value()
-        uid = self.edit_uid.text()
-        key = self.edit_key.text()
-
-        if not all([file_path, uid, key]):
-            QMessageBox.warning(self, "参数缺失", "请填写所有必要参数")
+        cfg = self._build_cfg()
+        mode = self._current_mode()
+        if not cfg["file"] or not cfg["uid"] or not cfg["key"]:
+            QMessageBox.warning(self, "参数缺失", "请填写固件文件、UID 与私钥")
             return
-
+        if mode == "uart" and not cfg["uart_port"]:
+            QMessageBox.warning(self, "参数缺失", "请选择 OTA 串口")
+            return
+        if mode == "tcp" and not cfg["tcp_ip"]:
+            QMessageBox.warning(self, "参数缺失", "请填写设备 IP")
+            return
         reply = QMessageBox.question(
             self, "确认升级",
-            f"固件: {os.path.basename(file_path)}\n"
-            f"版本: {version}\n"
-            f"UID: {uid[:8]}...\n\n"
+            f"模式: {mode.upper()}\n固件: {os.path.basename(cfg['file'])}\n"
+            f"版本: v{cfg['version']}\n设备 UID: {cfg['uid'][:8]}...\n\n"
             "确认开始升级？",
-            QMessageBox.Yes | QMessageBox.No
-        )
+            QMessageBox.Yes | QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
-
         self._save_config()
+        self._reset_dashboard()
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
-        self.progress.setValue(0)
-        self.log_edit.clear()
+        self._t0 = time.perf_counter()
+        self._append_log("── 新会话开始 ──────────────────────────", "cyan")
+        self.engine = OtaEngine(mode, cfg)
+        self._hook_engine(self.engine)
+        self.engine.start()
 
-        self.worker = OtaWorker(
-            serial_instance=self.serial_instance,
-            file_path=file_path,
-            version=version,
-            uid_hex=uid,
-            private_key_hex=key,
-            mode="ymodem" if self.combo_mode.currentIndex() == 1 else "hostlink"
-        )
-        self.worker.log_signal.connect(self._append_log)
-        self.worker.progress_signal.connect(self.progress.setValue)
-        self.worker.finished_signal.connect(self._on_finished)
-        self.worker.stage_signal.connect(self._set_stage)
-        self.worker.start()
-
-    def _on_mode_changed(self, index):
-        if index == 0:
-            self.lbl_mode_hint.setText(
-                "HOSTLINK 运行时：APP 在线下载到 Download 区，BOOT 校验后切换；"
-                "请使用数据口并选择 921600 波特率")
-            if "921600" not in [self.combo_baud.itemText(i)
-                                for i in range(self.combo_baud.count())]:
-                self.combo_baud.addItem("921600")
-        else:
-            self.lbl_mode_hint.setText(
-                "YMODEM 传统：需先让设备进入 BOOT 升级模式（发 ota 命令复位），"
-                "使用升级口 115200 波特率")
+    def _hook_engine(self, eng: OtaEngine):
+        eng.log.connect(self._append_log)
+        eng.progress.connect(self._on_progress)
+        eng.stage.connect(self._set_stage)
+        eng.device_info.connect(self._on_device_info)
+        eng.finished.connect(lambda ok, msg: self._on_finished(ok, msg))
 
     def _stop_ota(self):
-        if self.worker and self.worker.isRunning():
-            self.worker.stop()
-            self.btn_start.setEnabled(True)
-            self.btn_stop.setEnabled(False)
-            self._append_log("用户手动停止", COLOR_WARN)
+        if self.engine and self.engine.isRunning():
+            self.engine.stop()
+            self._append_log("⏹ 正在停止...", "orange")
 
-    def _on_finished(self, success):
+    def _on_progress(self, done, total, speed, eta):
+        self.progress.setValue(int(done * 100 / total) if total else 0)
+        self.lbl_stat.setText(f"{done:,} / {total:,} 字节")
+        if speed > 0:
+            self.lbl_speed.setText(f"速率 {speed / 1024:.1f} KB/s")
+            self.lbl_eta.setText(f"剩余 {eta:.1f}s")
+        self.lbl_elapsed.setText(f"耗时 {time.perf_counter() - self._t0:.1f}s")
+
+    def _on_device_info(self, info: dict):
+        if isinstance(info, dict) and info.get("ip"):
+            self.lbl_dev_info.setText(
+                f"设备: v{info.get('ver','?')} · {info.get('ip')} · "
+                f"堆 {info.get('heap_free','?')}B")
+
+    def _on_finished(self, ok, msg):
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        if success:
-            QMessageBox.information(self, "完成", "固件升级成功！")
-            self._auto_close_serial()
+        self.engine = None
+        if ok:
+            self._append_log(f"✅ 升级成功 · {msg}", "green")
         else:
-            QMessageBox.critical(self, "失败", "升级失败，请查看日志")
+            self._append_log(f"❌ 升级失败 · {msg}", "red")
 
-    def _append_log(self, message, color=COLOR_DEFAULT):
-        self.log_edit.append(f'<span style="color:{color};">{message}</span>')
+    def _reset_dashboard(self):
+        self.progress.setValue(0)
+        self.lbl_stat.setText("0 / 0 字节")
+        self.lbl_speed.setText("速率 --")
+        self.lbl_eta.setText("剩余 --")
+        self.lbl_elapsed.setText("耗时 0.0s")
+        self._set_stage("IDLE")
+
+    def _set_stage(self, stage: str):
+        mapping = {"IDLE": 0, "ERASING": 1, "DOWNLOADING": 2,
+                   "VERIFYING": 3, "COMMITTED": 4, "RUNNING": 5,
+                   "DONE": 6, "FAIL": 6}
+        idx = mapping.get(stage, 0)
+        for i, lbl in enumerate(self.stage_segs):
+            if stage == "FAIL":
+                lbl.setProperty("state", "fail")
+            elif i < idx:
+                lbl.setProperty("state", "done")
+            elif i == idx and idx < 6:
+                lbl.setProperty("state", "cur")
+            else:
+                lbl.setProperty("state", "wait")
+            lbl.style().unpolish(lbl)
+            lbl.style().polish(lbl)
+
+    # ================================================================
+    # 日志 / 版本库 / 拖放
+    # ================================================================
+    def _append_log(self, message: str, color: str = "default"):
+        c = _C.get(color, _C["default"])
+        ts = time.strftime("%H:%M:%S")
+        self.log_edit.append(
+            f'<span style="color:#64748b;">[{ts}]</span> '
+            f'<span style="color:{c};">{message}</span>')
         sb = self.log_edit.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-    def _toggle_key_visibility(self, state):
-        if state == Qt.Checked:
-            self.edit_key.setEchoMode(QLineEdit.Normal)
-        else:
-            self.edit_key.setEchoMode(QLineEdit.Password)
+    def _export_log(self):
+        path, _ = QFileDialog.getSaveFileName(self, "导出日志", "ota_log.txt",
+                                              "文本文件 (*.txt)")
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.log_edit.toPlainText())
+            self._append_log(f"日志已导出: {path}", "gray")
 
-
-    # ---------- 升级阶段流程条 ----------
-    def _set_stage(self, stage):
-        segs = ["IDLE", "DOWNLOADING", "VERIFYING", "COMMITTED", "RUNNING"]
-        idx = segs.index(stage) if stage in segs else 0
-        done_ss = ("background:#27ae60;color:white;border-radius:6px;"
-                   "padding:8px 4px;font-weight:bold;")
-        cur_ss = ("background:#3498db;color:white;border-radius:6px;"
-                  "padding:8px 4px;font-weight:bold;")
-        wait_ss = ("background:#ecf0f1;color:#7f8c8d;border-radius:6px;"
-                   "padding:8px 4px;font-weight:bold;")
-        for i, (name, lbl) in enumerate(self.stage_segments):
-            if i < idx:
-                lbl.setStyleSheet(done_ss)
-            elif i == idx:
-                lbl.setStyleSheet(cur_ss)
-            else:
-                lbl.setStyleSheet(wait_ss)
-
-    # ---------- 版本库 ----------
     def _reload_lib(self):
         self.lib_data = load_lib()
         self.combo_lib.blockSignals(True)
         self.combo_lib.clear()
-        self.combo_lib.addItem("— 手动选择 —")
+        self.combo_lib.addItem("— 选择历史版本 —")
         for e in self.lib_data.get("entries", []):
-            label = f"v{e.get('version','?')} (build {e.get('build','?')}) {e.get('note','')}"
-            self.combo_lib.addItem(label, e)
+            self.combo_lib.addItem(
+                f"v{e.get('version','?')} (build {e.get('build','?')}) "
+                f"{e.get('note','')}", e)
         self.combo_lib.blockSignals(False)
 
     def _on_lib_selected(self, idx):
@@ -412,88 +699,69 @@ class MainWindow(QMainWindow):
         e = self.combo_lib.itemData(idx)
         if e:
             self.edit_file.setText(e.get("file", ""))
-            self.edit_version.setValue(int(e.get("version", 1)))
+            self.spin_version.setValue(int(e.get("version", 1)))
 
-    # ---------- 批量升级（HOSTLINK 多端口并发） ----------
+    # ---- 批量升级（UART 多端口并发） ----
     def _start_batch(self):
+        if self._batch_running:
+            QMessageBox.warning(self, "提示", "批量升级正在进行中")
+            return
         ports = list(dict.fromkeys(
-            p.strip() for p in self.edit_batch_ports.text().split(",") if p.strip()))
+            p.strip() for p in self.edit_batch.text().split(",") if p.strip()))
         if not ports:
             QMessageBox.warning(self, "提示", "请填写批量端口（逗号分隔）")
             return
-        if getattr(self, "_batch_running", False):
-            QMessageBox.warning(self, "提示", "批量升级正在进行中，请等待完成")
-            return
-        file_path = self.edit_file.text()
-        version = self.edit_version.value()
-        uid = self.edit_uid.text()
-        key = self.edit_key.text()
+        file_path = self.edit_file.text().strip()
+        uid = self.edit_uid.text().strip()
+        key = self.edit_key.text().strip()
         if not all([file_path, uid, key]):
-            QMessageBox.warning(self, "参数缺失", "请填写所有必要参数")
+            QMessageBox.warning(self, "参数缺失", "请填写固件文件、UID 与私钥")
             return
-        baud = int(self.combo_baud.currentText())
         self._append_log(
             f"批量 {len(ports)} 台：同批次设备 UID 需一致（AES 密钥由 UID 派生）",
-            COLOR_WARN)
-        self.progress.setValue(0)
-        self.btn_batch.setEnabled(False)
+            "orange")
         self._batch_running = True
-        self._batch_workers = []
-        # 串行预分配 build_no（避免并发 alloc 竞争导致版本库损坏/重复）
+        self.btn_batch.setEnabled(False)
+        self._batch_engines = []
+        # 串行预分配 build_no（避免并发竞争导致版本库损坏/重复）
+        from core.version_lib import alloc_build_no, load_lib
         lib = load_lib()
-        assigned = []
-        for port in ports:
-            bn = alloc_build_no(lib)
-            assigned.append((port, bn))
+        assigned = [(p, alloc_build_no(lib)) for p in ports]
         for port, bn in assigned:
-            try:
-                ser = serial.Serial(port, baud, timeout=0.5)
-            except Exception as ex:
-                self._append_log(f"[{port}] 打开失败: {ex}", COLOR_ERROR)
-                continue
-            w = OtaWorker(serial_instance=ser, file_path=file_path, version=version,
-                          uid_hex=uid, private_key_hex=key, mode="hostlink",
-                          build_no=bn)
-            w.log_signal.connect(lambda m, c, p=port: self._append_log(f"[{p}] {m}", c))
-            w.progress_signal.connect(self.progress.setValue)
-            w.stage_signal.connect(self._set_stage)
-            w.finished_signal.connect(
-                lambda ok, p=port, s=ser: self._batch_done(ok, p, s))
-            self._batch_workers.append(w)
-            w.start()
-            self._append_log(f"[{port}] 批量升级已启动 (build {bn})", COLOR_INFO)
+            cfg = self._build_cfg()
+            cfg.update({"uart_port": port, "build_no": bn, "verify_boot_log": False})
+            eng = OtaEngine("uart", cfg)
+            eng.log.connect(
+                lambda m, c, p=port: self._append_log(f"[{p}] {m}", c))
+            eng.progress.connect(self._on_progress)
+            eng.stage.connect(self._set_stage)
+            eng.finished.connect(
+                lambda ok, msg, p=port: self._batch_done(ok, msg, p))
+            self._batch_engines.append(eng)
+            self._append_log(f"[{port}] 批量升级已启动 (build {bn})", "cyan")
+            eng.start()
 
-    def _batch_done(self, ok, port, ser):
-        try:
-            if ser and ser.is_open:
-                ser.close()
-        except Exception:
-            pass
-        self._append_log(f"[{port}] 升级{'成功' if ok else '失败'}",
-                         COLOR_OK if ok else COLOR_ERROR)
-        if self._batch_workers and all(not w.isRunning() for w in self._batch_workers):
+    def _batch_done(self, ok, msg, port):
+        self._append_log(f"[{port}] 升级{'成功' if ok else '失败'} · {msg}",
+                         "green" if ok else "red")
+        if all(not e.isRunning() for e in self._batch_engines):
             self._batch_running = False
             self.btn_batch.setEnabled(True)
-            self._append_log("批量升级全部结束", COLOR_INFO)
+            self._append_log("批量升级全部结束", "cyan")
+
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent):
+        for url in event.mimeData().urls():
+            p = url.toLocalFile()
+            if p.lower().endswith(".bin"):
+                self.edit_file.setText(p)
+                break
 
     def closeEvent(self, event):
-
-        if self.serial_instance and self.serial_instance.is_open:
-            self.serial_instance.close()
+        if self.engine and self.engine.isRunning():
+            self.engine.stop()
+            self.engine.wait(3000)
         event.accept()
-
-    def eventFilter(self, obj, event):
-        from PyQt5.QtCore import QEvent
-        if obj == self.edit_file:
-            if event.type() == QEvent.DragEnter:
-                event.acceptProposedAction()
-                return True
-            elif event.type() == QEvent.Drop:
-                mime = event.mimeData()
-                if mime.hasUrls():
-                    path = mime.urls()[0].toLocalFile()
-                    if path.lower().endswith('.bin'):
-                        self.edit_file.setText(path)
-                        return True
-                return True
-        return super().eventFilter(obj, event)

@@ -1923,3 +1923,44 @@ auto-stop）全部按设计工作。
   `Agent ready (last build 297)`。
 - 防重放回归：推相同 build 号被 BOOT 拒绝（`phase=255 err=3`）→ 必须严格递增。
 - 主机单测/自检全绿；OtaMgr 注册 4 传输（CAN reserved）启动日志确认。
+
+---
+
+## 9. OTA_Tool 上位机全面升级（v3.0）+ MCU 三通道极致提速
+
+> 2026-08-11 · build 311/315/316 三模式实测通过 · 229KB 固件
+
+### 9.1 MCU 端优化（build 299-311）
+- **会话持久化每 16 块一次**（3840B 粒度）：每块省 1 次 Flash 写，三通道同收益。
+- **TCP 服务器流式逐帧解析**：修复流水线多帧同段到达时 249B 缓冲截断
+  导致 DATA 状态 2（帧错位）。
+- **服务器连接关闭 Nagle**：ACK 立即发送，防小段堆积。
+- **TCP_MSS 显式定义 1460**（缺省 536 使窗口仅 4.3KB）：
+  8KB 突发直接超窗 → 客户端 sendall 与板端发送缓冲双向死锁，
+  实测 OTA 服务卡死；修复后窗口 11.7KB。
+- **PBUF_POOL_SIZE 8→16**：突发吸收，SRAM 余量充足（128KB 仅用 59.6KB）。
+- `ota http` 命令兼容完整 URL（自动跳过 `http://` 前缀）。
+
+### 9.2 上位机重构（HOST/OTA_Tool v3.0）
+- **transport.py**：UART(HOSTLINK)/TCP(:9020)/HTTP(板端拉取) 三通道抽象；
+  TCP 帧协议带 CRC；HTTP 服务单文件推送；按板端 IP 自动选同网段网卡。
+- **ota_engine.py**：统一升级引擎——包构建、断点续传、流水线（窗口默认 8，
+  实测 10+ 次 100% 稳定）、速率/ETA 计量、BOOT 阶段可视化、
+  升级后 :8080 状态页 + COM9 启动日志并发验证。
+- **main_window.py / styles.qss**：全新暗色高端主题、三模式动态面板、
+  实时仪表盘（进度/速率/ETA/耗时）、阶段流程条、版本库、批量升级。
+- 删除被取代的 ota_worker.py / device_interface.py / uid_capture_thread.py。
+
+### 9.3 实测结果（build 316 最终固件）
+| 模式 | 传输速率 | 全流程 | 验证 |
+| --- | --- | --- | --- |
+| TCP :9020 | 177-221KB/s（流水线，1.3s/229KB） | 21s（含擦除+启动验证） | :8080 状态页 |
+| UART COM13 | 31-34KB/s（逐块确认） | 26s | BOOT 七阶段 + :8080 |
+| HTTP 拉取 | 板端拉取 ~25s | 54s | :8080 状态页 |
+
+### 9.4 排查中揪出的坑
+- 多段小写触发 Nagle/延迟 ACK → ACK 单次整帧写入（43ms→1.7ms）。
+- **Python time.monotonic() 在 Windows 为 GetTickCount64（15.6ms 分辨率）**
+  → 逐块速率恒算不出；改用 time.perf_counter()（QPC）。
+- 板端 `ota http` 只认 `<ip>/<path>`，URL 带 `http://` 会把 "http:" 当主机名。
+- 多网卡 PC 用默认路由 IP 会选错网段 → 按板端 IP UDP connect 选路。

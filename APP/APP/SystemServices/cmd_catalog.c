@@ -1,8 +1,9 @@
 /* ================================================================
- * 命令目录：全部 cmd_* 实现（传输无关）
- *   - 命令只声明 transport 掩码（CMD_TRANSPORT_*），不感知物理协议
- *   - 输出统一走 LOG_Printf，由命令核心路由到当前适配器会话
- *   - 新增命令 = 在此加 cmd_xxx 实现 + cmd_table 一行
+ * cmd_catalog —— 命令目录：全部 cmd_* 实现（传输无关）
+ *
+ * 架构位置：APP 服务层；被 Shell(UART)/TCP 控制台共同注册调用
+ * 核心流程：命令只声明 transport 掩码 -> 输出走 LOG_Printf 由核心路由
+ * 关键约束：新增命令 = 加 cmd_xxx 实现 + cmd_table 一行
  * ================================================================ */
 #include "cmd_catalog.h"
 #include "bsp.h"
@@ -756,6 +757,12 @@ static void cmd_ota(const char *args)
     if (arg_match(args, "http")) {
         const char *p = args + 4;
         while (*p == ' ' || *p == '\t') p++;
+        /* 兼容完整 URL：跳过 http:// 或 https:// 前缀 */
+        if (strncmp(p, "http://", 7) == 0) {
+            p += 7;
+        } else if (strncmp(p, "https://", 8) == 0) {
+            p += 8;
+        }
         if (*p == '\0') {
             LOG_Printf("Usage: ota http <ip[:port]>/<path>\r\n");
             return;

@@ -10,7 +10,11 @@ class Config:
             "last_file": "",
             "last_version": "1",
             "last_uid": "",
-            "last_key": ""
+            "last_key": "",
+            "last_tcp_ip": "192.168.10.10",
+            "last_tcp_port": "9020",
+            "last_http_port": "8080",
+            "last_ctl": "COM9",
         }
         self.load()
 

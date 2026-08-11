@@ -1,10 +1,11 @@
-/* OTA Agent：运行时固件下载到 DOWNLOAD 区 + 启动确认（A/B 回滚体系配套）。
+/* ================================================================
+ * ota_agent —— 运行时 OTA：下载到 DOWNLOAD 区 + 启动确认
  *
- * 流程：上位机 HOSTLINK 发 BEGIN/DATA/END -> 固件写入 DOWNLOAD 区 ->
- *       置备份域升级标志并复位 -> BOOT 备份当前 RUN、切换新固件、
- *       新固件启动后由本模块向参数区写"确认成功"（未确认则 BOOT 回滚）。
- * 安全（签名/解密/版本防回滚）由 BOOT 完成，本模块只保证传输完整。
- */
+ * 架构位置：APP 应用层；供 data_link / cmd_shell / OtaTcp / OtaHttp 调用
+ * 核心流程：BEGIN -> DATA(240B/块) -> END -> 复位进 BOOT -> 启动确认成功
+ * 关键约束：Flash 编程期间关中断；调用方必须顺序写、不跳块；
+ *           安全校验（签名/解密/防回滚）由 BOOT 统一完成
+ * ================================================================ */
 #include "ota_agent.h"
 
 #include <string.h>
@@ -21,13 +22,13 @@
 /* ---------------- 参数区（与 BOOT/boot_param.c 结构一致） ---------------- */
 #pragma pack(1)
 typedef struct {
-    uint32_t magic;
-    uint32_t boot_state;
-    uint32_t boot_count;
-    uint32_t rollback_count;
-    uint32_t last_error;
-    uint32_t last_build_no;
-    uint32_t crc32;
+    uint32_t magic;            /* OTA_PARAM_MAGIC，识别有效参数块 */
+    uint32_t boot_state;       /* NORMAL/PENDING/RECOVERY/UPGRADE 状态机 */
+    uint32_t boot_count;       /* 新固件启动尝试次数（超限回滚） */
+    uint32_t rollback_count;   /* 历史回滚次数（诊断用） */
+    uint32_t last_error;       /* 最近一次 BOOT 错误码 */
+    uint32_t last_build_no;    /* 已接受的最大构建号（防重放） */
+    uint32_t crc32;            /* 覆盖 magic..last_build_no 的校验和 */
 } ota_param_t;
 #pragma pack()
 
@@ -35,9 +36,9 @@ typedef struct {
 #pragma pack(1)
 typedef struct {
     uint32_t magic;       /* OTA_SESSION_MAGIC */
-    uint32_t version;
-    uint32_t total;
-    uint32_t received;
+    uint32_t version;     /* 会话固件版本，续传须匹配 */
+    uint32_t total;       /* 固件总长 */
+    uint32_t received;    /* 已收字节，即续传起点 */
     uint32_t crc32;       /* 覆盖 magic..received */
 } ota_session_t;          /* 20B，槽间距 32B */
 #pragma pack()
@@ -46,10 +47,11 @@ static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len);
 
 /* ---------------- 内部状态 ---------------- */
 static volatile uint8_t  ota_state = OTA_ST_IDLE;
-static uint32_t ota_total = 0;        /* 固件总大小 */
-static uint32_t ota_received = 0;     /* 已收字节 */
+static uint32_t ota_total = 0;         /* 固件总大小 */
+static uint32_t ota_received = 0;      /* 已收字节 */
 static uint32_t ota_begin_version = 0; /* 本次会话版本（会话槽持久化用） */
 
+/** @brief 计算会话槽 CRC32（只覆盖 crc32 字段之前的数据） */
 static uint32_t ota_session_crc(const ota_session_t *s)
 {
     const uint8_t *d = (const uint8_t *)s;
@@ -63,6 +65,13 @@ static uint32_t ota_session_crc(const ota_session_t *s)
     return crc;
 }
 
+/**
+ * @brief  将当前进度持久化到指定会话槽（每块写入一次，断电可续传）
+ * @param  slot      槽号（0..OTA_SESSION_SLOTS-1）
+ * @param  version   固件版本
+ * @param  total     固件总长
+ * @param  received  已收字节
+ */
 static void ota_session_save(uint32_t slot, uint32_t version,
                              uint32_t total, uint32_t received)
 {
@@ -82,7 +91,7 @@ static void ota_session_save(uint32_t slot, uint32_t version,
     }
 }
 
-/* 扫描槽区，返回最新（槽号最大）的有效会话 */
+/** @brief 扫描槽区，返回最新（槽号最大）的有效会话；无部分会话返回 false */
 static bool ota_session_latest(ota_session_t *out)
 {
     ota_session_t best;
@@ -100,7 +109,7 @@ static bool ota_session_latest(ota_session_t *out)
             best.received < best.total);
 }
 
-/* 失效全部会话槽：魔数写 0（1→0，无需擦除），约几十毫秒 */
+/** @brief 失效全部会话槽：魔数写 0（1→0 无需擦除），约几十毫秒 */
 static void ota_session_clear(void)
 {
     uint8_t zero[4] = {0, 0, 0, 0};
@@ -109,7 +118,7 @@ static void ota_session_clear(void)
     }
 }
 
-/* shell "ota" 命令：写 BKP 升级标志并复位，触发 BOOT 升级模式 */
+/** @brief 响应 shell "ota" 命令：写 BKP 升级标志并复位，触发 BOOT 升级模式 */
 static void handle_ota_start_msg(const message_t *msg)
 {
     if (msg == NULL || msg->hdr.type != MSG_CMD_OTA_START) {
@@ -122,7 +131,7 @@ static void handle_ota_start_msg(const message_t *msg)
 }
 
 /* ---------------- Flash 操作（HAL） ---------------- */
-/* 地址 → Flash 扇区号 */
+/** @brief 把 Flash 绝对地址映射为扇区号（覆盖 0x0800_0000~0x080F_FFFF） */
 static uint32_t ota_flash_sector_of(uint32_t addr)
 {
     if (addr >= 0x08000000 && addr < 0x08004000) return FLASH_SECTOR_0;
@@ -139,8 +148,14 @@ static uint32_t ota_flash_sector_of(uint32_t addr)
     return FLASH_SECTOR_11;
 }
 
-/* 擦除 [addr, addr+len) 覆盖的全部扇区；len==0 时仅擦 addr 所在扇区。
- * DOWNLOAD 现为 256KB（扇区9+10），必须整区擦除后再写入，防止编程 0→1 失败。 */
+/**
+ * @brief  擦除 [addr, addr+len) 覆盖的全部扇区
+ * @param  addr  起始地址
+ * @param  len   长度；0 表示仅擦 addr 所在扇区
+ * @return true=全部扇区擦除成功
+ * @note   DOWNLOAD 区 256KB（扇区 9+10）必须整区擦除后再写，
+ *         否则编程 0→1 会失败
+ */
 static bool ota_flash_erase(uint32_t addr, uint32_t len)
 {
     uint32_t start_sector = ota_flash_sector_of(addr);
@@ -169,6 +184,14 @@ static bool ota_flash_erase(uint32_t addr, uint32_t len)
     return true;
 }
 
+/**
+ * @brief  向 Flash 写入任意长度数据（自动处理字对齐）
+ * @param  addr  目标地址（任意字节对齐）
+ * @param  data  源数据指针
+ * @param  len   字节数
+ * @return true=全部写入成功
+ * @note   整段编程期间关中断，保证原子性
+ */
 static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
 {
     if (len == 0) return true;
@@ -215,6 +238,7 @@ static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
     return true;
 }
 
+/** @brief 计算参数块 CRC32（只覆盖 crc32 字段之前的数据） */
 static uint32_t ota_param_crc(const ota_param_t *p)
 {
     const uint8_t *d = (const uint8_t *)p;
@@ -229,7 +253,7 @@ static uint32_t ota_param_crc(const ota_param_t *p)
     return crc;
 }
 
-/* 启动确认：BOOT 置 PENDING 后，新固件首次正常运行即写 NORMAL */
+/** @brief 启动确认：BOOT 置 PENDING 后，新固件首次正常运行即写 NORMAL 防回滚 */
 static void ota_confirm_startup(void)
 {
     ota_param_t p;
@@ -258,7 +282,14 @@ static void ota_confirm_startup(void)
     }
 }
 
-/* ---------------- HOSTLINK 命令入口 ---------------- */
+/* ---------------- 传输层命令入口（UART/TCP/HTTP 共用） ---------------- */
+/**
+ * @brief  开始一次 OTA 下载会话
+ * @param  version  固件版本号（低于当前版本会被拒绝）
+ * @param  size     固件包总长
+ * @return 0=成功；1=已在接收中；2=长度非法；3=擦除失败；4=版本降级拒绝
+ * @note   存在同版本同大小的部分会话时自动续传（不擦下载区）
+ */
 uint8_t Ota_Begin(uint32_t version, uint32_t size)
 {
     if (ota_state == OTA_ST_RECEIVING) {
@@ -311,6 +342,14 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     return 0;
 }
 
+/**
+ * @brief  写入一块固件数据（严格顺序写）
+ * @param  offset  本块相对固件起点的偏移，必须等于已收字节数
+ * @param  data    块数据指针
+ * @param  len     块长度，不得超过 OTA_CHUNK_MAX
+ * @return 0=成功；1=非接收态；2=参数非法；3=Flash 写失败
+ * @note   每块写入后持久化进度到会话槽，失败则状态回到 IDLE
+ */
 uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
 {
     if (ota_state != OTA_ST_RECEIVING) {
@@ -331,15 +370,23 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
         return 3;
     }
     ota_received += len;
-    /* 每块持久化一次精确进度（768 槽覆盖 ≤184KB；超出部分续传从最后有效槽恢复）：
-     * 恢复点 = 实际已写位置，避免重写已写区域导致 Flash 编程失败 */
-    uint32_t slot = ota_received / OTA_CHUNK_MAX;
-    if (slot < OTA_SESSION_SLOTS) {
-        ota_session_save(slot, ota_begin_version, ota_total, ota_received);
+    /* 每 16 块（3840B）持久化一次进度：每块省 1 次 Flash 写（约 1ms），
+     * 三通道（UART/TCP/HTTP）整体提速；断点粒度 3840B，可接受。
+     * 恢复点 = 实际已写位置，避免重写已写区域导致 Flash 编程失败。 */
+    if ((ota_received % (OTA_CHUNK_MAX * 16u)) == 0u) {
+        uint32_t slot = ota_received / OTA_CHUNK_MAX;
+        if (slot < OTA_SESSION_SLOTS) {
+            ota_session_save(slot, ota_begin_version, ota_total, ota_received);
+        }
     }
     return 0;
 }
 
+/**
+ * @brief  结束下载：校验收齐后写升级标志并复位进 BOOT
+ * @return 0=成功（随后复位，不会返回）；1=非接收态；2=固件不完整
+ * @note   采用参数区 UPGRADE 状态 + BKP 标志双保险触发
+ */
 uint8_t Ota_End(void)
 {
     if (ota_state != OTA_ST_RECEIVING) {
@@ -382,6 +429,7 @@ uint8_t Ota_End(void)
     return 0;   /* 不会到达 */
 }
 
+/** @brief 读取当前 OTA 状态与进度（供 status 命令/续传客户端使用） */
 uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total)
 {
     *state = ota_state;
@@ -390,6 +438,7 @@ uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total)
     return 0;
 }
 
+/** @brief 强制回到 IDLE 并清空全部会话槽（配合 --no-resume 从零开始） */
 uint8_t Ota_Reset(void)
 {
     ota_state = OTA_ST_IDLE;
@@ -400,6 +449,7 @@ uint8_t Ota_Reset(void)
     return 0;
 }
 
+/** @brief 危险自测：把参数区置为 PENDING+MAX，下次复位触发 BOOT 回滚 */
 void Ota_ForceRollbackTest(void)
 {
     ota_param_t param;
@@ -421,6 +471,7 @@ void Ota_ForceRollbackTest(void)
     BSP_SystemReset();
 }
 
+/** @brief OTA Agent 初始化：订阅命令、执行启动确认、打印参数区状态 */
 void OtaAgent_Init(void)
 {
     EventBus_Subscribe(MSG_CMD_OTA_START, handle_ota_start_msg);

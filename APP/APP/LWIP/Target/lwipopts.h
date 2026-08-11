@@ -117,7 +117,10 @@
  * 零拷贝 RX（自定义池 8×1536）+ 硬件 TX 校验和卸载；
  * TCP 窗口 8.5KB / 发送缓冲 4.3KB，MEM 堆 12KB 覆盖双连接。 */
 #define MEM_SIZE                    (12 * 1024)
-#define PBUF_POOL_SIZE              8
+#define PBUF_POOL_SIZE              16   /* 突发吸收：OTA 流水线 4-8KB 突发 + 并发服务 */
+/* TCP_MSS 必须显式定义：缺省 536 会使窗口仅 4.3KB，8KB 突发直接超窗
+ * 造成客户端 sendall 与板端发送缓冲双向死锁（实测 OTA 服务卡死）。 */
+#define TCP_MSS                     1460
 #define TCP_WND                     (8 * TCP_MSS)
 #define TCP_SND_BUF                 (8 * TCP_MSS)
 #undef  TCP_SND_QUEUELEN

@@ -16,6 +16,7 @@ CMD_OTA_END = 0x0A
 CMD_OTA_STATUS = 0x0B
 CMD_OTA_BOOT_STATUS = 0x0C   # BOOT 升级状态广播
 CMD_OTA_RESET = 0x0D         # 强制复位 OTA 会话（清下载会话槽）
+CMD_GET_INFO = 0x06          # 协议版本查询
 
 OTA_CHUNK_MAX = 240
 
@@ -54,6 +55,21 @@ def build_ota_reset() -> bytes:
 
 def build_ota_status() -> bytes:
     return build_frame(CMD_OTA_STATUS)
+
+
+def build_get_info() -> bytes:
+    """请求协议版本：响应 payload = 4B 协议版本号。"""
+    return build_frame(CMD_GET_INFO)
+
+
+def parse_ota_status(payload: bytes) -> tuple:
+    """解析 OTA 状态响应：返回 (state, received, total)。"""
+    if len(payload) < 9:
+        return (0xFF, 0, 0)
+    state = payload[0]
+    rx = struct.unpack("<I", payload[1:5])[0]
+    total = struct.unpack("<I", payload[5:9])[0]
+    return (state, rx, total)
 
 
 class FrameParser:
