@@ -2176,6 +2176,11 @@
               <FileType>5</FileType>
               <FilePath>..\Config\pinout.h</FilePath>
             </File>
+            <File>
+              <FileName>app_footer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Config\app_footer.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

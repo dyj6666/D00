@@ -3,11 +3,12 @@
 ; *************************************************************
 ;
 ; APP partition: 0x08010000 ~ 0x0805FFFF (320 KB, matches BOOT/boot_config.h RUN)
-; The last 8 bytes (0x0805FFF8 magic / 0x0805FFFC version) are NOT linked;
-; they are written by the OTA flow or Script/append_app_magic.py before flash.
+; The last 8 bytes (0x0805FFF8 magic / 0x0805FFFC version) are linked from
+; Config/app_footer.c, so Keil DAP direct flash is valid out of the box.
+; OTA flow and Script/append_app_magic.py write the same values (idempotent).
 
-LR_IROM1 0x08010000 0x00050000  {    ; load region (320 KB RUN)
-  ER_IROM1 0x08010000 0x00050000  {  ; load address = execution address
+LR_IROM1 0x08010000 0x0004FFF8  {    ; 主镜像 load region（代码+只读数据）
+  ER_IROM1 0x08010000 0x0004FFF8  {  ; load address = execution address
    *.o (RESET, +First)
    *(InRoot$$Sections)
    .ANY (+RO)
@@ -18,5 +19,11 @@ LR_IROM1 0x08010000 0x00050000  {    ; load region (320 KB RUN)
   }
   RW_IRAM2 0x10000000 UNINIT 0x00010000  {  ; CCM RAM 64KB（FreeRTOS 堆/预触发缓冲，CPU-only）
    *(.ccmram)
+  }
+}
+
+LR_FOOTER 0x0805FFF8 0x8  {          ; 独立 load region：RUN 尾部魔数 + 版本号
+  ER_FOOTER 0x0805FFF8 FIXED 0x8  {
+    *(.ota_footer)
   }
 }

@@ -203,13 +203,18 @@ function Stop-Logger {
 
 function Test-BootLog {
     param([string]$Text)
+    # Historical crash-recovery blocks ("[CRASH] Previous crash recovered ..."
+    # plus indented continuation lines) are info only, NOT failures. Strip all
+    # [CRASH] lines before the bad-marker scan; active crashes are detected
+    # separately below on the original text.
+    $cleanText = @(($Text -split "`r?`n") | Where-Object { $_ -notmatch "\[CRASH\]" }) -join "`n"
     $missing = @()
     foreach ($pat in $script:VerifyExpect) {
-        if ($Text -notmatch [regex]::Escape($pat)) { $missing += $pat }
+        if ($cleanText -notmatch [regex]::Escape($pat)) { $missing += $pat }
     }
     $bad = @()
     foreach ($pat in $script:VerifyFail) {
-        if ($Text -match [regex]::Escape($pat)) { $bad += $pat }
+        if ($cleanText -match [regex]::Escape($pat)) { $bad += $pat }
     }
     # Crash records: "[CRASH] Previous crash recovered: #N, cause, uptime" is
     # historical info (firmware recovered and booted). Continuation lines start

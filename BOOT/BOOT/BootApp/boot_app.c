@@ -30,6 +30,53 @@
 
 static bool g_emit_status;   /* 单线程访问（BOOT 主流程），无需 volatile */
 
+/* 板载有源蜂鸣器（PF8 高电平发声）：BOOT 升级关键阶段提示音。
+ * 仅用 GPIO + HAL_Delay，不依赖任何外设库。 */
+static void boot_buzzer_pulse(uint32_t ms)
+{
+    GPIO_InitTypeDef gpio = {0};
+    __HAL_RCC_GPIOF_CLK_ENABLE();
+    gpio.Mode = GPIO_MODE_OUTPUT_PP;
+    gpio.Pull = GPIO_NOPULL;
+    gpio.Speed = GPIO_SPEED_FREQ_MEDIUM;
+    gpio.Pin = GPIO_PIN_8;
+    HAL_GPIO_Init(GPIOF, &gpio);
+    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_8, GPIO_PIN_SET);
+    HAL_Delay(ms);
+    HAL_GPIO_WritePin(GPIOF, GPIO_PIN_8, GPIO_PIN_RESET);
+}
+
+/* ---------- OTA 状态机提示音（节奏即进度，阻塞式，仅依赖 HAL_Delay） ----------
+ * 设计：
+ *   VERIFY/BACKUP/ERASE/WRITE —— 60ms 短音，工作节拍（滴）
+ *   COMMIT                    —— 180ms 长音，提交完成即将重启（嘟）
+ *   校验失败                  —— 三短（滴-滴-滴）
+ *   回滚                      —— 两长（嘟-嘟）
+ * APP 侧另有：开始（滴-滴-嘟）/下载完成（滴-滴）/启动确认（滴-滴-滴-嘟），
+ * 前后呼应形成完整升级旋律。 */
+static void boot_buzzer_play(const uint16_t *on_gap, uint8_t n)
+{
+    if (on_gap == NULL || n == 0) return;
+    for (uint8_t i = 0; i < n; i++) {
+        boot_buzzer_pulse((on_gap[i * 2u] > 0) ? on_gap[i * 2u] : 1u);
+        if (i + 1u < n) {
+            HAL_Delay(on_gap[i * 2u + 1u]);
+        }
+    }
+}
+
+static void boot_buzzer_stage(uint8_t phase)
+{
+    static const uint16_t tick[]   = { 60, 1 };              /* 工作节拍：滴 */
+    static const uint16_t commit[] = { 180, 1 };             /* 提交：嘟 */
+    static const uint16_t fail[]   = { 60, 60, 60, 60, 60, 1 }; /* 三短 */
+    switch (phase) {
+        case BOOT_ST_COMMIT: boot_buzzer_play(commit, 1); break;
+        case BOOT_ST_FAIL:   boot_buzzer_play(fail, 3); break;
+        default:             boot_buzzer_play(tick, 1); break;
+    }
+}
+
 static uint16_t crc16_mbus(const uint8_t *data, uint32_t len)
 {
     uint16_t crc = 0xFFFF;
@@ -194,6 +241,8 @@ static void boot_rollback(void)
 {
     boot_param_t param;
     boot_param_load(&param);
+    static const uint16_t rollback_tone[] = { 160, 80, 160, 1 };
+    boot_buzzer_play(rollback_tone, 2);   /* 回滚：嘟-嘟，提示降级事件 */
     if (boot_restore_backup()) {
         param.boot_state = BOOT_STATE_NORMAL;
         param.boot_count = 0;
@@ -241,8 +290,10 @@ static bool boot_apply_download(bool emit_status)
     if (sec != 0) {
         printf("Security verification failed! err=%ld\r\n", (long)sec);
         boot_status_send(BOOT_ST_FAIL, (uint8_t)(-sec));
+        boot_buzzer_stage(BOOT_ST_FAIL);   /* 校验失败：三短警示 */
         return false;
     }
+    boot_buzzer_stage(BOOT_ST_VERIFY);   /* 校验通过：一声短音 */
 
     /* 升级前备份当前 RUN 到 BACKUP（若当前固件有效） */
     if (boot_check_app_valid(APP_BASE_ADDR)) {
@@ -259,6 +310,7 @@ static bool boot_apply_download(bool emit_status)
         uint32_t ver = *(volatile uint32_t *)APP_VERSION_ADDR;
         flash_write(BACKUP_VALID_ADDR, (uint8_t *)&mg, sizeof(mg));
         flash_write(BACKUP_VERSION_ADDR, (uint8_t *)&ver, sizeof(ver));
+        boot_buzzer_stage(BOOT_ST_BACKUP);   /* 备份完成：一声短音 */
     }
 #if POWERLOSS_TEST_STAGE == 1
     boot_param_t plt; boot_param_load(&plt);
@@ -276,6 +328,7 @@ static bool boot_apply_download(bool emit_status)
         printf("APP erase failed! System halted.\r\n");
         while (1) { IWDG->KR = 0xAAAA; }
     }
+    boot_buzzer_stage(BOOT_ST_ERASE);   /* 擦除完成：一声短音 */
 #if POWERLOSS_TEST_STAGE == 2
     boot_param_t plt; boot_param_load(&plt);
     if (plt.last_error != 0x5A5A) {
@@ -301,6 +354,7 @@ static bool boot_apply_download(bool emit_status)
         while (1) { IWDG->KR = 0xAAAA; }
     }
     boot_status_send(BOOT_ST_WRITE, 0);
+    boot_buzzer_stage(BOOT_ST_WRITE);   /* 写入完成：一声短音 */
 #if POWERLOSS_TEST_STAGE == 3
     boot_param_t plt; boot_param_load(&plt);
     if (plt.last_error != 0x5A5A) {
@@ -332,6 +386,7 @@ static bool boot_apply_download(bool emit_status)
     param.last_error = 0;
     param.last_build_no = hdr.build_no;
     boot_param_save(&param);
+    boot_buzzer_stage(BOOT_ST_COMMIT);  /* 提交完成：长音，即将重启切换 */
 #if POWERLOSS_TEST_STAGE == 4
     boot_param_t plt; boot_param_load(&plt);
     if (plt.last_error != 0x5A5A) {

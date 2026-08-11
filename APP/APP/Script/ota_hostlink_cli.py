@@ -92,9 +92,10 @@ def main() -> int:
         cmd(build_ota_reset(), 0x0D, timeout=0.8, retries=2)
         time.sleep(0.2)
 
-    # 1) BEGIN
+    # 1) BEGIN：Ota_Begin 会同步擦除下载区（约 2-4s）+ 播放开始旋律（阻塞约 0.4s），
+    #    超时需放宽，避免旋律导致 ACK 迟达被判超时
     print("[OTA] send BEGIN ...")
-    r = cmd(build_ota_begin(version, len(pkg)), 0x08)
+    r = cmd(build_ota_begin(version, len(pkg)), 0x08, timeout=8.0, retries=3)
     if r is None or r[5] != 0:
         print(f"[OTA] BEGIN FAILED: {r[5] if r else 'no response'}")
         ser.close()

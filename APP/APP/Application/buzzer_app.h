@@ -24,9 +24,11 @@ void Buzzer_BeepPattern(uint8_t count, uint16_t on_ms, uint16_t gap_ms);
 void Buzzer_PlaySequence(const uint16_t *on_gap, uint8_t n);
 void Buzzer_Stop(void);
 
-/* ---------- OTA 旋律（有源蜂鸣器，节奏即音高） ---------- */
-void Buzzer_OtaStart(void);    /* 滴-滴-嘟    ：升级开始 */
-void Buzzer_OtaSuccess(void);  /* 滴-滴-滴-嘟  ：升级完成（新固件启动确认） */
-void Buzzer_OtaFail(void);     /* 滴-滴-滴    ：升级失败 */
+/* ---------- OTA 旋律（有源蜂鸣器，节奏即音高；阻塞式精确播放，
+ * 不依赖低优先级 Tmr Svc，OTA 高峰期同样可靠） ---------- */
+void Buzzer_OtaStart(void);       /* 滴-滴-嘟     ：下载就绪/升级开始 */
+void Buzzer_OtaDownloadDone(void);/* 滴-滴        ：下载完成，即将切换 */
+void Buzzer_OtaSuccess(void);     /* 滴-滴-滴-嘟   ：升级完成（新固件启动确认） */
+void Buzzer_OtaFail(void);        /* 滴-滴-滴     ：升级失败 */
 
 #endif

@@ -2288,3 +2288,74 @@ auto-stop）全部按设计工作。
   统一以"RUN 有效则回 APP"为准；②嵌入式调试优先确认 UART/printf 的
   真实落点，避免在不可观测通道上浪费轮次；③BOOT 无法 OTA 是硬约束，
   涉及 BOOT 的修复必须提前评估部署通道（DAP/SWD）。
+
+### 10.19 蜂鸣器旋律触发 FreeRTOS 断言（Tmr Svc 崩溃 → UART OTA 随机中断 + BEGIN 旋律听不全）
+
+- **现象**：
+  1. 用户反馈：OTA BEGIN 时"滴-滴-嘟"听不到（实际只听到前两声），
+     新固件启动确认的"滴-滴-滴-嘟"能听到（且伴随疑似长音）。
+  2. 板端 EEPROM 崩溃记录连续新增：`[CRASH] RTOS Assert, Task=Tmr Svc,
+     cause=FreeRTOS assert failed at line 836`（序列 #137/#143/#144，
+     uptime 33~51s 不等，均出现在 OTA 传输期间）。
+  3. UART(COM13) 推送 build 9056 连续失败：CLI 在 DATA 第 12~29 块
+     （2640/6720/6960B）处"no response"；全 0xAA 载荷可过 60 块；
+     TCP :9020 路径 30 块全过 → 当时误判为"UART 通道/data_link 问题"。
+- **影响面**：任何触发 OTA 旋律（BEGIN/成功/失败）的路径都会让
+  Tmr Svc 断言并整机复位，传输随复位中断；旋律本身残缺；复位风暴
+  会污染崩溃记录并让后续排查误入歧途。
+- **排查思路**：以"崩溃时间与传输时序吻合"为锚点，先定位断言代码行，
+  再反向追查是哪个 API 把 0 tick 传给了定时器；同时用"对比实验"
+  （TCP 通/UART 断/0xAA 通/真数据断）判断问题层。
+- **排查过程**：
+  1. 第一步：读 timers.c line 836 → `configASSERT(pxTimer->xTimerPeriodInTicks > 0)`
+     → 断言只可能由 `xTimerChangePeriod(..., 0, ...)` 触发，与任务优先级无关。
+  2. 第二步：全仓搜索 xTimerChangePeriod → 仅 buzzer_app.c 两处（on/gap 回调）。
+     逐值推演 OtaStart 序列 {80,50,80,50,160,0}：拷贝循环
+     `for (i=0; i<n; i++)` 只拷了 n 个元素，而序列是 2n 个（on/gap 交替）
+     → seq[3]（第二个 gap）读到静态零值 → 第二个间隙处 changePeriod(0) → 断言。
+  3. 第三步：验证与现象自洽——断言发生在第二声后 210ms 处，正好解释
+     "滴-滴"后无声；成功旋律在第三声起始处断言，但 `BSP_Buzzer_On()`
+     已执行，复位前蜂鸣器持续发声 ~250ms，听感接近"滴-滴-嘟"（用户听感吻合）。
+  4. 第四步：解释 UART 失败——BEGIN 非阻塞旋律在 ACK 发出后 ~210ms
+     断言，err_recover 约 250ms 后整机复位；CLI 已 ACK 的块数随
+     每块耗时浮动（12~29 块），故"随机块无响应"；0xAA 手动测试若绕过
+     Ota_Begin 则不触发旋律 → 通过；TCP 测试窗口/重连掩盖了复位。
+     **之前"UART 通道损坏"的结论被推翻**：通道本身无问题，是板端复位。
+  5. 第五步：确认 err_recover 行为（LED 快闪 3 次 + BSP_SystemReset），
+     与崩溃记录"已恢复"语义一致；修正工作流 Test-BootLog 对历史崩溃
+     记录误判（"assert" 命中历史恢复记录 → 误报失败，与 AGENTS.md
+     "只提醒不计失败"矛盾）。
+- **根因**：`Buzzer_PlaySequence` 拷贝长度错误（n 而非 2n），序列 gap
+  未初始化 → `xTimerChangePeriod(0 tick)` → FreeRTOS 断言
+  （timers.c:836）→ Tmr Svc 崩溃 → 整机复位。属于自研代码缺陷，
+  非 FreeRTOS/工具链问题。
+- **解决方案**：
+  1. `buzzer_app.c`：拷贝循环改为 `i < n*2u`（on/gap 全拷贝并逐项
+     归一化 ≥1ms）；回调内对 period 二次钳制（gap/on 为 0 时取 1），
+     双重防御杜绝 0 tick。
+  2. OTA 旋律改为**阻塞式精确播放**（`buzzer_ota_block` 用 BSP_DelayMs，
+     不依赖低优先级 Tmr Svc）：开始 滴-滴-嘟 / 下载完成 滴-滴 /
+     成功 滴-滴-滴-嘟 / 失败 三短，保证 OTA 高峰期节奏可靠。
+  3. BOOT 侧注入各状态转换提示音（阻塞式 HAL_Delay）：
+     VERIFY/BACKUP/ERASE/WRITE 一声短音、COMMIT 长音、校验失败三短、
+     回滚两长，与 APP 旋律首尾呼应（需 DAP 部署）。
+  4. `ota_hostlink_cli.py` BEGIN 超时放宽（8s×3），兼容"擦除 2-4s +
+     阻塞开始旋律 0.4s"的 ACK 迟达。
+  5. `Config/app_footer.c` + APP.sct 独立脚注 load region：
+     魔数+版本号直接链接进镜像（0x0805FFF8），Keil DAP 直烧即可启动，
+     与 OTA/append_app_magic 幂等，打破"旧固件有 bug → 无法 OTA 升级"的死锁。
+  6. `workflow/common.ps1` Test-BootLog：先剔除 `[CRASH]` 行再扫
+     失败标记，历史崩溃记录只提醒、不计失败。
+- **验证**（build 9057→9058→9059，实机）：
+  - DAP 直烧 BOOT+APP(9057) 后启动干净，无新增崩溃记录。
+  - UART OTA 推送 9059：229944/229944 字节完整下载，BOOT 状态帧
+    phase=2/3/4/5/6/7 全过 err=0，新固件启动确认，`ota_download=OK`
+    + `ota_verify=OK`。
+  - 重复推送同 build 被 BOOT 防重放拒收（phase=255 err=3）→ 符合预期，
+    板子自动回 APP 正常运行，验证兜底路径。
+- **经验沉淀**：①数组拷贝长度必须与"交错布局"一致（on/gap 是 2n 项，
+  不是 n 项），此类 bug 应配静态断言/单测；②RTOS 断言要第一时间读
+  源码对应行，而不是猜任务优先级；③"UART 中断"先查板端是否复位
+  （崩溃记录/uptime），再谈驱动问题；④boot 无法 OTA 是硬约束，BOOT
+  类修改必须提前规划 DAP 部署通道；⑤上层工具超时需覆盖"同步擦除+
+  阻塞提示音"的真实耗时，避免把慢当失败。

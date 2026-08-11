@@ -447,6 +447,7 @@ uint8_t Ota_End(void)
                (unsigned long)ota_total);
     ota_session_save(OTA_SESSION_SLOTS - 1, ota_begin_version,
                      ota_total, ota_total);
+    Buzzer_OtaDownloadDone();   /* 下载完成：滴-滴 收尾音（阻塞式，随后触发切换） */
 
     /* 触发 BOOT 升级模式（双保险）：
      * 1) 参数区写 UPGRADE 状态 —— BOOT 检测后进入升级模式接收固件
