@@ -54,7 +54,8 @@
 6. 主机单测：`workflow\auto_hosttest.ps1`（BOOT host_tests + APP 协议测试；
    `-Robustness` 可加跑 LogicAnalyzer 硬件健壮性，需物理接线）
 7. 一键总流水线：`workflow\auto_pipeline.ps1 -Mode full [-IncludeOta]`（产出 `workflow\last_report.json`）
-8. 同步更新对应 `ENGINEERING_LOG.md`（现象/根因/解决/验证）
+8. 同步更新对应 `ENGINEERING_LOG.md`；**重点问题必须按
+   `docs\ISSUE_POSTMORTEM_TEMPLATE.md` 完整记录排查过程（见第 8 节）**
 9. Conventional Commits 提交（如 `fix(boot): ...`）；构建产物与日志一律不进 git；
    提交前 pre-commit 钩子自动检查暂存区编码/行尾卫生
 
@@ -73,3 +74,22 @@
 - 不把串口日志中的私有信息写进提交。
 - `HOST/OTA_Tool/config.json` 与 `version_lib.json` 为本地状态（含设备 UID/本地路径），一律不入库。
 - 保持 UTF-8、空格缩进、Allman 括号；新增文件遵循现有分层（业务/服务/BSP/配置）。
+
+## 7. 注释规范
+
+- 全仓统一遵循 `docs\COMMENT_STYLE.md`：C 文件头横幅 / 区段虚线 / Doxygen 函数块 /
+  关键语句行尾注释；Python 模块与函数 docstring；PS1 脚本头横幅。
+- 关键语句必须有"看得懂"的注释（做什么/为什么），禁止复读式注释。
+
+## 8. 重点问题复盘硬性规定
+
+- 满足以下任一条件的问题，**必须**按 `docs\ISSUE_POSTMORTEM_TEMPLATE.md`
+  完整记录到对应 `ENGINEERING_LOG.md`：
+  1. 需要超过 3 步排查才定位；
+  2. 排查过程中出现过被推翻的错误方向；
+  3. 修复涉及协议/时序/并发/底层配置等系统性根因；
+  4. 最终采用工程权衡（如"稳健优先于理论极限"）而非彻底根除。
+- 记录内容**必须包含完整的排查过程**：现象证据 → 排查思路 → 每步实验与
+  观察（含被推翻的方向与原因）→ 根因机理 → 解决方案 → 验证数据 → 经验沉淀。
+  **禁止只写结论**；分析过程比结论更重要。
+- 提交前自检：本次任务涉及的重点问题是否已按模板回填日志；未回填视为未完成。
