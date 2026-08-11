@@ -1,4 +1,8 @@
-/* 平台实现：STM32F4xx USART + DMA + IDLE 断帧 */
+/* ================================================================
+ * bsp_uart —— UART 抽象：DMA 收发/空闲断帧/回调分发
+ *
+ * 架构位置：APP BSP 层；logger/data_link 挂接
+ * ================================================================ */
 #include "bsp_uart.h"
 #include "usart.h"
 #include "stm32f4xx_hal.h"

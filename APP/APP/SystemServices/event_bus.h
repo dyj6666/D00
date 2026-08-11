@@ -1,3 +1,8 @@
+/* ================================================================
+ * event_bus —— 事件总线接口：强类型消息 / 订阅 / 发布
+ *
+ * 架构位置：APP 服务层；模块间解耦通信的唯一通道
+ * ================================================================ */
 #ifndef EVENT_BUS_H
 #define EVENT_BUS_H
 
@@ -8,16 +13,16 @@
 #include <stdint.h>
 #include <string.h>
 
-/* ---------- 强类型消息体 ---------- */
+/* ---------------- 强类型消息体 ---------------- */
 typedef struct {
-    uint16_t src;      // 发送者模块ID
-    uint16_t type;     // 消息类型
+    uint16_t src;      /* 发送者模块 ID */
+    uint16_t type;     /* 消息类型（MSG_*） */
 } msg_hdr_t;
 
 typedef struct {
     msg_hdr_t hdr;
-    uint16_t len;           // payload 长度
-    uint8_t  payload[];     // 柔性数组
+    uint16_t len;           /* payload 长度 */
+    uint8_t  payload[];     /* 柔性数组：对外接口使用，槽位用定长结构 */
 } message_t;
 
 /* ---------- 回调签名 ---------- */

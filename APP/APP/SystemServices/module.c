@@ -1,3 +1,10 @@
+/* ================================================================
+ * module —— 模块注册表：按优先级稳定排序并顺序初始化
+ *
+ * 架构位置：APP 服务层；StartupTask 调用 modules_init() 一次性拉起全部模块
+ * 核心流程：静态模块表 -> 插入排序(priority 升序) -> 逐个 init()
+ * 关键约束：依赖模块优先级更低；初始化失败不中断后续模块
+ * ================================================================ */
 #include "module.h"
 #include "logger.h"
 #include "led_app.h"
@@ -59,11 +66,11 @@ static module_desc_t module_table[] = {
 };
 #define MODULE_COUNT (sizeof(module_table) / sizeof(module_table[0]))
 
+/** @brief 稳定插入排序：按 priority 升序，保证依赖模块先于依赖者初始化 */
 static void sort_modules(void)
 {
-    /* 稳定插入排序：按 priority 升序，保证依赖模块先初始化 */
     module_desc_t table[MODULE_COUNT];
-    memcpy(table, module_table, sizeof(table));
+    memcpy(table, module_table, sizeof(table));   /* 工作副本，避免原地覆盖 */
 
     for (unsigned int i = 1; i < MODULE_COUNT; i++) {
         module_desc_t key = table[i];
@@ -77,9 +84,10 @@ static void sort_modules(void)
     memcpy((void *)module_table, table, sizeof(table));
 }
 
+/** @brief 按优先级初始化全部模块（打印注册表供启动日志核验） */
 void modules_init(void)
 {
-    sort_modules();
+    sort_modules();   /* 先排序，再顺序 init */
 
     LOG_Printf("[APP] Module registry: %u entries\r\n", (unsigned)MODULE_COUNT);
     int count = 0;

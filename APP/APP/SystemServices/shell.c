@@ -1,10 +1,9 @@
 /* ================================================================
- * UART Shell 传输适配器：串口命令终端
- *   - 上层命令语义在 cmd_catalog（传输无关）
- *   - 本文件只负责：RX 流 → 行编辑（历史/补全/方向键）→
- *     Cmd_DispatchLine（transport=UART）
- *   - 输出：命令执行期间 LOG_Printf 经命令核心路由到本适配器
- *   - 初始化时注册 "UART" 传输 + 命令目录
+ * shell —— UART Shell 传输适配器（串口命令终端）
+ *
+ * 架构位置：APP 服务层；命令语义在 cmd_catalog（传输无关）
+ * 核心流程：RX 流 -> 行编辑（历史/补全/方向键）-> Cmd_DispatchLine(UART)
+ * 关键约束：输出经命令核心路由回本适配器；初始化注册 "UART" 传输
  * ================================================================ */
 #include "shell.h"
 #include "cmd_shell.h"
@@ -23,24 +22,25 @@ static const cmd_transport_t s_uart_transport = {
     .mask  = CMD_TRANSPORT_UART,
     .start = NULL,   /* 任务由 freertos.c 创建 */
 };
-static char cmd_line[SHELL_LINE_MAX];
-static int  cmd_len = 0;
+static char cmd_line[SHELL_LINE_MAX];  /* 当前编辑行缓冲 */
+static int  cmd_len = 0;               /* 当前编辑长度 */
 
-/* ---------- 历史记录（环形，上下键浏览） ---------- */
+/* ---------------- 历史记录（环形，上下键浏览） ---------------- */
 #define SHELL_HISTORY_MAX   8
-static char shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];
-static int  shell_hist_count = 0;
+static char shell_history[SHELL_HISTORY_MAX][SHELL_LINE_MAX];  /* 历史行表 */
+static int  shell_hist_count = 0;      /* 已存历史条数 */
 static int  shell_hist_pos = -1;      /* -1 = 正在编辑新行 */
 
-/* ---------- ESC 序列状态机（方向键）---------- */
+/* ---------------- ESC 序列状态机（方向键） ---------------- */
 static int shell_esc_state = 0;       /* 0=普通 1=收到ESC 2=收到ESC[ */
 
+/** @brief 打印命令提示符 */
 static void shell_prompt(void)
 {
     LOG_Printf(CMD_PROMPT);
 }
 
-/* 清空当前编辑行（\r + 空格覆盖 + \r，不依赖 ANSI，串口助手兼容） */
+/** @brief 清空当前编辑行：\r + 空格覆盖 + \r，不依赖 ANSI，串口助手兼容 */
 static void shell_clear_line(void)
 {
     LOG_Printf("\r%-*s\r", SHELL_LINE_MAX, "");
@@ -55,7 +55,7 @@ static void shell_redraw(void)
     }
 }
 
-/* 当前行入历史（去重；满则丢弃最旧） */
+/** @brief 当前行入历史：与最近一条去重；满则丢弃最旧 */
 static void shell_history_save(void)
 {
     if (cmd_len == 0) return;
@@ -73,7 +73,8 @@ static void shell_history_save(void)
     }
 }
 
-static void shell_history_nav(int dir)   /* -1 上一行 +1 下一行*/
+/** @brief 历史导航：dir=-1 上一条，dir=+1 下一条（越界回新行） */
+static void shell_history_nav(int dir)
 {
     if (shell_hist_count == 0) return;
     if (dir < 0) {
@@ -100,7 +101,7 @@ static void shell_history_nav(int dir)   /* -1 上一行 +1 下一行*/
     shell_redraw();
 }
 
-/* Tab 命令补全：唯一匹配补全，多匹配列出候选*/
+/** @brief Tab 补全：唯一匹配直接补全，多匹配列出候选 */
 static void shell_complete(void)
 {
     int wlen = 0;
@@ -134,15 +135,15 @@ static void shell_complete(void)
     }
 }
 
-/* ================== 命令执行 ================== */
-/* UART adapter output: route LOG_Printf to debug UART */
+/* ---------------- 命令执行 ---------------- */
+/** @brief UART 适配器输出：命令产生的日志原样写回调试串口 */
 static void shell_uart_out(cmd_ctx_t *ctx, const char *s, uint16_t len)
 {
     (void)ctx;
     LOG_WriteRaw(s, len);
 }
 
-/* Execute a line via the unified command framework (UART ctx) */
+/** @brief 把当前编辑行交给统一命令框架执行（transport=UART） */
 static void shell_execute(void)
 {
     cmd_ctx_t ctx;
@@ -156,7 +157,10 @@ static void shell_execute(void)
 }
 
 
-/* 处理每个接收字符 */
+/**
+ * @brief  处理单个接收字符：行编辑/方向键/回车执行
+ * @param  ch  串口收到的字符
+ */
 void Shell_ProcessChar(uint8_t ch)
 {
     /* ESC 序列状态机（方向键）*/

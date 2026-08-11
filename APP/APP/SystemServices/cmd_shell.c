@@ -1,5 +1,9 @@
 /* ================================================================
- * 统一命令框架实现
+ * cmd_shell —— 统一命令框架：目录注册 / 分发 / 输出路由
+ *
+ * 架构位置：APP 服务层；Shell 与 TCP 控制台共用同一命令目录
+ * 核心流程：Cmd_TransportRegister -> Cmd_DispatchLine -> 适配器输出
+ * 关键约束：分发期间输出经路由钩子回当前适配器；互斥保护目录表
  * ================================================================ */
 #include "cmd_shell.h"
 #include "logger.h"
@@ -13,10 +17,10 @@
 #include <stdio.h>
 #include <string.h>
 
-static cmd_entry_t s_table[CMD_TABLE_MAX];
-static uint32_t s_count = 0;
-static osMutexId_t s_mutex = NULL;
-static cmd_ctx_t *s_active = NULL;   /* 当前分发中的适配器上下文 */
+static cmd_entry_t s_table[CMD_TABLE_MAX];  /* 命令目录静态表 */
+static uint32_t s_count = 0;               /* 已注册命令数 */
+static osMutexId_t s_mutex = NULL;         /* 目录访问互斥锁 */
+static cmd_ctx_t *s_active = NULL;         /* 当前分发中的适配器上下文 */
 
 #define CMD_TRANSPORT_MAX   8
 static const cmd_transport_t *s_transports[CMD_TRANSPORT_MAX];

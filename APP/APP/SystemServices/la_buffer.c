@@ -1,4 +1,8 @@
-/* 逻辑分析仪 SRAM 环形缓冲管理 */
+/* ================================================================
+ * la_buffer —— 逻辑分析仪环形缓冲：写/读/导出
+ *
+ * 架构位置：APP 服务层；DMA 采样落地与 HOSTLINK 导出
+ * ================================================================ */
 #include "la_buffer.h"
 
 static LA_SamplePoint *la_buffer = (LA_SamplePoint *)LA_SRAM_START_ADDR;

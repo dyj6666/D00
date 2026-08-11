@@ -1,3 +1,11 @@
+/* ================================================================
+ * data_link —— HOSTLINK 串口协议链路（DMA 收发 + 双任务队列）
+ *
+ * 架构位置：APP 服务层；对上提供 DataLink_Send* 接口，对下挂 BSP UART
+ * 核心流程：RX DMA -> ISR 上半部 -> CmdTask 解析分发 -> 响应帧进 TX 队列
+ *           -> TXTask 整帧发送；命令含 OTA_BEGIN/DATA/END 转发 OtaAgent
+ * 关键约束：整帧队列保证帧边界；命令队列溢出计数 g_cmd_lost 可查
+ * ================================================================ */
 #include "data_link.h"
 #include "bsp.h"
 #include "app_config.h"
@@ -13,30 +21,30 @@
 
 #include <string.h>
 
-/* ---------- 全局 DMA 缓冲区 ---------- */
-static uint8_t rx_dma_buf[HOSTLINK_RX_DMA_BUF_SIZE] __attribute__((aligned(4)));
-static uint8_t tx_dma_chunk[HOSTLINK_TX_DMA_CHUNK] __attribute__((aligned(4)));
+/* ---------------- 全局 DMA 缓冲区 ---------------- */
+static uint8_t rx_dma_buf[HOSTLINK_RX_DMA_BUF_SIZE] __attribute__((aligned(4)));  /* RX DMA 常驻缓冲 */
+static uint8_t tx_dma_chunk[HOSTLINK_TX_DMA_CHUNK] __attribute__((aligned(4)));   /* TX DMA 搬运缓冲 */
 
-/* ---------- 发送通路 ---------- */
+/* ---------------- 发送通路 ---------------- */
 typedef struct {
-    uint16_t len;
-    uint8_t  data[HOSTLINK_TX_FRAME_MAX];
+    uint16_t len;                    /* 帧总长（含帧头/CRC） */
+    uint8_t  data[HOSTLINK_TX_FRAME_MAX];  /* 整帧内容，按值入队 */
 } tx_frame_t;
-static QueueHandle_t tx_queue;              /* 整帧队列（保证帧边界，防截断） */
-static TaskHandle_t tx_task_handle = NULL;
-static TaskHandle_t cmd_handle = NULL;
+static QueueHandle_t tx_queue;       /* 整帧队列：保证帧边界，防大块截断 */
+static TaskHandle_t tx_task_handle = NULL;  /* 发送任务句柄 */
+static TaskHandle_t cmd_handle = NULL;      /* 命令处理任务句柄 */
 
-/* ---------- 命令队列 ---------- */
+/* ---------------- 命令队列 ---------------- */
 typedef struct {
-    uint16_t size;
-    uint8_t  data[HOSTLINK_RX_DMA_BUF_SIZE];
+    uint16_t size;                   /* 有效载荷长度 */
+    uint8_t  data[HOSTLINK_RX_DMA_BUF_SIZE];  /* 帧数据（DMA 缓冲拷贝） */
 } cmd_packet_t;
-static QueueHandle_t cmd_queue;
+static QueueHandle_t cmd_queue;      /* 命令帧队列：突发不丢帧 */
 static volatile uint32_t g_cmd_lost = 0;    /* 命令队列溢出计数 */
 static volatile uint32_t g_tx_lost = 0;     /* TX 流缓冲溢出计数 */
 static volatile uint32_t g_tx_err = 0;      /* TX DMA 异常/超时自愈计数 */
 
-/* ---------- 内部函数声明 ---------- */
+/* ---------------- 内部函数声明 ---------------- */
 static void TXTask(void *arg);
 static void CmdTask(void *arg);
 static void handle_command(const uint8_t *data, uint16_t len);
@@ -45,23 +53,24 @@ static void data_link_rx_isr(bsp_uart_id_t id, const uint8_t *data,
                              uint16_t len, void *ctx);
 static void data_link_tx_isr(bsp_uart_id_t id, void *ctx);
 
-/* ================== 初始化 ================== */
+/* ---------------- 初始化 ---------------- */
+/** @brief 初始化 HOSTLINK：建队列、起 TX/Cmd 双任务、挂 DMA 中断回调 */
 void DataLink_Init(void)
 {
     osThreadAttr_t tx_attr = {
         .name = "DL_TX",
-        .stack_size = 1024,
+        .stack_size = 1024,          /* 纯搬运任务，栈无需过大 */
         .priority = osPriorityLow,
     };
     osThreadAttr_t cmd_attr = {
         .name = "DL_CMD",
-        .stack_size = 2048,
+        .stack_size = 2048,          /* 命令解析含协议栈调用 */
         .priority = osPriorityLow,
     };
 
-    tx_queue = xQueueCreate(HOSTLINK_TX_QUEUE_LEN, sizeof(tx_frame_t));
+    tx_queue = xQueueCreate(HOSTLINK_TX_QUEUE_LEN, sizeof(tx_frame_t));  /* 整帧队列 */
     configASSERT(tx_queue);
-    cmd_queue = xQueueCreate(HOSTLINK_CMD_QUEUE_LEN, sizeof(cmd_packet_t));
+    cmd_queue = xQueueCreate(HOSTLINK_CMD_QUEUE_LEN, sizeof(cmd_packet_t));  /* 命令队列 */
     configASSERT(cmd_queue);
 
     tx_task_handle = (TaskHandle_t)osThreadNew(TXTask, NULL, &tx_attr);
@@ -170,19 +179,25 @@ uint32_t DataLink_GetCmdLostCount(void)
     return g_cmd_lost;
 }
 
-/* ================== 发送接口（任务上下文） ================== */
-/* data/len: 不含 CRC 的帧数据（帧头+payload），函数负责追加 CRC 并发送。 */
+/* ---------------- 发送接口（任务上下文） ---------------- */
+/**
+ * @brief  发送一帧数据（帧头+payload，自动追加 CRC 后入 TX 队列）
+ * @param  data  不含 CRC 的帧数据（帧头+payload）
+ * @param  len   数据长度，不得小于帧头长度
+ * @return 0=入队成功；-1=参数非法或超长
+ * @note   队列满时丢帧并计数 g_tx_lost，调用方按需使用 Wait 版本
+ */
 int DataLink_SendPacket(const uint8_t *data, uint16_t len)
 {
     if (data == NULL || len < PROTOCOL_HEADER_LEN) return -1;
     if ((uint32_t)len + PROTOCOL_CRC_LEN > HOSTLINK_TX_FRAME_MAX) return -1;
 
     tx_frame_t frame;
-    memcpy(frame.data, data, len);
-    uint16_t crc = CRC16_Calculate(frame.data, len);
-    frame.data[len] = (uint8_t)(crc & 0xFF);
-    frame.data[len + 1] = (uint8_t)((crc >> 8) & 0xFF);
-    frame.len = len + PROTOCOL_CRC_LEN;
+    memcpy(frame.data, data, len);               /* 帧内容按值拷贝入队 */
+    uint16_t crc = CRC16_Calculate(frame.data, len);  /* MODBUS CRC-16 */
+    frame.data[len] = (uint8_t)(crc & 0xFF);     /* CRC 低字节 */
+    frame.data[len + 1] = (uint8_t)((crc >> 8) & 0xFF);  /* CRC 高字节 */
+    frame.len = len + PROTOCOL_CRC_LEN;          /* 帧总长 = 数据 + 2B CRC */
     if (xQueueSend(tx_queue, &frame, 0) != pdTRUE) {
         g_tx_lost++;
     }
@@ -199,7 +214,7 @@ uint32_t DataLink_GetTxErrorCount(void)
     return g_tx_err;
 }
 
-/* 组装完整帧（含 CRC）并发送。 */
+/** @brief 按命令码组装完整帧（含 CRC）并入发送队列 */
 int DataLink_SendFrame(uint8_t cmd, const uint8_t *payload, uint16_t payload_len)
 {
     uint8_t frame[HOSTLINK_TX_DMA_CHUNK];
@@ -209,8 +224,15 @@ int DataLink_SendFrame(uint8_t cmd, const uint8_t *payload, uint16_t payload_len
     return DataLink_SendPacket(frame, frame_len - PROTOCOL_CRC_LEN);
 }
 
-/* 组装完整帧并以背压方式发送（队列满时阻塞等待，最多 timeout_ms）。
- * 用于大块可靠导出（如 LA_DUMP）：与发送速率自匹配，绝不静默丢帧。 */
+/**
+ * @brief  背压方式发送完整帧：队列满时阻塞等待，最多 timeout_ms
+ * @param  cmd         命令码
+ * @param  payload     载荷指针
+ * @param  payload_len 载荷长度
+ * @param  timeout_ms  最长等待时间
+ * @return 0=成功；-1=构建失败/超长/超时
+ * @note   用于大块可靠导出（如 LA_DUMP），与发送速率自匹配，绝不静默丢帧
+ */
 int DataLink_SendFrameWait(uint8_t cmd, const uint8_t *payload,
                            uint16_t payload_len, uint32_t timeout_ms)
 {

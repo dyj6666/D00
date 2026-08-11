@@ -1,9 +1,9 @@
 /* ================================================================
- * ICMP 服务实现：raw PCB 接管 echo request，自组 echo reply
- *   - 自组回包：拷贝 ICMP 载荷（header+data），type=0，软件校验和
- *     （lwipopts.h CHECKSUM_GEN_ICMP=1 仅覆盖协议栈路径，本服务直连 raw）
- *   - 限速窗口：1s 滑动计数，超限吞包不计入丢包以外统计
- *   - RTT 口径：板内应答处理耗时（DWT CYCCNT @168MHz，us）
+ * icmp_svc —— ICMP 服务：raw PCB 接管 echo，自组回复 + 限速
+ *
+ * 架构位置：APP 应用层；raw PCB 直连协议栈，独立任务统计
+ * 核心流程：收 echo request -> 拷贝载荷改 type=0 -> 软件校验和回复
+ * 关键约束：1s 滑动限速窗口；RTT 用 DWT CYCCNT 精确计时(us)
  * ================================================================ */
 #include "icmp_svc.h"
 

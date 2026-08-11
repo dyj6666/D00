@@ -1,3 +1,10 @@
+/* ================================================================
+ * event_bus —— 事件总线：静态消息池 + 队列 + 订阅分发
+ *
+ * 架构位置：APP 服务层；模块间解耦通信的唯一通道
+ * 核心流程：EventBus_Publish -> 空闲槽拷贝 -> 主队列 -> 分发到订阅者
+ * 关键约束：消息槽放 CCM（主 SRAM 让给 DMA/ETH）；AC5 兼容定长槽结构
+ * ================================================================ */
 #include "event_bus.h"
 #include "app_config.h"
 #include "watchdog.h"
@@ -11,8 +18,8 @@ typedef struct {
     uint8_t count;
 } subs_list_t;
 
-static subs_list_t subs[MSG_COUNT];
-static QueueHandle_t msg_queue;           // 主事件队列（存消息指针）
+static subs_list_t subs[MSG_COUNT];       /* 每消息类型的订阅者表 */
+static QueueHandle_t msg_queue;           /* 主事件队列（存槽指针） */
 
 /* ---------------- 静态消息池 ---------------- */
 /* 注意：AC5 不允许含柔性数组成员（payload[]）的类型作为数组元素，
@@ -23,16 +30,17 @@ typedef struct {
     uint8_t   payload[EVENT_BUS_MSG_MAX_PAYLOAD];
 } msg_slot_t;
 
-/* 消息槽池：纯 CPU 访问，放 CCM（主 SRAM 让给 DMA/ETH） */
+/* 消息槽池：纯 CPU 访问，放 CCM，主 SRAM 让给 DMA/ETH */
 static msg_slot_t g_msg_pool[EVENT_BUS_POOL_SIZE]
     __attribute__((section(".ccmram"), zero_init));
-static QueueHandle_t free_queue;          // 空闲槽队列（ISR 安全）
+static QueueHandle_t free_queue;          /* 空闲槽队列（ISR 安全） */
 
-static volatile uint32_t g_msg_lost_count = 0; // 消息丢失计数器
+static volatile uint32_t g_msg_lost_count = 0;  /* 池空丢消息计数 */
 
+/** @brief 初始化事件总线：建主队列/空闲池并填充全部槽 */
 void EventBus_Init(void)
 {
-    memset(subs, 0, sizeof(subs));
+    memset(subs, 0, sizeof(subs));   /* 清空订阅表 */
     msg_queue = xQueueCreate(EVENT_BUS_QUEUE_LENGTH, sizeof(message_t*));
     free_queue = xQueueCreate(EVENT_BUS_POOL_SIZE, sizeof(message_t*));
     if (msg_queue == NULL || free_queue == NULL) {

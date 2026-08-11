@@ -1,3 +1,10 @@
+/* ================================================================
+ * logger —— 日志系统实现：DMA 收发 + 流缓冲 + 发送任务
+ *
+ * 架构位置：APP 服务层；LOG_Printf 全模块入口
+ * 核心流程：Printf 入 TX 流 -> LoggerTXTask 搬运 DMA -> ISR 完成唤醒
+ * 关键约束：DMA 缓冲必须全局对齐；RX 流同时供 Shell 命令输入
+ * ================================================================ */
 #include "logger.h"
 #include "bsp.h"
 #include "app_config.h"
@@ -11,14 +18,14 @@
 extern StreamBufferHandle_t global_tx_stream;
 extern StreamBufferHandle_t global_rx_stream;
 
-/* DMA 缓冲区必须全局且对齐 */
+/* DMA 缓冲区必须全局且对齐，否则搬运会硬件出错 */
 static uint8_t rx_dma_buf[LOG_RX_DMA_BUF_SIZE] __attribute__((aligned(4)));
 static uint8_t tx_dma_buf[LOG_TX_DMA_CHUNK] __attribute__((aligned(4)));
 
-/* LoggerTX 任务句柄，用于中断通知 */
+/* LoggerTX 任务句柄：ISR 中唤醒发送任务 */
 static TaskHandle_t logger_tx_handle = NULL;
 
-/* ISR：TX DMA 完成，唤醒发送任务 */
+/** @brief TX DMA 完成中断：唤醒发送任务继续搬运下一块 */
 static void logger_tx_isr(bsp_uart_id_t id, void *ctx)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
@@ -30,7 +37,7 @@ static void logger_tx_isr(bsp_uart_id_t id, void *ctx)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-/* ISR：RX 空闲断帧，数据入流（DMA 由 BSP 自动重启） */
+/** @brief RX 空闲断帧中断：命令数据入流（DMA 由 BSP 自动重启） */
 static void logger_rx_isr(bsp_uart_id_t id, const uint8_t *data,
                           uint16_t len, void *ctx)
 {
@@ -45,11 +52,13 @@ static void logger_rx_isr(bsp_uart_id_t id, const uint8_t *data,
 
 static log_sink_fn s_sink = NULL;
 
+/** @brief 设置输出路由钩子；NULL=恢复默认串口输出 */
 void LOG_SetSink(log_sink_fn fn)
 {
     s_sink = fn;
 }
 
+/** @brief 原始输出：直接入 TX 流（不经路由钩子） */
 void LOG_WriteRaw(const char *s, uint16_t len)
 {
     if (s != NULL && len > 0) {
@@ -57,6 +66,7 @@ void LOG_WriteRaw(const char *s, uint16_t len)
     }
 }
 
+/** @brief 初始化日志：挂 DMA 收发回调并启动 RX */
 void LOG_Init(void)
 {
     BSP_UART_Init(BSP_UART_DBG);
@@ -65,6 +75,11 @@ void LOG_Init(void)
     BSP_UART_RxStart(BSP_UART_DBG, rx_dma_buf, sizeof(rx_dma_buf));
 }
 
+/**
+ * @brief  格式化日志输出
+ * @note   命令分发期间经路由钩子导到当前适配器；
+ *         中断上下文永远走原始串口（避免 ISR 内写网络）
+ */
 void LOG_Printf(const char *format, ...)
 {
     char buf[256];
@@ -72,7 +87,7 @@ void LOG_Printf(const char *format, ...)
     va_start(args, format);
     int len = vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
-    /* vsnprintf 返回“应写长度”，超长时必须钳制到缓冲内，否则栈越界读 */
+    /* vsnprintf 返回"应写长度"：超长必须钳制到缓冲内，否则栈越界读 */
     if (len > (int)sizeof(buf) - 1) {
         len = (int)sizeof(buf) - 1;
     }
@@ -87,6 +102,7 @@ void LOG_Printf(const char *format, ...)
     }
 }
 
+/** @brief 日志发送任务：流缓冲 -> DMA 逐块搬运（等待完成再取下一块） */
 void LoggerTXTaskFunction(void)
 {
     size_t len;
