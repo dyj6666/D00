@@ -2359,3 +2359,48 @@ auto-stop）全部按设计工作。
   （崩溃记录/uptime），再谈驱动问题；④boot 无法 OTA 是硬约束，BOOT
   类修改必须提前规划 DAP 部署通道；⑤上层工具超时需覆盖"同步擦除+
   阻塞提示音"的真实耗时，避免把慢当失败。
+
+### 10.20 串口漂移 + CAN 适配器缺驱动：主机侧统一自动探测对接（2026-08-12）
+- **现象**：调试串口换 USB 口后 COM9 变为 COM5；COM13（HOSTLINK）与 DAP 已拔除；
+  插入的 USB 转 CAN 模块在设备管理器中为"未知设备"（问题代码 28，驱动未安装）；
+  ETH 保留但 OTA 上位机 8080 探测不通，疑似环境"全乱了"。
+- **排查思路**：把"设备是否在线"拆成四层独立验证——①串口层（COM 号与芯片型号）、
+  ②USB 枚举层（VID/PID 与驱动绑定状态）、③网络层（链路/ARP/IP 可达）、④协议层（端口服务）。
+  串口号只是 Windows 按枚举顺序分配的易变编号，判断身份必须看 VID/PID/描述符，
+  而不是硬编码的 COM9/COM13。
+- **排查过程**：
+  1. `[System.IO.Ports.SerialPort]::GetPortNames()` + `reg query SERIALCOMM`：
+     只剩 COM5，确认是"换口后的调试串口"而非设备丢失。
+  2. `pnputil /enum-devices /connected`：CH340（VID_1A86/PID_7523）= COM5；
+     XCAN-USB（VID_0C72/PID_000C）Class=Unknown、Problem 28 = 驱动未装；
+     COM13/DAP 均不在在线列表。
+  3. 网络：`ipconfig` 见 Realtek USB GbE（RTL8153）= 192.168.10.201；
+     `arp -a` 见 192.168.10.10 / 02-00-11-22-33-44（板载 LAN8720 典型 MAC）；
+     `ping 192.168.10.10` 通（TTL=255）→ 板子 ETH 在线；8080 不通是因为它是
+     **上位机** OTA 服务端口，板端不监听，属正常。
+  4. 联网核实 VID_0C72/PID_000C = PEAK System PCAN-USB 硬件 ID，本模块为兼容克隆
+     （产品串名 XCAN-USB），需要 PEAK PCAN 驱动才能被识别。
+- **根因**：①工作流/上位机把 COM9/COM13 写死为常量，端口漂移后全部失效；
+  ②XCAN-USB 为 PEAK 兼容克隆，Windows 无驱动无法枚举为可用 CAN 设备；
+  ③COM9→COM5 后无人同步脚本默认值。
+- **解决方案**：
+  1. `workflow/common.ps1`：DebugPort 默认 COM5 + 环境变量 `D00_DEBUG_PORT` 覆盖，
+     新增 `Get-DebugPort` 自动探测；`Start-Com9Logger` 显式传 `--port`。
+  2. `com9_logger.py`：默认端口自动探测（CH340/CH9102 优先 → COM5 → 任意可用口）。
+  3. `D00Term`：默认串口自动探测；CAN 通道真实接入 python-can（PCAN 接口），
+     行帧协议 ID 0x100 下发 / 0x101 回包、首字节序号+0x80 末帧标志，与固件
+     `cmd_can.c` 适配器约定对齐；未装驱动时给出可读报错。
+  4. `OTA_Tool` / `LogicAnalyzer`：控制口/数据口默认值全部改为自动探测，
+     配置缺失或端口漂移时回退 CH340/COM5，不再写死 COM9。
+  5. 安装 PEAK PCAN-USB 驱动（官方 DrvSetup 约 160MB，装完 PCANBasic.dll 位于
+     `C:\Windows\System32`）；D00Term 用 ctypes 直调 PCANBasic.dll，无需依赖
+     已从 PyPI 下架的 pcan-basic 包（python-can 仅作可选备选后端）。
+  6. 文档（WORKFLOW/D00Term/LogicAnalyzer README）同步"自动探测"口径。
+- **验证**：pnputil 显示 XCAN-USB 从 Problem 28 变为 **PCAN-USB / CAN-Hardware / Started**；
+  `CAN_Initialize / CAN_Write / CAN_Uninitialize` 均返回 0x0（真实打开 PCAN_USBBUS1）；
+  `d00term --selftest` 全绿且 `--list` 列出 COM5；`ping 192.168.10.10` 1ms 通；
+  `self_check.ps1` 串口项不再误报。
+- **经验沉淀**：①端口号是易变外部状态，脚本/上位机一律自动探测 + 环境变量覆盖，
+  禁止硬编码 COM 号；②USB 设备身份看 VID/PID，不看 COM 号；③CAN 适配器先装
+  驱动再谈协议，驱动层就绪后才能枚举通道；④上位机服务的"不通"要先分清是
+  板端服务还是 PC 端服务，避免把正常状态当故障。

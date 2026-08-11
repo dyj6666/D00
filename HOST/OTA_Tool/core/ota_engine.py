@@ -219,7 +219,7 @@ class OtaEngine(QThread):
             self._stage(self.STAGE_VERIFYING)
             self.progress.emit(len(self._pkg), len(self._pkg),
                                int(self._speed), 0)
-            # 6) 并发：COM13 听 BOOT 状态广播 + COM9 抓启动日志
+            # 6) 并发：数据口听 BOOT 状态广播 + 调试口抓启动日志
             boot_thread = None
             if self.cfg.get("verify_boot_log"):
                 import threading
@@ -380,7 +380,7 @@ class OtaEngine(QThread):
             srv.stop()
 
     def _http_via_uart(self, cmd: str):
-        """经 UART 控制通道（COM9 shell）下发拉取命令并解析进度。"""
+        """经 UART 控制通道（调试口 shell）下发拉取命令并解析进度。"""
         ctl = UartTransport(self.cfg["ctl_port"],
                             int(self.cfg.get("ctl_baud", 115200)))
         ctl.open()
@@ -469,7 +469,7 @@ class OtaEngine(QThread):
     # 升级后验证
     # ------------------------------------------------------------------
     def _verify_boot_log(self):
-        """抓取 COM9 启动日志，核验 'last build' 与 'Boot complete'。"""
+        """抓取调试口启动日志，核验 'last build' 与 'Boot complete'。"""
         port = self.cfg.get("debug_port", "")
         baud = int(self.cfg.get("debug_baud", 115200))
         if not port:

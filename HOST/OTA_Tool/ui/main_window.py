@@ -24,6 +24,23 @@ from utils.config import Config
 
 VERSION = "v3.0.0"
 
+
+def _detect_ctl_port() -> str:
+    """控制通道默认串口：优先 CH340/CH9102（探索者调试口），其次 COM5，再其次任意可用口。"""
+    ports = UartTransport.list_ports()
+    if not ports:
+        return "COM5"
+    try:
+        import serial.tools.list_ports as _lp
+        for p in _lp.comports():
+            desc = (p.description or "").upper()
+            if "CH340" in desc or "CH9102" in desc:
+                return p.device
+    except Exception:
+        pass
+    return "COM5" if "COM5" in ports else ports[0]
+
+
 # 日志配色（暗色主题）
 _C = {
     "default": "#cbd5e1",
@@ -259,12 +276,12 @@ class MainWindow(QMainWindow):
 
         g.addWidget(QLabel("控制通道:"), 2, 0)
         self.combo_ctl = QComboBox()
-        self.combo_ctl.addItems(["UART (COM9)", "TCP :9000"])
+        self.combo_ctl.addItems(["UART (串口)", "TCP :9000"])
         self.combo_ctl.setMinimumWidth(130)
         g.addWidget(self.combo_ctl, 2, 1)
 
         g.addWidget(QLabel("通道端口/IP:"), 3, 0)
-        self.edit_ctl = QLineEdit("COM9")
+        self.edit_ctl = QLineEdit()
         self.edit_ctl.setMinimumWidth(150)
         g.addWidget(self.edit_ctl, 3, 1)
         self.chk_http_verify = QCheckBox("状态页验证")
@@ -507,7 +524,9 @@ class MainWindow(QMainWindow):
         self.edit_tcp_ip.setText(self.config.get("last_tcp_ip", "192.168.10.10"))
         self.spin_tcp_port.setValue(int(self.config.get("last_tcp_port", 9020)))
         self.spin_http_port.setValue(int(self.config.get("last_http_port", 8080)))
-        self.edit_ctl.setText(self.config.get("last_ctl", "COM9"))
+        stored_ctl = str(self.config.get("last_ctl", "")).strip()
+        ports = UartTransport.list_ports()
+        self.edit_ctl.setText(stored_ctl if stored_ctl in ports else _detect_ctl_port())
         self.edit_board_ip.setText(self.config.get("last_board_ip", "192.168.10.10"))
         port = self.config.get("last_port", "")
         if port and self.combo_port.findText(port) >= 0:
@@ -731,7 +750,7 @@ class MainWindow(QMainWindow):
                 "uart_baud": int(self.combo_baud.currentText()),
                 "use_ymodem": self.chk_ymodem.isChecked(),
                 "verify_boot_log": self.chk_verify_log.isChecked(),
-                "debug_port": "COM9",
+                "debug_port": _detect_ctl_port(),
                 "debug_baud": 115200,
             })
         elif mode == "tcp":

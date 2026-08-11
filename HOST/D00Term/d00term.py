@@ -4,21 +4,24 @@
 
 用法：
     python d00term.py                     # 交互：选择传输后进入终端
-    python d00term.py com9                # UART 默认 115200
-    python d00term.py com9 115200
+    python d00term.py com5                # UART 默认 115200（缺省自动探测调试口）
+    python d00term.py com5 115200
     python d00term.py tcp 192.168.1.10    # ETH 默认端口 9000
     python d00term.py tcp 192.168.1.10 9000
-    python d00term.py com9 -x "ver"       # 单次执行（脚本化/自测）
+    python d00term.py can                 # CAN（PCAN-USB，需 PEAK 驱动，直调 PCANBasic.dll）
+    python d00term.py com5 -x "ver"       # 单次执行（脚本化/自测）
     python d00term.py --list              # 列出可用 COM 口
     python d00term.py --selftest          # 传输层自检（无需硬件）
 
 会话模式：
     UART：原始透传（设备 shell 自带回显/历史/补全，按键原样转发）
     TCP ：行编辑会话（本地回显 + 上下键历史，设备持有提示符）
-    CAN ：扩展点（与固件 CMD_ENABLE_CAN 对应，接入后补一个类 + 一行注册）
+    CAN ：行帧会话（ID 0x100 下发 / 0x101 回包，首字节序号+0x80 末帧标志，
+          与固件 cmd_can.c 的 CMD_ENABLE_CAN 适配器约定一致）
 """
 
 import argparse
+import ctypes
 import os
 import socket
 import sys
@@ -30,9 +33,104 @@ try:
 except ImportError:  # pragma: no cover
     serial = None
 
+try:
+    import can
+except ImportError:  # pragma: no cover
+    can = None
+
 DEFAULT_TCP_PORT = 9000
 DEFAULT_UART_BAUD = 115200
 READ_TIMEOUT_S = 0.1
+
+# CAN 行帧协议常量（与固件 cmd_can.c 对齐）
+CAN_ID_HOST = 0x100    # 主机 -> 设备：shell 命令行下发
+CAN_ID_DEV = 0x101     # 设备 -> 主机：shell 回显/应答
+CAN_DLC_MAX = 8        # CAN 标准帧数据场最大 8 字节
+
+# PCANBasic.dll 直调（避免依赖已下架的 pcan-basic 包；PEAK 驱动自带 x64 DLL）
+_PCAN_DLL_PATHS = (
+    r"C:\Windows\System32\PCANBasic.dll",
+    r"C:\Program Files\PEAK-System\PCAN-Basic\x64\PCANBasic.dll",
+    r"C:\Program Files (x86)\PEAK-System\PCAN-Basic\x64\PCANBasic.dll",
+    r"C:\Program Files\PEAK-System\PCAN-Basic\x86\PCANBasic.dll",
+    r"C:\Windows\SysWOW64\PCANBasic.dll",
+)
+_PCAN_USBBUS1 = 0x0051          # 第一个 PCAN-USB 通道
+_PCAN_BAUD_500K = 0x001C        # 500 kbit/s（与固件 bxCAN 默认一致）
+_PCAN_TYPE_ISA = 0x0001         # USB 设备统一用此类型（IOPort/Interrupt=0）
+_PCAN_MESSAGE_STANDARD = 0x00   # 标准帧
+_PCAN_ERROR_OK = 0x0000
+
+
+def _load_pcan_dll():
+    """定位并加载 PCANBasic.dll；未安装 PEAK 驱动时返回 None。"""
+    if ctypes is None:
+        return None
+    for path in _PCAN_DLL_PATHS:
+        if os.path.exists(path):
+            try:
+                return ctypes.WinDLL(path)
+            except Exception:
+                continue
+    return None
+
+
+class _PcanMsg(ctypes.Structure):
+    """PCANBasic TPCANMsg 结构体（标准帧数据场 8 字节）。"""
+    _fields_ = [
+        ("id", ctypes.c_uint32),
+        ("msgtype", ctypes.c_ubyte),
+        ("len", ctypes.c_ubyte),
+        ("data", ctypes.c_ubyte * 8),
+    ]
+
+
+class _PcanApi:
+    """极简 PCANBasic.dll 封装：仅 open/write/read/close 四个接口。"""
+
+    def __init__(self, dll):
+        self._dll = dll
+        self._dll.CAN_Initialize.argtypes = [ctypes.c_ushort, ctypes.c_ushort,
+                                             ctypes.c_ushort, ctypes.c_uint32,
+                                             ctypes.c_ushort]
+        self._dll.CAN_Initialize.restype = ctypes.c_uint32
+        self._dll.CAN_Uninitialize.argtypes = [ctypes.c_ushort]
+        self._dll.CAN_Uninitialize.restype = ctypes.c_uint32
+        self._dll.CAN_Write.argtypes = [ctypes.c_ushort, ctypes.POINTER(_PcanMsg)]
+        self._dll.CAN_Write.restype = ctypes.c_uint32
+        self._dll.CAN_Read.argtypes = [ctypes.c_ushort, ctypes.POINTER(_PcanMsg),
+                                       ctypes.POINTER(ctypes.c_uint64)]
+        self._dll.CAN_Read.restype = ctypes.c_uint32
+        self._dll.CAN_GetErrorText.argtypes = [ctypes.c_uint32, ctypes.c_ushort,
+                                               ctypes.c_char_p]
+        self._dll.CAN_GetErrorText.restype = ctypes.c_uint32
+
+    def initialize(self) -> int:
+        return self._dll.CAN_Initialize(_PCAN_USBBUS1, _PCAN_BAUD_500K,
+                                        _PCAN_TYPE_ISA, 0, 0)
+
+    def write(self, msg: _PcanMsg) -> int:
+        return self._dll.CAN_Write(_PCAN_USBBUS1, ctypes.byref(msg))
+
+    def read(self):
+        msg = _PcanMsg()
+        stamp = ctypes.c_uint64(0)
+        rc = self._dll.CAN_Read(_PCAN_USBBUS1, ctypes.byref(msg),
+                                ctypes.byref(stamp))
+        if rc != _PCAN_ERROR_OK:
+            return None
+        return bytes(msg.data[:msg.len])
+
+    def uninitialize(self) -> int:
+        return self._dll.CAN_Uninitialize(_PCAN_USBBUS1)
+
+    def error_text(self, rc: int) -> str:
+        try:
+            buf = ctypes.create_string_buffer(128)
+            self._dll.CAN_GetErrorText(rc, 0, buf)
+            return buf.value.decode("utf-8", "replace")
+        except Exception:
+            return hex(rc)
 
 
 # ============================================================
@@ -119,19 +217,116 @@ class TcpTransport(Transport):
 
 
 class CanTransport(Transport):
-    """CAN 扩展点（对应固件 cmd_can.c / CMD_ENABLE_CAN）。
-    接入 CAN 硬件后实现 open/send/recv 即可，会话与命令零改动。"""
+    """CAN 行帧传输（对应固件 cmd_can.c / CMD_ENABLE_CAN）。
+
+    物理层走 PEAK PCAN-USB：优先直调 PCANBasic.dll（ctypes），无 python-can
+    依赖；若装了 python-can 也可作为备选后端。帧协议：
+      - 下发：ID 0x100，每帧 data[0]=序号（0x80 置位=末帧），data[1..] 为行切片（≤7B）；
+      - 回包：ID 0x101 同构，收齐末帧后拼出整行交给会话层。
+    未装 PEAK 驱动时 open 抛出可读的 RuntimeError。
+    """
     name = "CAN"
     mask = 4
 
+    def __init__(self, channel: str = "PCAN_USBBUS1", bitrate: int = 500000):
+        self.channel = channel
+        self.bitrate = bitrate
+        self._bus = None
+        self._api = None
+        self._rx_buf = bytearray()   # 当前未拼完的行
+        self._rx_seq = 0             # 期望的下一帧序号
+
     def open(self):
-        raise RuntimeError("CAN 传输尚未接入（对应固件 CMD_ENABLE_CAN=0）")
+        dll = _load_pcan_dll()
+        if dll is not None:
+            self._api = _PcanApi(dll)
+            rc = self._api.initialize()
+            if rc != _PCAN_ERROR_OK:
+                raise RuntimeError(f"PCAN-USB 初始化失败: {self._api.error_text(rc)}")
+            return
+        if can is not None:
+            try:
+                self._bus = can.interface.Bus(interface="pcan", channel=self.channel,
+                                              bitrate=self.bitrate)
+                return
+            except Exception as e:
+                raise RuntimeError(f"PCAN-USB 打开失败: {e}") from e
+        raise RuntimeError("PEAK PCAN-USB 驱动未安装（PCANBasic.dll 缺失）；"
+                           "请先运行 PEAK-Drivers 安装包")
 
     def send(self, data: bytes):
-        raise RuntimeError("CAN 传输尚未接入")
+        if self._api is None and self._bus is None:
+            raise RuntimeError("CAN 未打开")
+        for frame in encode_can_line(data):
+            if self._api is not None:
+                msg = _PcanMsg()
+                msg.id = CAN_ID_HOST
+                msg.msgtype = _PCAN_MESSAGE_STANDARD
+                msg.len = len(frame)
+                for i, b in enumerate(frame):
+                    msg.data[i] = b
+                rc = self._api.write(msg)
+                if rc != _PCAN_ERROR_OK:
+                    raise RuntimeError(f"PCAN 发送失败: {self._api.error_text(rc)}")
+            else:
+                self._bus.send(can.Message(arbitration_id=CAN_ID_HOST,
+                                           data=frame, is_extended_id=False))
 
     def recv(self) -> bytes:
+        if self._api is None and self._bus is None:
+            return b""
+        deadline = time.time() + READ_TIMEOUT_S
+        while time.time() < deadline:
+            if self._api is not None:
+                data = self._api.read()
+                if data is None:
+                    continue
+            else:
+                msg = self._bus.recv(timeout=0.02)
+                if msg is None or msg.arbitration_id != CAN_ID_DEV or not msg.data:
+                    continue
+                data = msg.data
+            seq = data[0] & 0x7F
+            last = bool(data[0] & 0x80)
+            if seq == 0:
+                self._rx_buf = bytearray()
+                self._rx_seq = 0
+            if seq == self._rx_seq:        # 顺序校验：乱序帧丢弃，防串行
+                self._rx_buf += data[1:]
+                self._rx_seq += 1
+            if last:
+                line = bytes(self._rx_buf)
+                self._rx_buf = bytearray()
+                return line
         return b""
+
+    def close(self):
+        if self._api is not None:
+            try:
+                self._api.uninitialize()
+            except Exception:
+                pass
+            self._api = None
+        if self._bus is not None:
+            try:
+                self._bus.shutdown()
+            except Exception:
+                pass
+            self._bus = None
+
+
+def encode_can_line(line: bytes):
+    """shell 行 -> CAN 帧序列：每帧 ≤7B 负载，首字节为序号（0x80=末帧）。"""
+    if not line:
+        line = b"\r"
+    frames = []
+    seq = 0
+    for i in range(0, len(line), CAN_DLC_MAX - 1):
+        chunk = line[i:i + CAN_DLC_MAX - 1]
+        last = (i + CAN_DLC_MAX - 1) >= len(line)
+        frames.append(bytes([seq | (0x80 if last else 0)]) + chunk)
+        seq = (seq + 1) & 0x7F
+    return frames
 
 
 TRANSPORTS = [UartTransport, TcpTransport, CanTransport]
@@ -328,13 +523,30 @@ def list_ports():
     return ports
 
 
+def default_uart_port():
+    """默认调试串口：优先 CH340/CH9102（探索者板载），其次 COM5，再其次任意可用口。"""
+    ports = list_ports()
+    if not ports:
+        return "COM5"
+    try:
+        for p in serial.tools.list_ports.comports():
+            desc = (p.description or "").upper()
+            if "CH340" in desc or "CH9102" in desc:
+                return p.device
+    except Exception:
+        pass
+    return "COM5" if "COM5" in ports else ports[0]
+
+
 def pick_transport():
     ports = list_ports()
     dev_ip = detect_device_ip()
     _write("D00 命令行终端\r\n")
     _write("  1) UART  " + (", ".join(ports) if ports else "(未检测到 COM 口)") + "\r\n")
     _write(f"  2) ETH   {dev_ip}:9000（自动探测电脑同网段）\r\n")
-    _write("  3) CAN   (未接入)\r\n")
+    _write("  3) CAN   " + ("PCAN-USB" if _load_pcan_dll() is not None
+                            else ("python-can" if can is not None
+                                  else "(未装 PEAK 驱动)")) + "\r\n")
     choice = input("选择传输 [1/2/3]: ").strip()
     if choice == "2":
         host = input(f"ETH IP [{dev_ip}]: ").strip() or dev_ip
@@ -342,11 +554,11 @@ def pick_transport():
     if choice == "3":
         return CanTransport()
     if ports:
-        default = "COM9" if "COM9" in ports else ports[0]
+        default = default_uart_port()
         hint = "、".join(ports)
         port = input(f"选择串口 [{default}]（可用: {hint}）: ").strip() or default
     else:
-        port = input("选择串口 [COM9]: ").strip() or "COM9"
+        port = input("选择串口 [COM5]: ").strip() or "COM5"
     return UartTransport(port, DEFAULT_UART_BAUD)
 
 
@@ -371,15 +583,18 @@ def selftest():
     """传输层自检（无需硬件）：实例化/参数/异常路径。"""
     ok = True
     for cls in (UartTransport, TcpTransport, CanTransport):
-        t = cls("COM9") if cls is UartTransport else (
+        t = cls("COM5") if cls is UartTransport else (
             TcpTransport("192.168.1.10") if cls is TcpTransport else CanTransport())
         print(f"  [OK] {t.name} mask={t.mask} 构造")
-    try:
-        CanTransport().open()
-        ok = False
-        print("  [FAIL] CAN 应拒绝 open")
-    except RuntimeError:
-        print("  [OK] CAN 未接入时正确拒绝")
+    if _load_pcan_dll() is None and can is None:
+        try:
+            CanTransport().open()
+            ok = False
+            print("  [FAIL] CAN 应拒绝 open（未装 PEAK 驱动）")
+        except RuntimeError:
+            print("  [OK] CAN 未接入时正确拒绝")
+    else:
+        print("  [OK] CAN 传输就绪（PEAK 驱动/python-can 已装，硬件在线与否由 open 判定）")
     if serial is None:
         ok = False
         print("  [WARN] pyserial 未安装（UART 不可用）")
@@ -388,8 +603,8 @@ def selftest():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="d00term", description="D00 配套命令行终端（UART/ETH，CAN 扩展）")
-    ap.add_argument("transport", nargs="?", help="com9 或 tcp")
+        prog="d00term", description="D00 配套命令行终端（UART/ETH/CAN）")
+    ap.add_argument("transport", nargs="?", help="uart/com / tcp / can（缺省交互选择）")
     ap.add_argument("target", nargs="?", help="串口号或 ETH IP")
     ap.add_argument("port_or_baud", nargs="?", help="TCP 端口或 UART 波特率")
     ap.add_argument("-x", "--exec", metavar="CMD", help="单次执行一条命令后退出")
@@ -411,7 +626,7 @@ def main(argv=None):
         baud = int(args.target) if args.target else DEFAULT_UART_BAUD
         t = UartTransport(port, baud)
     elif tl in ("uart", "com"):
-        port = args.target or "COM9"
+        port = args.target or default_uart_port()
         baud = int(args.port_or_baud) if args.port_or_baud else DEFAULT_UART_BAUD
         t = UartTransport(port, baud)
     elif tl == "tcp":

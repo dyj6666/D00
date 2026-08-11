@@ -11,8 +11,8 @@
                 ├─1 self_check.ps1        环境/串口/硬件自检
                 ├─2 auto_build.ps1        Keil 发布构建（BOOT+APP）或 GCC 快速构建
                 ├─3 auto_flash.ps1        SWD 逐扇区擦写 BOOT+带魔数 APP 镜像，校验+复位
-                ├─4 auto_verify.ps1       复位后抓 COM9 日志，关键字判定 PASS/FAIL
-                ├─5 auto_ota.ps1          HOSTLINK 安全升级冒烟（COM13 921600）
+                ├─4 auto_verify.ps1       复位后抓调试口日志（默认 COM5，自动探测），关键字判定 PASS/FAIL
+                ├─5 auto_ota.ps1          HOSTLINK 安全升级冒烟（数据口默认 COM13 921600）
                 ├─6 auto_hosttest.ps1     主机单测（BOOT ctest + APP 协议测试）
                 └─7 auto_pipeline.ps1     一键总流水线，产出 last_report.json 证据报告
                      │
@@ -84,7 +84,7 @@ HOST 测试、发布固件崩溃后门扫描、工作流文件版本化检查。
 | self_check.ps1 | 工具链/串口/约定一致性 + 编码/崩溃后门/版本单一事实源/可复现性/文档漂移检查 | `-TestHw` 探测 SWD | 退出码 0/1/2 |
 | auto_build.ps1 | Keil/GCC 构建 BOOT+APP（**默认增量**：Keil `-b` / GCC ninja；`-Clean` 才全量） | `-Project APP/BOOT/ALL` `-Toolchain Keil/GCC` `-Clean` | `workflow\logs\build_*.log` |
 | auto_flash.ps1 | 生成带魔数镜像并 SWD 烧录 | `-SkipBoot -SkipApp -KeepImage -Version N` | `workflow\logs\flash.log` |
-| auto_verify.ps1 | 复位抓 COM9 日志并判定 | `-Seconds 25 -NoReset -SerialReset`（DAP-only 环境用串口复位） | `APP\_auto_boot.txt` |
+| auto_verify.ps1 | 复位抓调试口日志并判定 | `-Seconds 25 -NoReset -SerialReset`（DAP-only 环境用串口复位） | `APP\_auto_boot.txt` |
 | auto_ota.ps1 | HOSTLINK 安全升级冒烟 | `-Version N -BuildNo N -Port COM13` | `workflow\logs\ota_hostlink.log` |
 | auto_hosttest.ps1 | 主机单测（+ `-Robustness` LA 硬件健壮性，需接线） | `-SkipBoot -SkipApp` | `workflow\logs\hosttest_*.log` |
 | auto_pipeline.ps1 | 总流水线编排 | `-Mode ...` `-IncludeOta` | `workflow\last_report.json` |
@@ -131,7 +131,7 @@ HOST 测试、发布固件崩溃后门扫描、工作流文件版本化检查。
 - **UV4 构建超时**：关闭 Keil IDE 再跑（UV4.exe 与 IDE 共用进程名）。
 - **构建速度**：全链路默认增量（Keil `-b` + `-j0` 并行、GCC ninja 只编改动文件）；
   改 `.h` 头文件会触发依赖文件重编属正常；确需全量加 `-Clean`。
-- **verify 报 MISSING**：确认 COM9 是调试串口、波特率 115200；或调整 `VerifyExpect`。
+- **verify 报 MISSING**：确认调试串口（默认 COM5，可用 `D00_DEBUG_PORT` 覆盖）是调试串口、波特率 115200；或调整 `VerifyExpect`。
 - **flash 失败**：确认 SWD 线/供电/目标未占用；重试前先跑 `self_check.ps1 -TestHw`。
 - **OTA 拒绝降级**：`-Version` 必须大于等于板上当前版本。
 - **README 魔数地址过时**：以 `boot_config.h`（0x0805FFF8）和 `app_config.h`（0x0805FFFC）为准。

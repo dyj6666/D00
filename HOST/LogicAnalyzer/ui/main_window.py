@@ -234,11 +234,33 @@ class MainWindow(QtWidgets.QMainWindow):
         self.data_port.clear()
         self.ctrl_port.addItems(names)
         self.data_port.addItems(names)
-        for combo, pref in ((self.ctrl_port, "COM9"),
-                            (self.data_port, "COM13")):
+        ctrl_pref, data_pref = self._default_ports()
+        for combo, pref in ((self.ctrl_port, ctrl_pref),
+                            (self.data_port, data_pref)):
             idx = combo.findText(pref)
             if idx >= 0:
                 combo.setCurrentIndex(idx)
+
+    def _default_ports(self):
+        """默认端口：控制口优先 CH340（调试串口，换 USB 口后 COM 号会漂移），
+        数据口优先 CH9102/CH343（HOSTLINK 高速口）；均缺省回退首个可用串口。"""
+        ctrl, data = "COM5", "COM13"
+        try:
+            ports = list(serial.tools.list_ports.comports())
+        except Exception:
+            ports = []
+        names = [p.device for p in ports]
+        for p in ports:
+            desc = (p.description or "").upper()
+            if "CH340" in desc:
+                ctrl = p.device
+            if "CH9102" in desc or "CH343" in desc:
+                data = p.device
+        if ctrl not in names and names:
+            ctrl = names[0]
+        if data not in names and names:
+            data = names[0]
+        return ctrl, data
 
     def _update_decoder_form(self, protocol: str):
         # 清空旧控件

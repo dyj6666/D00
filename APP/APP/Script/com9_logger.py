@@ -1,7 +1,8 @@
-"""COM9 日志抓取：可选在打开串口后立即发送一条命令（如 reset）。
+"""调试串口日志抓取：可选在打开串口后立即发送一条命令（如 reset）。
 
 用法：
-    python com9_logger.py <out> <seconds> [--cmd "reset"] [--port COM9] [--baud 115200]
+    python com9_logger.py <out> <seconds> [--cmd "reset"] [--port COM5] [--baud 115200]
+端口默认自动探测（优先 CH340 即探索者板载调试串口；换 USB 口导致 COM 号漂移时无需改参）。
 """
 
 import argparse
@@ -9,16 +10,34 @@ import sys
 import time
 
 import serial
+import serial.tools.list_ports
+
+
+def auto_debug_port():
+    """自动定位调试串口：优先 CH340/CH9102 描述，其次 COM5，最后任意可用串口。"""
+    fallback = "COM5"
+    try:
+        comports = serial.tools.list_ports.comports()
+        if comports:
+            for p in comports:
+                desc = (p.description or "").upper()
+                if "CH340" in desc or "CH9102" in desc:
+                    return p.device
+            return comports[0].device
+    except Exception:
+        pass
+    return fallback
 
 parser = argparse.ArgumentParser()
 parser.add_argument("out", nargs="?", default=r"D:\GIT-SPACE\D00\APP\APP\_com9_boot.txt")
 parser.add_argument("seconds", nargs="?", type=int, default=20)
 parser.add_argument("--cmd", default=None, help="打开串口后立即发送的命令（如 reset）")
-parser.add_argument("--port", default="COM9")
+parser.add_argument("--port", default=None, help="调试串口（默认自动探测）")
 parser.add_argument("--baud", type=int, default=115200)
 args = parser.parse_args()
 
-ser = serial.Serial(args.port, args.baud, timeout=0.2)
+port = args.port or auto_debug_port()
+ser = serial.Serial(port, args.baud, timeout=0.2)
 if args.cmd:
     time.sleep(0.3)
     ser.reset_input_buffer()

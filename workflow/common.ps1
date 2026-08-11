@@ -32,8 +32,8 @@ $script:AppAddr     = "0x08010000"
 $script:BootSectors = @("0","1","2","3")   # BOOT 64KB = 扇区 0-3（与 boot_config.h 一致）
 $script:AppSectors  = @("4","5","6")
 
-$script:DebugPort = "COM9"
-$script:HostPort  = "COM13"
+$script:DebugPort = if ($env:D00_DEBUG_PORT) { $env:D00_DEBUG_PORT } else { "COM5" }
+$script:HostPort  = if ($env:D00_HOST_PORT)  { $env:D00_HOST_PORT  } else { "COM13" }
 $script:BootLog   = Join-Path $AppRoot "_auto_boot.txt"
 $script:OtaLog    = Join-Path $AppRoot "_auto_ota.txt"
 
@@ -189,9 +189,24 @@ function Start-Com9Logger {
     param([string]$OutFile, [int]$Seconds, [string]$Cmd = "")
     Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
     $args = @($script:Com9Logger, $OutFile, "$Seconds")
+    $args += @("--port", (Get-DebugPort))
     if ($Cmd) { $args += @("--cmd", $Cmd) }
     Start-Process -FilePath $script:Python -ArgumentList $args `
         -WindowStyle Hidden -PassThru
+}
+
+function Get-DebugPort {
+    # 调试串口解析优先级：环境变量 D00_DEBUG_PORT > 已配置端口在线 > 首个可用串口 > COM5。
+    # 换 USB 口后 Windows 会重新分配 COM 号，自动探测可避免脚本因端口漂移而失效。
+    if ($env:D00_DEBUG_PORT) { return $env:D00_DEBUG_PORT }
+    try {
+        $ports = [System.IO.Ports.SerialPort]::GetPortNames()
+    } catch {
+        $ports = @()
+    }
+    if ($ports -contains $script:DebugPort) { return $script:DebugPort }
+    if ($ports.Count -gt 0) { return $ports[0] }
+    return $script:DebugPort
 }
 
 function Stop-Logger {

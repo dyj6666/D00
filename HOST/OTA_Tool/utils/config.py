@@ -14,7 +14,7 @@ class Config:
             "last_tcp_ip": "192.168.10.10",
             "last_tcp_port": "9020",
             "last_http_port": "8080",
-            "last_ctl": "COM9",
+            "last_ctl": "",
         }
         self.load()
 
