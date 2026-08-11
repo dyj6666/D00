@@ -222,7 +222,15 @@ class _PkgHandler(BaseHTTPRequestHandler):
         try:
             size = os.path.getsize(self.pkg_path)
         except OSError:
-            self.send_error(404)
+            # 测试模式：尚未生成固件包时返回在线提示页，便于浏览器验证
+            body = ("D00 OTA Test Server Online\n\n"
+                    "服务正常。固件包将在实际 HTTP 升级时提供。\n").encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
             return
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")

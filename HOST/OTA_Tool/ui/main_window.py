@@ -581,18 +581,27 @@ class MainWindow(QMainWindow):
         """HTTP 模式连接测试：①PC 端 HTTP 服务端口可用且正确选路；
         ②控制通道（COM9 串口 / :9000 TCP）能连上板子 shell。"""
         import socket
+        import threading
         from core.transport import HttpOtaServer
         port = self.spin_http_port.value()
         board_ip = self.edit_board_ip.text().strip()
         ctl_mode = "uart" if self.combo_ctl.currentText().startswith("UART") else "tcp"
         ok = True
 
+        # 停掉上一次测试遗留的服务（若还在 30 秒窗口内）
+        self._stop_http_test_srv()
+
         # 1) HTTP 服务可用性（绑定端口 + 按板端 IP 选路）
         try:
             srv = HttpOtaServer("", port)
             url = srv.start(board_ip)
-            srv.stop()
-            self._append_log(f"✅ HTTP 服务可用: {url}", "green")
+            self._http_test_srv = srv
+            timer = threading.Timer(30.0, self._stop_http_test_srv)
+            timer.daemon = True
+            timer.start()
+            self._append_log(
+                f"✅ HTTP 服务已启动: {url}（30 秒后自动关闭，可立即用浏览器验证）",
+                "green")
         except Exception as e:
             self._append_log(f"❌ HTTP 服务: {e}", "red")
             ok = False
@@ -647,6 +656,16 @@ class MainWindow(QMainWindow):
         if ok:
             self.lbl_dev.setText(f"设备: 在线 ({board_ip})")
             self._append_log("HTTP 通道检查全部通过，可开始升级", "cyan")
+
+    def _stop_http_test_srv(self):
+        """关闭测试用 HTTP 服务（幂等）。"""
+        srv = getattr(self, "_http_test_srv", None)
+        if srv is not None:
+            try:
+                srv.stop()
+            except Exception:
+                pass
+            self._http_test_srv = None
 
     # ================================================================
     # 固件/UID
