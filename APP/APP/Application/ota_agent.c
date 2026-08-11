@@ -18,6 +18,8 @@
 #include "logger.h"
 #include "msg_types.h"
 #include "stm32f4xx_hal.h"
+#include "FreeRTOS.h"
+#include "semphr.h"
 
 /* ---------------- 参数区（与 BOOT/boot_param.c 结构一致） ---------------- */
 #pragma pack(1)
@@ -50,6 +52,23 @@ static volatile uint8_t  ota_state = OTA_ST_IDLE;
 static uint32_t ota_total = 0;         /* 固件总大小 */
 static uint32_t ota_received = 0;      /* 已收字节 */
 static uint32_t ota_begin_version = 0; /* 本次会话版本（会话槽持久化用） */
+static SemaphoreHandle_t s_ota_mutex = NULL;  /* 传输互斥：防 UART/TCP/HTTP 并发操作 */
+
+/* 并发保护：任何传输（UART CmdTask / TCP 任务 / HTTP shell）调用 Ota_*
+ * 前必须取得互斥锁，防止两个传输同时通过状态检查导致下载区竞争。 */
+static void ota_mutex_take(void)
+{
+    if (s_ota_mutex != NULL) {
+        (void)xSemaphoreTake(s_ota_mutex, pdMS_TO_TICKS(200u));
+    }
+}
+
+static void ota_mutex_give(void)
+{
+    if (s_ota_mutex != NULL) {
+        (void)xSemaphoreGive(s_ota_mutex);
+    }
+}
 
 /** @brief 计算会话槽 CRC32（只覆盖 crc32 字段之前的数据） */
 static uint32_t ota_session_crc(const ota_session_t *s)
@@ -292,11 +311,14 @@ static void ota_confirm_startup(void)
  */
 uint8_t Ota_Begin(uint32_t version, uint32_t size)
 {
+    ota_mutex_take();
     if (ota_state == OTA_ST_RECEIVING) {
+        ota_mutex_give();
         return 1;   /* 已在接收中 */
     }
     if (size == 0 || size > OTA_DOWNLOAD_SAFE) {
         LOG_Printf("OTA: bad size %lu\r\n", (unsigned long)size);
+        ota_mutex_give();
         return 2;
     }
     /* 版本降级拦截（BOOT 侧还会二次校验） */
@@ -304,6 +326,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     if (cur != 0xFFFFFFFFu && cur != 0u && version < cur) {
         LOG_Printf("OTA: version downgrade denied (%lu < %lu)\r\n",
                    (unsigned long)version, (unsigned long)cur);
+        ota_mutex_give();
         return 4;
     }
     ota_begin_version = version;
@@ -326,12 +349,14 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
         ota_total = size;
         ota_received = sess.received;
         ota_state = OTA_ST_RECEIVING;
+        ota_mutex_give();
         return 0;
     }
 
     LOG_Printf("OTA: erasing download area...\r\n");
     if (!ota_flash_erase(OTA_DOWNLOAD_ADDR, OTA_DOWNLOAD_SIZE)) {
         LOG_Printf("OTA: download erase FAILED\r\n");
+        ota_mutex_give();
         return 3;
     }
     ota_total = size;
@@ -339,6 +364,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     ota_state = OTA_ST_RECEIVING;
     ota_session_save(0, version, size, 0);
     LOG_Printf("OTA: download area ready, awaiting data\r\n");
+    ota_mutex_give();
     return 0;
 }
 
@@ -352,13 +378,16 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
  */
 uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
 {
+    ota_mutex_take();
     if (ota_state != OTA_ST_RECEIVING) {
+        ota_mutex_give();
         return 1;
     }
     if (len > OTA_CHUNK_MAX || offset != ota_received ||
         offset + len > ota_total || offset + len > OTA_DOWNLOAD_SAFE) {
         LOG_Printf("OTA: bad chunk off=%lu len=%u\r\n",
                    (unsigned long)offset, (unsigned)len);
+        ota_mutex_give();
         return 2;
     }
     if (!ota_flash_write(OTA_DOWNLOAD_ADDR + offset, data, len)) {
@@ -367,6 +396,7 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
                    (unsigned long)offset, (unsigned)probe,
                    (unsigned)(FLASH->SR));
         ota_state = OTA_ST_IDLE;
+        ota_mutex_give();
         return 3;
     }
     ota_received += len;
@@ -379,6 +409,7 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
             ota_session_save(slot, ota_begin_version, ota_total, ota_received);
         }
     }
+    ota_mutex_give();
     return 0;
 }
 
@@ -389,13 +420,16 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
  */
 uint8_t Ota_End(void)
 {
+    ota_mutex_take();
     if (ota_state != OTA_ST_RECEIVING) {
+        ota_mutex_give();
         return 1;
     }
     if (ota_received != ota_total) {
         LOG_Printf("OTA: incomplete %lu/%lu\r\n",
                    (unsigned long)ota_received, (unsigned long)ota_total);
         ota_state = OTA_ST_IDLE;
+        ota_mutex_give();
         return 2;
     }
     ota_state = OTA_ST_DONE;
@@ -425,6 +459,7 @@ uint8_t Ota_End(void)
 
     BSP_RTC_WriteBackupReg(0, BOOT_FLAG_UPGRADE);
     BSP_DelayMs(100);
+    ota_mutex_give();
     BSP_SystemReset();
     return 0;   /* 不会到达 */
 }
@@ -432,26 +467,31 @@ uint8_t Ota_End(void)
 /** @brief 读取当前 OTA 状态与进度（供 status 命令/续传客户端使用） */
 uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total)
 {
+    ota_mutex_take();
     *state = ota_state;
     *received = ota_received;
     *total = ota_total;
+    ota_mutex_give();
     return 0;
 }
 
 /** @brief 强制回到 IDLE 并清空全部会话槽（配合 --no-resume 从零开始） */
 uint8_t Ota_Reset(void)
 {
+    ota_mutex_take();
     ota_state = OTA_ST_IDLE;
     ota_received = 0;
     ota_total = 0;
     ota_session_clear();
     LOG_Printf("OTA: session reset (fresh download required)\r\n");
+    ota_mutex_give();
     return 0;
 }
 
 /** @brief 危险自测：把参数区置为 PENDING+MAX，下次复位触发 BOOT 回滚 */
 void Ota_ForceRollbackTest(void)
 {
+    ota_mutex_take();
     ota_param_t param;
     memcpy(&param, (const void *)OTA_PARAM_ADDR, sizeof(param));
     if (param.magic != OTA_PARAM_MAGIC || param.crc32 != ota_param_crc(&param)) {
@@ -468,12 +508,16 @@ void Ota_ForceRollbackTest(void)
                     (const uint8_t *)&param, sizeof(param));
     LOG_Printf("OTA: rollback test armed (PENDING+MAX), resetting...\r\n");
     BSP_DelayMs(100);
+    ota_mutex_give();
     BSP_SystemReset();
 }
 
 /** @brief OTA Agent 初始化：订阅命令、执行启动确认、打印参数区状态 */
 void OtaAgent_Init(void)
 {
+    if (s_ota_mutex == NULL) {
+        s_ota_mutex = xSemaphoreCreateMutex();
+    }
     EventBus_Subscribe(MSG_CMD_OTA_START, handle_ota_start_msg);
     ota_confirm_startup();
     ota_param_t st;

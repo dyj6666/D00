@@ -98,8 +98,11 @@ static int tcp_handle_frame(struct netconn *conn, uint8_t cmd,
                            ((uint32_t)pl[2] << 8) | pl[3];
             uint32_t size = ((uint32_t)pl[4] << 24) | ((uint32_t)pl[5] << 16) |
                             ((uint32_t)pl[6] << 8) | pl[7];
-            tcp_ack1(conn, Ota_Begin(ver, size));
-            s_sessions++;
+            uint8_t st = Ota_Begin(ver, size);
+            tcp_ack1(conn, st);
+            if (st == 0u) {
+                s_sessions++;          /* 仅统计成功建立的会话 */
+            }
             break;
         }
         case OTA_TCP_CMD_DATA: {
@@ -218,9 +221,19 @@ static void ota_tcp_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    netconn_bind(srv, IP_ADDR_ANY, OTA_TCP_PORT);
+    if (netconn_bind(srv, IP_ADDR_ANY, OTA_TCP_PORT) != ERR_OK) {
+        LOG_Printf("[OTA-TCP] bind :%u FAILED\r\n", (unsigned)OTA_TCP_PORT);
+        netconn_delete(srv);
+        vTaskDelete(NULL);
+        return;
+    }
     netconn_set_recvtimeout(srv, 500);
-    netconn_listen(srv);
+    if (netconn_listen(srv) != ERR_OK) {
+        LOG_Printf("[OTA-TCP] listen FAILED\r\n");
+        netconn_delete(srv);
+        vTaskDelete(NULL);
+        return;
+    }
     LOG_Printf("[OTA-TCP] server listening :%u (ETH OTA)\r\n",
                (unsigned)OTA_TCP_PORT);
     for (;;) {

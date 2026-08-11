@@ -164,7 +164,12 @@ class TcpTransport:
         hdr = bytes([self.MAGIC, cmd, (len(payload) >> 8) & 0xFF,
                      len(payload) & 0xFF])
         frame = hdr + payload + bytes([self._crc8(hdr[1:] + payload)])
-        self._sock.sendall(frame)
+        try:
+            self._sock.sendall(frame)
+        except socket.timeout:
+            raise TransportError("TCP 发送超时（对端窗口阻塞）") from None
+        except OSError as e:
+            raise TransportError(f"TCP 发送失败: {e}") from None
 
     def _recv_exact(self, n: int, timeout: float) -> bytes:
         self._sock.settimeout(timeout)

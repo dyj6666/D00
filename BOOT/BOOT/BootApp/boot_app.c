@@ -385,20 +385,26 @@ static void boot_enter_upgrade_mode(void)
         if (boot_apply_download(true)) {
             return;
         }
-        /* 半成品/损坏/防重放拒绝：跳回 APP（支持断点续传或重新下载），
-         * 而不是回退 YMODEM 把设备卡在升级模式。
-         * 跳 APP 前归一化参数状态：此时已进入升级模式（延迟后擦除正常），
-         * 避免启动早期擦参数扇区（已知会导致 Flash BSY 卡死）。 */
-        printf("Pre-downloaded package invalid; booting APP for re-download...\r\n");
-        if (boot_check_app_valid(APP_BASE_ADDR)) {
-            boot_param_t np;
-            boot_param_load(&np);
-            np.boot_state = BOOT_STATE_NORMAL;
-            np.boot_count = 0;
-            boot_param_save(&np);
-            boot_jump_to_app(APP_BASE_ADDR);
-            return;
-        }
+    }
+
+    /* 统一兜底（安全修复）：无论 probe 未命中、还是 apply 被安全校验拒绝
+     * （坏密钥/防重放/损坏包），只要 RUN 固件有效就复位走正常启动路径回 APP，
+     * 支持断点续传或重新下载；而不是落入 YMODEM 死等人工恢复。
+     * 实测：坏密钥包（build 9031-9042）触发 apply 拒绝后，原实现落入
+     * YMODEM 等待（COM13 'C' 洪流），需人工 YMODEM 才能恢复。
+     * 采用"参数归一 + NVIC_SystemReset"而非直接跳转：走 BOOT 主流程的
+     * 已验证跳转路径，且复位前参数已归一为 NORMAL，不会触发早期擦参数
+     * 扇区（已知会导致 Flash BSY 卡死）。仅当 RUN 无效时才进 YMODEM。 */
+    if (boot_check_app_valid(APP_BASE_ADDR)) {
+        printf("No valid update; returning to APP for re-download...\r\n");
+        boot_param_t np;
+        boot_param_load(&np);
+        np.boot_state = BOOT_STATE_NORMAL;
+        np.boot_count = 0;
+        boot_param_save(&np);
+        BKP_WRITE(0, BOOT_FLAG_NONE);
+        NVIC_SystemReset();
+        return;   /* 不会到达 */
     }
 
     /* 下载区只擦除一次：避免重试循环中反复擦 flash，阻塞 SWD 调试连接 */
