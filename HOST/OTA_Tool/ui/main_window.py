@@ -11,9 +11,10 @@ import time
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent
 from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame,
-                             QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-                             QMainWindow, QMessageBox, QProgressBar,
-                             QPushButton, QSpinBox, QStackedWidget, QTextEdit,
+                             QFormLayout, QGridLayout, QHBoxLayout, QLabel,
+                             QLineEdit, QMainWindow, QMessageBox,
+                             QProgressBar, QPushButton, QSpinBox,
+                             QSplitter, QStackedWidget, QTextEdit,
                              QVBoxLayout, QWidget)
 
 from core.ota_engine import OtaEngine
@@ -39,8 +40,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"D00 OTA 升级中心 {VERSION} —— 董衍俊")
-        self.resize(1280, 900)
-        self.setMinimumSize(1120, 800)
+        self.resize(1320, 880)
+        self.setMinimumSize(1160, 780)
         self.config = Config()
         self.engine = None
         self._batch_engines = []
@@ -63,18 +64,47 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setSpacing(16)
-        root.setContentsMargins(24, 20, 24, 20)
+        root.setSpacing(12)
+        root.setContentsMargins(18, 14, 18, 14)
 
         root.addWidget(self._build_header())
-        root.addWidget(self._build_mode_selector())
-        root.addWidget(self._build_transport_card())
-        root.addWidget(self._build_firmware_card())
-        root.addWidget(self._build_dashboard())
-        root.addWidget(self._build_actions())
-        root.addWidget(self._build_log_card(), 1)
-        root.addLayout(self._build_version_row())
+
+        # 左右分栏：左=配置与操作，右=仪表盘/日志/版本库（互不挤压）
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._build_left_panel())
+        splitter.addWidget(self._build_right_panel())
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([460, 820])
+        root.addWidget(splitter, 1)
+
         self.statusBar().showMessage("就绪 · 选择通信模式并配置固件")
+
+    def _build_left_panel(self) -> QWidget:
+        """左栏：模式选择 + 传输设置 + 固件与安全 + 操作按钮。"""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
+        lay.addWidget(self._build_mode_selector())
+        lay.addWidget(self._build_transport_card())
+        lay.addWidget(self._build_firmware_card())
+        lay.addWidget(self._build_actions())
+        lay.addStretch()
+        w.setMinimumWidth(460)
+        return w
+
+    def _build_right_panel(self) -> QWidget:
+        """右栏：仪表盘 + 日志 + 版本库。"""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(12)
+        lay.addWidget(self._build_dashboard())
+        lay.addWidget(self._build_log_card(), 1)
+        lay.addLayout(self._build_version_row())
+        return w
 
     def _build_header(self) -> QWidget:
         w = QWidget()
@@ -146,26 +176,26 @@ class MainWindow(QMainWindow):
         self.btn_refresh.setObjectName("ghost")
         self.btn_refresh.clicked.connect(self._refresh_ports)
         g.addWidget(self.btn_refresh, 0, 2)
+        g.setColumnStretch(3, 1)
 
-        g.addWidget(QLabel("波特率:"), 0, 3)
+        g.addWidget(QLabel("波特率:"), 1, 0)
         self.combo_baud = QComboBox()
         self.combo_baud.addItems(
             ["115200", "230400", "460800", "921600", "1500000", "2000000"])
         self.combo_baud.setCurrentText("921600")
-        self.combo_baud.setMinimumWidth(120)
-        g.addWidget(self.combo_baud, 0, 4)
+        self.combo_baud.setMinimumWidth(152)
+        g.addWidget(self.combo_baud, 1, 1)
         self.btn_uart_test = QPushButton("测试连接")
         self.btn_uart_test.setObjectName("ghost")
         self.btn_uart_test.clicked.connect(self._test_uart)
-        g.addWidget(self.btn_uart_test, 0, 5)
-        g.setColumnStretch(6, 1)
+        g.addWidget(self.btn_uart_test, 1, 2)
 
         self.chk_ymodem = QCheckBox("传统 YMODEM(BOOT)")
-        g.addWidget(self.chk_ymodem, 1, 1)
+        g.addWidget(self.chk_ymodem, 2, 0, 1, 2)
         self.chk_verify_log = QCheckBox("验证启动日志")
         self.chk_verify_log.setChecked(True)
-        g.addWidget(self.chk_verify_log, 1, 3)
-        g.setRowStretch(2, 1)
+        g.addWidget(self.chk_verify_log, 2, 2)
+        g.setRowStretch(3, 1)
         self._refresh_ports()
         return w
 
@@ -181,26 +211,25 @@ class MainWindow(QMainWindow):
         self.edit_tcp_ip = QLineEdit("192.168.10.10")
         self.edit_tcp_ip.setMinimumWidth(170)
         g.addWidget(self.edit_tcp_ip, 0, 1)
+        g.setColumnStretch(2, 1)
 
-        g.addWidget(QLabel("端口:"), 0, 3)
+        g.addWidget(QLabel("端口:"), 1, 0)
         self.spin_tcp_port = QSpinBox()
         self.spin_tcp_port.setRange(1, 65535)
         self.spin_tcp_port.setValue(9020)
         self.spin_tcp_port.setMinimumWidth(100)
-        g.addWidget(self.spin_tcp_port, 0, 4)
+        g.addWidget(self.spin_tcp_port, 1, 1)
         self.btn_tcp_test = QPushButton("测试连接")
         self.btn_tcp_test.setObjectName("ghost")
         self.btn_tcp_test.clicked.connect(self._test_tcp)
-        g.addWidget(self.btn_tcp_test, 0, 5)
-        g.setColumnStretch(2, 1)
-        g.setColumnStretch(6, 1)
+        g.addWidget(self.btn_tcp_test, 1, 2)
 
         self.chk_no_resume = QCheckBox("从零开始(清会话)")
-        g.addWidget(self.chk_no_resume, 1, 1)
+        g.addWidget(self.chk_no_resume, 2, 0, 1, 2)
         self.chk_verify_http = QCheckBox("状态页验证")
         self.chk_verify_http.setChecked(True)
-        g.addWidget(self.chk_verify_http, 1, 3)
-        g.setRowStretch(2, 1)
+        g.addWidget(self.chk_verify_http, 2, 2)
+        g.setRowStretch(3, 1)
         return w
 
     def _build_http_page(self) -> QWidget:
@@ -217,92 +246,109 @@ class MainWindow(QMainWindow):
         self.spin_http_port.setValue(8080)
         self.spin_http_port.setMinimumWidth(100)
         g.addWidget(self.spin_http_port, 0, 1)
-
-        g.addWidget(QLabel("板端 IP:"), 0, 3)
-        self.edit_board_ip = QLineEdit("192.168.10.10")
-        self.edit_board_ip.setMinimumWidth(150)
-        g.addWidget(self.edit_board_ip, 0, 4)
         g.setColumnStretch(2, 1)
 
-        g.addWidget(QLabel("控制通道:"), 1, 0)
+        g.addWidget(QLabel("板端 IP:"), 1, 0)
+        self.edit_board_ip = QLineEdit("192.168.10.10")
+        self.edit_board_ip.setMinimumWidth(150)
+        g.addWidget(self.edit_board_ip, 1, 1)
+
+        g.addWidget(QLabel("控制通道:"), 2, 0)
         self.combo_ctl = QComboBox()
         self.combo_ctl.addItems(["UART (COM9)", "TCP :9000"])
         self.combo_ctl.setMinimumWidth(130)
-        g.addWidget(self.combo_ctl, 1, 1)
+        g.addWidget(self.combo_ctl, 2, 1)
 
-        g.addWidget(QLabel("通道端口/IP:"), 1, 3)
+        g.addWidget(QLabel("通道端口/IP:"), 3, 0)
         self.edit_ctl = QLineEdit("COM9")
         self.edit_ctl.setMinimumWidth(150)
-        g.addWidget(self.edit_ctl, 1, 4)
+        g.addWidget(self.edit_ctl, 3, 1)
         self.chk_http_verify = QCheckBox("状态页验证")
         self.chk_http_verify.setChecked(True)
-        g.addWidget(self.chk_http_verify, 1, 5)
-        g.setColumnStretch(6, 1)
-        g.setRowStretch(2, 1)
+        g.addWidget(self.chk_http_verify, 4, 0, 1, 2)
+        g.setRowStretch(5, 1)
         return w
 
     def _build_firmware_card(self) -> QWidget:
         card = QFrame()
         card.setObjectName("card")
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(20, 16, 20, 16)
-        lay.setSpacing(10)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(8)
         lay.addWidget(QLabel("固件与安全", objectName="card_title"))
 
-        g = QGridLayout()
-        g.setHorizontalSpacing(10)
-        g.setVerticalSpacing(10)
-        g.setColumnMinimumWidth(0, 96)   # 标签列统一宽度，杜绝截断
-        g.setColumnMinimumWidth(3, 124)
+        form = QFormLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
 
-        g.addWidget(QLabel("固件文件:"), 0, 0)
+        # 固件文件
+        row_file = QHBoxLayout()
+        row_file.setSpacing(8)
         self.edit_file = QLineEdit()
         self.edit_file.setPlaceholderText("选择或拖拽 .bin 文件到此处...")
-        g.addWidget(self.edit_file, 0, 1)
+        row_file.addWidget(self.edit_file, 1)
         btn = QPushButton("浏览")
         btn.setObjectName("ghost")
         btn.clicked.connect(self._browse_file)
-        g.addWidget(btn, 0, 2)
+        row_file.addWidget(btn)
+        lbl_file = QLabel("固件文件:")
+        lbl_file.setMinimumWidth(120)
+        form.addRow(lbl_file, row_file)
 
-        g.addWidget(QLabel("版本:"), 1, 0)
+        # 版本
+        lbl_ver = QLabel("版本:")
+        lbl_ver.setMinimumWidth(120)
         self.spin_version = QSpinBox()
         self.spin_version.setRange(0, 99999)
         self.spin_version.setValue(1)
         self.spin_version.setMinimumWidth(92)
-        g.addWidget(self.spin_version, 1, 1)
+        form.addRow(lbl_ver, self.spin_version)
 
-        g.addWidget(QLabel("构建号:"), 2, 0)
+        # 构建号
+        lbl_bld = QLabel("构建号:")
+        lbl_bld.setMinimumWidth(120)
         self.lbl_build = QLabel("自动")
         self.lbl_build.setObjectName("build_badge")
         self.lbl_build.setAlignment(Qt.AlignCenter)
-        g.addWidget(self.lbl_build, 2, 1)
+        form.addRow(lbl_bld, self.lbl_build)
 
-        g.addWidget(QLabel("设备 UID:"), 1, 3)
+        # 设备 UID
+        row_uid = QHBoxLayout()
+        row_uid.setSpacing(8)
         self.edit_uid = QLineEdit()
         self.edit_uid.setPlaceholderText("24位十六进制")
-        self.edit_uid.setMinimumWidth(220)
-        g.addWidget(self.edit_uid, 1, 4)
+        row_uid.addWidget(self.edit_uid, 1)
         btn_uid = QPushButton("自动获取")
         btn_uid.setObjectName("ghost")
         btn_uid.clicked.connect(self._capture_uid)
-        g.addWidget(btn_uid, 1, 5)
+        row_uid.addWidget(btn_uid)
+        lbl_uid = QLabel("设备 UID:")
+        lbl_uid.setMinimumWidth(120)
+        form.addRow(lbl_uid, row_uid)
 
-        g.addWidget(QLabel("私钥(Hex):"), 2, 3)
+        # 私钥
+        row_key = QHBoxLayout()
+        row_key.setSpacing(8)
         self.edit_key = QLineEdit()
         self.edit_key.setEchoMode(QLineEdit.Password)
         self.edit_key.setPlaceholderText("64位十六进制私钥，或环境变量 OTA_PRIVKEY")
-        g.addWidget(self.edit_key, 2, 4)
+        row_key.addWidget(self.edit_key, 1)
         self.chk_key = QCheckBox("显示")
         self.chk_key.stateChanged.connect(
             lambda s: self.edit_key.setEchoMode(
                 QLineEdit.Normal if s == Qt.Checked else QLineEdit.Password))
-        g.addWidget(self.chk_key, 2, 5)
+        row_key.addWidget(self.chk_key)
+        lbl_key_l = QLabel("私钥(Hex):")
+        lbl_key_l.setMinimumWidth(120)
+        form.addRow(lbl_key_l, row_key)
+
         self.lbl_key = QLabel()
         self.lbl_key.setWordWrap(True)
-        g.addWidget(self.lbl_key, 3, 1, 1, 5)
-        g.setColumnStretch(1, 1)
-        g.setColumnStretch(4, 1)
-        lay.addLayout(g)
+        self.lbl_key.setText("未设置（粘贴或设 OTA_PRIVKEY）")
+        form.addRow("", self.lbl_key)
+        lay.addLayout(form)
         return card
 
     def _build_dashboard(self) -> QWidget:
@@ -411,7 +457,7 @@ class MainWindow(QMainWindow):
         lbl_lib.setMinimumWidth(72)
         row.addWidget(lbl_lib)
         self.combo_lib = QComboBox()
-        self.combo_lib.setMinimumWidth(460)
+        self.combo_lib.setMinimumWidth(620)
         self.combo_lib.currentIndexChanged.connect(self._on_lib_selected)
         row.addWidget(self.combo_lib)
         btn = QPushButton("刷新")
@@ -471,7 +517,7 @@ class MainWindow(QMainWindow):
             self.lbl_key.setText("✓ 环境变量已注入")
             self.lbl_key.setStyleSheet("color:#34d399;")
         else:
-            self.lbl_key.setText("未设置（可粘贴或设 OTA_PRIVKEY）")
+            self.lbl_key.setText("未设置：粘贴或设 OTA_PRIVKEY")
             self.lbl_key.setStyleSheet("color:#fbbf24;")
         self._reload_lib()
 
