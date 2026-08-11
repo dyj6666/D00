@@ -1,56 +1,59 @@
 /* ================================================================
- * D00 OTA 升级中心 · 暗色高端主题
- * 色板：深空蓝底 / 玻璃卡片 / 青蓝渐变主色 / 状态语义色
+ * D00 OTA 升级中心 · 暗色高端主题 v3.1
+ * 深空蓝底 / 玻璃卡片 / 青蓝渐变主色 / 充足留白防截断
  * ================================================================ */
 
 QMainWindow, QWidget {
     background-color: #0b1220;
     color: #cbd5e1;
     font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
-    font-size: 13px;
+    font-size: 14px;
 }
 
 /* ---------------- 标题 ---------------- */
 QLabel#app_title {
     color: #f1f5f9;
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 800;
     letter-spacing: 1px;
 }
 QLabel#app_subtitle {
     color: #64748b;
-    font-size: 12px;
+    font-size: 13px;
+    min-width: 380px;
 }
 QLabel#device_pill {
     background-color: #0f172a;
     border: 1px solid #1e293b;
-    border-radius: 14px;
-    padding: 6px 16px;
+    border-radius: 16px;
+    padding: 8px 22px;
     color: #38bdf8;
     font-weight: 600;
+    font-size: 14px;
 }
 
 /* ---------------- 卡片 ---------------- */
 QFrame#card {
     background-color: #0f172a;
     border: 1px solid #1e293b;
-    border-radius: 12px;
+    border-radius: 14px;
 }
 QLabel#card_title {
     color: #94a3b8;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
-    letter-spacing: 2px;
+    letter-spacing: 1px;
+    min-width: 120px;
 }
 
 /* ---------------- 模式选择 ---------------- */
 QPushButton#mode_btn {
     background-color: #0f172a;
     border: 1px solid #1e293b;
-    border-radius: 10px;
-    padding: 10px 22px;
+    border-radius: 12px;
+    padding: 10px 20px;
     color: #94a3b8;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
 }
 QPushButton#mode_btn:hover {
@@ -67,27 +70,29 @@ QPushButton#mode_btn:checked {
 /* ---------------- 标签 ---------------- */
 QLabel {
     color: #cbd5e1;
+    font-size: 14px;
 }
 QLabel#stat {
     background-color: #0b1220;
     border: 1px solid #1e293b;
-    border-radius: 8px;
-    padding: 6px 14px;
+    border-radius: 10px;
+    padding: 10px 18px;
     color: #38bdf8;
     font-family: "Consolas", monospace;
-    font-size: 12px;
+    font-size: 13px;
 }
 QLabel#build_badge {
     background-color: #1e293b;
-    border-radius: 6px;
-    padding: 2px 10px;
+    border-radius: 8px;
+    padding: 6px 14px;
     color: #a78bfa;
     font-family: "Consolas", monospace;
+    font-size: 13px;
 }
 QLabel#dev_info {
     color: #34d399;
     font-family: "Consolas", monospace;
-    font-size: 12px;
+    font-size: 13px;
 }
 
 /* ---------------- 输入控件 ---------------- */
@@ -95,10 +100,11 @@ QLineEdit, QComboBox, QSpinBox {
     background-color: #0b1220;
     color: #e2e8f0;
     border: 1px solid #1e293b;
-    border-radius: 8px;
-    padding: 7px 12px;
+    border-radius: 10px;
+    padding: 8px 14px;
+    min-height: 22px;
     selection-background-color: #0ea5e9;
-    font-size: 13px;
+    font-size: 14px;
 }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover {
     border-color: #334155;
@@ -112,7 +118,7 @@ QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 24px;
+    width: 26px;
     border: none;
 }
 QComboBox QAbstractItemView {
@@ -123,7 +129,7 @@ QComboBox QAbstractItemView {
     outline: none;
 }
 QSpinBox::up-button, QSpinBox::down-button {
-    width: 18px;
+    width: 20px;
     background-color: #0b1220;
     border: none;
 }
@@ -133,9 +139,10 @@ QPushButton {
     background-color: #1e293b;
     color: #e2e8f0;
     border: 1px solid #334155;
-    border-radius: 8px;
-    padding: 8px 18px;
-    font-size: 13px;
+    border-radius: 10px;
+    padding: 9px 20px;
+    min-height: 22px;
+    font-size: 14px;
     font-weight: 600;
 }
 QPushButton:hover {
@@ -164,9 +171,9 @@ QPushButton#primary {
         stop:0 #10b981, stop:1 #0ea5e9);
     border: none;
     color: #ffffff;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 800;
-    border-radius: 10px;
+    border-radius: 12px;
 }
 QPushButton#primary:hover {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -196,27 +203,28 @@ QPushButton#batch:hover {
 QProgressBar {
     background-color: #0b1220;
     border: 1px solid #1e293b;
-    border-radius: 8px;
+    border-radius: 10px;
     text-align: center;
     color: #f1f5f9;
     font-weight: 700;
-    height: 22px;
+    font-size: 13px;
+    min-height: 24px;
 }
 QProgressBar::chunk {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #0ea5e9, stop:1 #6366f1);
-    border-radius: 7px;
+    border-radius: 9px;
 }
 
 /* ---------------- 阶段流程条 ---------------- */
 QLabel#stage_seg {
     background-color: #0b1220;
     border: 1px solid #1e293b;
-    border-radius: 8px;
-    padding: 9px 4px;
+    border-radius: 10px;
+    padding: 11px 6px;
     color: #64748b;
     font-weight: 700;
-    font-size: 12px;
+    font-size: 13px;
 }
 QLabel#stage_seg[state="done"] {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
@@ -241,21 +249,22 @@ QTextEdit {
     background-color: #0b1220;
     color: #cbd5e1;
     border: 1px solid #1e293b;
-    border-radius: 8px;
+    border-radius: 10px;
     font-family: "Consolas", "Courier New", monospace;
-    font-size: 12px;
-    padding: 10px;
+    font-size: 13px;
+    padding: 12px;
     selection-background-color: #1d4ed8;
 }
 
 /* ---------------- 复选框 ---------------- */
 QCheckBox {
     color: #94a3b8;
-    spacing: 7px;
+    spacing: 8px;
+    font-size: 13px;
 }
 QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border: 1px solid #475569;
     border-radius: 5px;
     background-color: #0b1220;
@@ -269,14 +278,14 @@ QCheckBox::indicator:checked {
 /* ---------------- 滚动条 ---------------- */
 QScrollBar:vertical {
     background: #0b1220;
-    width: 10px;
+    width: 12px;
     margin: 2px;
-    border-radius: 5px;
+    border-radius: 6px;
 }
 QScrollBar::handle:vertical {
     background: #334155;
-    border-radius: 5px;
-    min-height: 24px;
+    border-radius: 6px;
+    min-height: 28px;
 }
 QScrollBar::handle:vertical:hover {
     background: #475569;
@@ -300,5 +309,5 @@ QMessageBox {
 }
 QMessageBox QLabel {
     color: #e2e8f0;
-    font-size: 13px;
+    font-size: 14px;
 }
