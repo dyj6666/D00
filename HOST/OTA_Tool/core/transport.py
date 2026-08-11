@@ -208,23 +208,30 @@ class _PkgHandler(BaseHTTPRequestHandler):
     """单文件固件包服务：固定路径 /ota.bin，正确 Content-Length。"""
 
     pkg_path = ""
+    chunk_size = 8192   # 分块发送，匹配板端消费节奏，避免单次大写阻塞
 
     def do_GET(self):  # noqa: N802
         if self.path.split("?")[0] != "/ota.bin":
             self.send_error(404)
             return
         try:
-            with open(self.pkg_path, "rb") as f:
-                data = f.read()
+            size = os.path.getsize(self.pkg_path)
         except OSError:
             self.send_error(404)
             return
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(size))
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(data)
+        # 分块写出：整包一次 write 会被 Windows 发送缓冲 + 板端小窗口
+        # 卡死（实测 36s 停滞），分块让 TCP 背压自然节流
+        with open(self.pkg_path, "rb") as f:
+            while True:
+                blk = f.read(self.chunk_size)
+                if not blk:
+                    break
+                self.wfile.write(blk)
 
     def log_message(self, *args):  # 静默访问日志，避免刷屏
         pass

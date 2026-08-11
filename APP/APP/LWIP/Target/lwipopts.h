@@ -72,7 +72,7 @@
 /*----- Value in opt.h for TCPIP_THREAD_PRIO: 1 -----*/
 #define TCPIP_THREAD_PRIO 24
 /*----- Value in opt.h for TCPIP_MBOX_SIZE: 0 -----*/
-#define TCPIP_MBOX_SIZE 6
+#define TCPIP_MBOX_SIZE 24   /* 突发下防止窗口更新消息被丢（HTTP 拉取实测 15s 停滞根因） */
 /*----- Value in opt.h for SLIPIF_THREAD_STACKSIZE: 0 -----*/
 #define SLIPIF_THREAD_STACKSIZE 1024
 /*----- Value in opt.h for SLIPIF_THREAD_PRIO: 1 -----*/
@@ -84,7 +84,7 @@
 /*----- Value in opt.h for DEFAULT_UDP_RECVMBOX_SIZE: 0 -----*/
 #define DEFAULT_UDP_RECVMBOX_SIZE 6
 /*----- Value in opt.h for DEFAULT_TCP_RECVMBOX_SIZE: 0 -----*/
-#define DEFAULT_TCP_RECVMBOX_SIZE 6
+#define DEFAULT_TCP_RECVMBOX_SIZE 12
 /*----- Value in opt.h for DEFAULT_ACCEPTMBOX_SIZE: 0 -----*/
 #define DEFAULT_ACCEPTMBOX_SIZE 6
 /*----- Value in opt.h for RECV_BUFSIZE_DEFAULT: INT_MAX -----*/
@@ -117,7 +117,7 @@
  * 零拷贝 RX（自定义池 8×1536）+ 硬件 TX 校验和卸载；
  * TCP 窗口 8.5KB / 发送缓冲 4.3KB，MEM 堆 12KB 覆盖双连接。 */
 #define MEM_SIZE                    (12 * 1024)
-#define PBUF_POOL_SIZE              16   /* 突发吸收：OTA 流水线 4-8KB 突发 + 并发服务 */
+#define PBUF_POOL_SIZE              32   /* 突发吸收：HTTP 拉取实测停滞点=接收缓冲总容量 */
 /* TCP_MSS 必须显式定义：缺省 536 会使窗口仅 4.3KB，8KB 突发直接超窗
  * 造成客户端 sendall 与板端发送缓冲双向死锁（实测 OTA 服务卡死）。 */
 #define TCP_MSS                     1460
@@ -133,6 +133,7 @@
 #define TCP_WND_UPDATE_THRESHOLD    (TCP_WND / 2)
 #define MEMP_NUM_TCP_SEG            64
 #define MEMP_NUM_ARP_QUEUE          16
+#define MEMP_NUM_NETBUF             8    /* netconn_recv 并发 netbuf 需求 */
 #define LWIP_RAW                    1   /* ICMP ping（raw API） */
 #define LWIP_SOCKET                 0   /* 未用 POSIX socket：省 flash，服务用 netconn/raw */
 #define LWIP_DNS                    1   /* DNS 客户端（net dns resolve） */

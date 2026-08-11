@@ -340,7 +340,13 @@ class OtaEngine(QThread):
                                int(self._speed), 0)
             # 5) 验证：轮询 :8080 状态页确认重启与新版本
             if self.cfg.get("verify_http"):
-                self._verify_http_status(ip)
+                if self.cfg.get("verify_mode", "fast") == "fast":
+                    # 快速验证：优先 :9020 STATUS（APP OTA 服务在线=新固件在跑），
+                    # 失败才回退 :8080 状态页（严格路径），安全不减
+                    if not self._probe_tcp_status(ip):
+                        self._verify_http_status(ip)
+                else:
+                    self._verify_http_status(ip)
         finally:
             tcp.close()
 
@@ -496,7 +502,7 @@ class OtaEngine(QThread):
         deadline = time.time() + 30
         while time.time() < deadline and not self._stop_flag:
             try:
-                with urllib.request.urlopen(url, timeout=3) as resp:
+                with urllib.request.urlopen(url, timeout=1) as resp:
                     if resp.status == 200:
                         data = resp.read().decode("utf-8", "replace")
                         import json
@@ -515,6 +521,31 @@ class OtaEngine(QThread):
             time.sleep(1.0)
         self._log("⚠️ 状态页验证超时（下载与 BOOT 阶段已确认，不影响结论）",
                   "orange")
+
+    def _probe_tcp_status(self, ip: str = "", timeout: float = 8.0) -> bool:
+        """快速探测 :9020 STATUS：确认新固件 APP 的 OTA 服务已在线。"""
+        from .transport import TcpTransport, TransportError
+        ip = ip or self.cfg.get("tcp_ip", "")
+        if not ip:
+            return False
+        t = TcpTransport(ip, int(self.cfg.get("tcp_port", 9020)))
+        deadline = time.time() + timeout
+        while time.time() < deadline and not self._stop_flag:
+            try:
+                t.open()
+                r = t.cmd(4, b"", timeout=3)   # STATUS
+                t.close()
+                if r is not None:
+                    self._log(f"✅ 新固件在线（:9020 STATUS state={r[0]}）",
+                              "green")
+                    return True
+            except (TransportError, OSError):
+                try:
+                    t.close()
+                except Exception:
+                    pass
+            time.sleep(1.0)
+        return False
 
     # ------------------------------------------------------------------
     # 速率计量
