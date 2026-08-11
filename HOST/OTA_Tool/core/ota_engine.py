@@ -228,7 +228,7 @@ class OtaEngine(QThread):
                 boot_thread.start()
             self._listen_uart_boot(uart, 15)
             if boot_thread:
-                boot_thread.join(timeout=12)
+                boot_thread.join(timeout=22)
             # 8) 可选：HTTP 状态页验证
             if self.cfg.get("verify_http"):
                 self._verify_http_status()
@@ -471,7 +471,8 @@ class OtaEngine(QThread):
             dbg.open()
             try:
                 buf = b""
-                deadline = time.time() + 8
+                # 窗口需覆盖 BOOT 升级(~11s)+APP 启动+打印：8s 太短会错过
+                deadline = time.time() + 20
                 while time.time() < deadline:
                     n = dbg._ser.in_waiting if dbg.is_open else 0
                     if n:
