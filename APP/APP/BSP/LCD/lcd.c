@@ -88,7 +88,11 @@ void lcd_write_reg(uint16_t regno, uint16_t data)
  */
 static void lcd_opt_delay(uint32_t i)
 {
-    while (i--);
+    volatile uint32_t n = i;   /* volatile 防 GCC -Os 删除空循环：
+                                * FSMC 就绪等待/读数据建立时间被删会导致
+                                * LCD 初始化与读时序劣化（画面错乱/重叠） */
+    while (n--) {
+    }
 }
 
 /**
