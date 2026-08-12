@@ -32,6 +32,9 @@
 #include "cmd_shell.h"
 #include "shell.h"
 #include "usr_store.h"
+#include "bsp_can.h"
+#include "cmd_can.h"
+#include "ota_can_svc.h"
 
 #include <string.h>
 
@@ -39,8 +42,10 @@
  * 依赖顺序：VAR -> DataLink -> LA_Buffer -> LA_Sample -> 应用模块 -> SysMon/DataAgent */
 static module_desc_t module_table[] = {
     MODULE_INIT("Cmd",    2,  Cmd_Init),
+    MODULE_INIT("CanBsp", 3,  BSP_CAN_Init),
     MODULE_INIT("USR",    3,  UsrStore_Init),
     MODULE_INIT("Shell",  4,  Shell_Init),
+    MODULE_INIT("CmdCan", 5,  CmdCan_Register),
     MODULE_INIT("DNS",    5,  DnsSvc_Init),
     MODULE_INIT("SNTP",   6,  SntpSvc_Init),
     MODULE_INIT("OtaMgr", 7,  OtaMgr_Init),
@@ -62,6 +67,7 @@ static module_desc_t module_table[] = {
     MODULE_INIT("HttpSvc",  69,  HttpSvc_Init),
     MODULE_INIT("SysMon",   70,  SysMon_Init),
     MODULE_INIT("OtaTcp",   71,  OtaTcpSvc_Init),
+    MODULE_INIT("OtaCan",   72,  OtaCanSvc_Init),
     MODULE_INIT("DataAgent",80,  DataAgent_Init),
 };
 #define MODULE_COUNT (sizeof(module_table) / sizeof(module_table[0]))

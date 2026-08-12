@@ -40,8 +40,8 @@ $script:OtaLog    = Join-Path $AppRoot "_auto_ota.txt"
 # Version written next to the APP validity magic (0x0805FFFC).
 # Defaults live in config/version.json (single source of truth) and
 # override these fallback values; keep both consistent before release.
-$script:OtaVersion = 191
-$script:OtaBuildNo = 232
+$script:OtaVersion = 201
+$script:OtaBuildNo = 9077
 $script:VersionFile = Join-Path $RepoRoot "config\version.json"
 if (Test-Path -LiteralPath $script:VersionFile) {
     try {

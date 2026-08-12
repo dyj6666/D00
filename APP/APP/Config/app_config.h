@@ -44,9 +44,10 @@
 #define SHELL_LINE_MAX          128    /* 单行命令最大长度 */
 #define SHELL_CMD_MAX           20     /* 命令目录最大条目数 */
 
-/* CAN Shell 传输适配器：未来扩展；当前无硬件驱动，保持 0 */
+/* CAN1 总线（Shell + OTA 双通道）：BSP 驱动就绪，1Mbps；
+ * 置 0 可整体关闭 CAN Shell 传输（OTA CAN 服务随 BSP 一起失效） */
 #ifndef CMD_ENABLE_CAN
-#define CMD_ENABLE_CAN          0
+#define CMD_ENABLE_CAN          1
 #endif
 
 /* ---------------- 事件总线 ---------------- */

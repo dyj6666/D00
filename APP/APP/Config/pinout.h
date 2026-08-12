@@ -67,4 +67,10 @@
 #define HOSTLINK_UART_IRQn  USART1_IRQn
 #define HOSTLINK_BAUDRATE   921600
 
+/* CAN1（探索者V3 板载 TJA1050；P5 跳线帽必须拨到 CAN 侧，勿与 USB OTG 共用） */
+#define CAN1_RX_GPIO_Port   GPIOA
+#define CAN1_RX_Pin         GPIO_PIN_11
+#define CAN1_TX_GPIO_Port   GPIOA
+#define CAN1_TX_Pin         GPIO_PIN_12
+
 #endif

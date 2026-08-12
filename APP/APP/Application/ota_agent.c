@@ -205,17 +205,30 @@ static bool ota_flash_erase(uint32_t addr, uint32_t len)
 }
 
 /**
+ * @brief  单字 Flash 编程（每字短暂关中断）
+ * @note   CAN 1Mbps 下整段关中断会撑爆 3 深 FIFO（OTA 数据帧连续到达），
+ *         改为逐字关中断：每字编程 ~100µs，帧间隔 130µs，FIFO 可被 ISR
+ *         在两字之间排空；写者唯一性由 OTA 互斥量保证，原子性不受影响。
+ */
+static bool flash_program_word(uint32_t addr, uint32_t val)
+{
+    __disable_irq();   /* 仅保护单字编程：防止与其它 Flash 访问交错 */
+    HAL_StatusTypeDef hs = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, val);
+    __enable_irq();
+    return (hs == HAL_OK);
+}
+
+/**
  * @brief  向 Flash 写入任意长度数据（自动处理字对齐）
  * @param  addr  目标地址（任意字节对齐）
  * @param  data  源数据指针
  * @param  len   字节数
  * @return true=全部写入成功
- * @note   整段编程期间关中断，保证原子性
+ * @note   逐字关中断（见 flash_program_word）；互斥量保证唯一写者
  */
 static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
 {
     if (len == 0) return true;
-    __disable_irq();   /* Flash 编程序列必须原子执行，防中断打断 */
     HAL_FLASH_Unlock();
 
     /* 前导非对齐字节 */
@@ -223,9 +236,8 @@ static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
         uint32_t wa = addr & ~0x03u;
         uint32_t val = *(volatile uint32_t *)wa;
         ((uint8_t *)&val)[addr & 0x03] = *data;
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, wa, val) != HAL_OK) {
+        if (!flash_program_word(wa, val)) {
             HAL_FLASH_Lock();
-            __enable_irq();
             return false;
         }
         addr++; data++; len--;
@@ -233,10 +245,8 @@ static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
     while (len >= 4) {
         uint32_t word;
         memcpy(&word, data, 4);
-        HAL_StatusTypeDef hs = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, word);
-        if (hs != HAL_OK) {
+        if (!flash_program_word(addr, word)) {
             HAL_FLASH_Lock();
-            __enable_irq();
             return false;
         }
         addr += 4; data += 4; len -= 4;
@@ -246,15 +256,13 @@ static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
         uint32_t wa = addr & ~0x03u;
         uint32_t val = *(volatile uint32_t *)wa;
         ((uint8_t *)&val)[addr & 0x03] = *data;
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, wa, val) != HAL_OK) {
+        if (!flash_program_word(wa, val)) {
             HAL_FLASH_Lock();
-            __enable_irq();
             return false;
         }
         addr++; data++; len--;
     }
     HAL_FLASH_Lock();
-    __enable_irq();
     return true;
 }
 

@@ -56,7 +56,7 @@ _PCAN_DLL_PATHS = (
     r"C:\Windows\SysWOW64\PCANBasic.dll",
 )
 _PCAN_USBBUS1 = 0x0051          # 第一个 PCAN-USB 通道
-_PCAN_BAUD_500K = 0x001C        # 500 kbit/s（与固件 bxCAN 默认一致）
+_PCAN_BAUD_1M = 0x0014          # 1 Mbit/s（与固件 bxCAN 极限速率一致）
 _PCAN_TYPE_ISA = 0x0001         # USB 设备统一用此类型（IOPort/Interrupt=0）
 _PCAN_MESSAGE_STANDARD = 0x00   # 标准帧
 _PCAN_ERROR_OK = 0x0000
@@ -106,7 +106,7 @@ class _PcanApi:
         self._dll.CAN_GetErrorText.restype = ctypes.c_uint32
 
     def initialize(self) -> int:
-        return self._dll.CAN_Initialize(_PCAN_USBBUS1, _PCAN_BAUD_500K,
+        return self._dll.CAN_Initialize(_PCAN_USBBUS1, _PCAN_BAUD_1M,
                                         _PCAN_TYPE_ISA, 0, 0)
 
     def write(self, msg: _PcanMsg) -> int:
@@ -120,6 +120,16 @@ class _PcanApi:
         if rc != _PCAN_ERROR_OK:
             return None
         return bytes(msg.data[:msg.len])
+
+    def read_raw(self):
+        """读一帧并返回 (id, data)；无帧返回 None（供 OTA 等按 ID 过滤场景）"""
+        msg = _PcanMsg()
+        stamp = ctypes.c_uint64(0)
+        rc = self._dll.CAN_Read(_PCAN_USBBUS1, ctypes.byref(msg),
+                                ctypes.byref(stamp))
+        if rc != _PCAN_ERROR_OK:
+            return None
+        return msg.id, bytes(msg.data[:msg.len])
 
     def uninitialize(self) -> int:
         return self._dll.CAN_Uninitialize(_PCAN_USBBUS1)
@@ -228,7 +238,7 @@ class CanTransport(Transport):
     name = "CAN"
     mask = 4
 
-    def __init__(self, channel: str = "PCAN_USBBUS1", bitrate: int = 500000):
+    def __init__(self, channel: str = "PCAN_USBBUS1", bitrate: int = 1000000):
         self.channel = channel
         self.bitrate = bitrate
         self._bus = None

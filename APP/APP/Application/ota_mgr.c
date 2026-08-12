@@ -2,7 +2,8 @@
  * ota_mgr —— 多协议 OTA 传输注册表实现
  *
  * 架构位置：APP 应用层；被模块初始化 OtaMgr_Init 调用，命令层查询
- * 核心流程：OtaMgr_Init 登记内置传输 -> ota status 逐条展示
+ * 核心流程：OtaMgr_Init 登记内置传输 -> ota status 逐条展示；
+ * CAN 传输由 ota_can_svc 在运行时注册（不再设预留位）
  * ================================================================ */
 #include "ota_transport.h"
 #include "logger.h"
@@ -51,7 +52,7 @@ const ota_transport_t *OtaMgr_Get(uint8_t i)
     return &s_table[i];
 }
 
-/** @brief 登记内置四种传输（CAN 为预留位），供模块初始化调用 */
+/** @brief 登记内置三种传输（CAN 由 ota_can_svc 运行时注册） */
 void OtaMgr_Init(void)
 {
     s_count = 0;                                   /* 幂等：可重复初始化 */
@@ -66,11 +67,7 @@ void OtaMgr_Init(void)
     static const ota_transport_t http = {
         OTA_TRANSPORT_ETH_HTTP, "ETH-HTTP", "HTTP client pull", 1,
     };
-    static const ota_transport_t can = {
-        OTA_TRANSPORT_CAN, "CAN", "CAN bus (reserved)", 0,
-    };
     (void)OtaMgr_Register(&uart);
     (void)OtaMgr_Register(&tcp);
     (void)OtaMgr_Register(&http);
-    (void)OtaMgr_Register(&can);
 }

@@ -40,6 +40,8 @@
 #include "bsp_mpu6050.h"
 #include "bsp_i2c.h"
 #include "i2c.h"
+#include "bsp_can.h"
+#include "can_proto.h"
 #include "lwip/ip4_addr.h"
 #include "task.h"
 #include <ctype.h>
@@ -238,6 +240,7 @@ static void cmd_lcd(const char *args);
 static void cmd_touch(const char *args);
 static void cmd_beep(const char *args);
 static void cmd_mpu(const char *args);
+static void cmd_can(const char *args);
 static void cmd_ver(const char *args);
 static void cmd_echo(const char *args);
 static void cmd_stream(const char *args);
@@ -593,6 +596,7 @@ static const cmd_entry_t cmd_table[] = {
     {"usr",          "User storage <info|scan|get|set|erase|reset>", CMD_TRANSPORT_ALL, cmd_usr},
     {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
     {"mpu",          "IMU MPU6050 <info|test|cal>", CMD_TRANSPORT_ALL, cmd_mpu},
+    {"can",          "CAN1 <status|reset|loop <on|off|silent>|test <n>|send <id> <hex>>", CMD_TRANSPORT_ALL, cmd_can},
 #if CRASH_INJECT_ENABLE
     {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", CMD_TRANSPORT_UART, cmd_crash},
 #endif
@@ -1103,6 +1107,111 @@ static void cmd_mpu(const char *args)
         return;
     }
     LOG_Printf("Usage: mpu <info|test|cal>\r\n");
+}
+/* ================== CAN 命令 ==================
+ * 用法：can <status|reset|loop <on|off|silent>|test <n>|send <id> <hex>> */
+static void cmd_can(const char *args)
+{
+    if (args == NULL || strcmp(args, "status") == 0 || strcmp(args, "stats") == 0) {
+        bsp_can_stats_t st;
+        BSP_CAN_GetStats(&st);
+        uint8_t tec = 0, rec = 0;
+        BSP_CAN_GetErrorCounters(&tec, &rec);
+        const char *mode = "normal";
+        if (BSP_CAN_GetMode() == BSP_CAN_MODE_LOOPBACK) {
+            mode = "loopback";
+        } else if (BSP_CAN_GetMode() == BSP_CAN_MODE_SILENT_LOOPBACK) {
+            mode = "silent";
+        }
+        LOG_Printf("CAN1: %s @1Mbps mode=%s\r\n",
+                   BSP_CAN_IsActive() ? "active" : "off", mode);
+        LOG_Printf("  TX ok=%lu err=%lu | RX ok=%lu other=%lu drop=%lu ovr=%lu\r\n",
+                   (unsigned long)st.tx_ok, (unsigned long)st.tx_err,
+                   (unsigned long)st.rx_ok, (unsigned long)st.rx_other,
+                   (unsigned long)st.rx_drop, (unsigned long)st.rx_overrun);
+        LOG_Printf("  ERR ewg=%lu epv=%lu boff=%lu last=0x%08lX TEC=%u REC=%u\r\n",
+                   (unsigned long)st.err_warning, (unsigned long)st.err_passive,
+                   (unsigned long)st.err_busoff, (unsigned long)st.last_error,
+                   (unsigned)tec, (unsigned)rec);
+        LOG_Printf("  BUS load ~%lu.%lu%%\r\n",
+                   (unsigned long)(st.bus_load_permille / 10u),
+                   (unsigned long)(st.bus_load_permille % 10u));
+        return;
+    }
+    if (strcmp(args, "reset") == 0) {
+        BSP_CAN_ResetStats();
+        LOG_Printf("CAN: stats cleared\r\n");
+        return;
+    }
+    if (strncmp(args, "loop", 4) == 0) {
+        if (strstr(args, "silent") != NULL) {
+            BSP_CAN_SetMode(BSP_CAN_MODE_SILENT_LOOPBACK);
+        } else if (strstr(args, "off") != NULL) {
+            BSP_CAN_SetMode(BSP_CAN_MODE_NORMAL);
+        } else {
+            BSP_CAN_SetMode(BSP_CAN_MODE_LOOPBACK);
+        }
+        LOG_Printf("CAN: mode switched (shell link off in loopback, use UART)\r\n");
+        return;
+    }
+    if (strncmp(args, "test", 4) == 0) {
+        int n = atoi(args + 4);
+        if (n < 1 || n > 10000) {
+            n = 100;
+        }
+        LOG_Printf("CAN: burst test %d frames (ID 0x%03X)\r\n", n, CAN_TEST_ID);
+        for (int i = 0; i < n; i++) {
+            uint8_t f[8];
+            f[0] = (uint8_t)i;
+            f[1] = (uint8_t)(i >> 8);
+            f[2] = 0xAA;
+            f[3] = 0x55;
+            f[4] = (uint8_t)~i;
+            f[5] = 0x5A;
+            f[6] = 0xA5;
+            f[7] = 0x00;
+            if (BSP_CAN_Send(CAN_TEST_ID, f, 8) != 0) {
+                LOG_Printf("CAN: TX queue full at frame %d\r\n", i);
+                break;
+            }
+        }
+        LOG_Printf("CAN: burst sent\r\n");
+        return;
+    }
+    if (strncmp(args, "send", 4) == 0) {
+        unsigned int id = 0;
+        uint8_t buf[8];
+        int n = 0;
+        const char *p = args + 4;
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (sscanf(p, "%x", &id) != 1 || id > 0x7FFu) {
+            LOG_Printf("Usage: can send <id(hex)> <hex bytes...>\r\n");
+            return;
+        }
+        while (*p != '\0' && !isspace((unsigned char)*p)) {
+            p++;
+        }
+        while (n < 8) {
+            unsigned int b = 0;
+            while (*p == ' ' || *p == '\t') {
+                p++;
+            }
+            if (sscanf(p, "%2x", &b) != 1) {
+                break;
+            }
+            buf[n++] = (uint8_t)b;
+            p += 2;
+        }
+        if (BSP_CAN_Send(id, buf, (uint8_t)n) == 0) {
+            LOG_Printf("CAN: sent ID=0x%03X DLC=%d\r\n", id, n);
+        } else {
+            LOG_Printf("CAN: TX queue full\r\n");
+        }
+        return;
+    }
+    LOG_Printf("Usage: can <status|reset|loop <on|off|silent>|test <n>|send <id> <hex>>\r\n");
 }
 /* ================== 蜂鸣器命令 ==================
  * 用法：beep [<ms>|test|off] */

@@ -37,6 +37,7 @@
 #include "la_sample.h"
 #include "signal_gen.h"
 #include "err_mgr.h"
+#include "bsp_can.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -390,6 +391,25 @@ void DMA2_Stream7_IRQHandler(void)
 void DMA2_Stream6_IRQHandler(void)
 {
   SG_Uart_DMA_IRQHandler();
+}
+
+/**
+  * @brief CAN1 三个中断统一交给 BSP（FIFO0/FIFO1/SCE，优先级 6）。
+  *        放在 USER CODE 区，CubeMX 重新生成时不会被清除。
+  */
+void CAN1_RX0_IRQHandler(void)
+{
+  BSP_CAN_IRQHandler();
+}
+
+void CAN1_RX1_IRQHandler(void)
+{
+  BSP_CAN_IRQHandler();
+}
+
+void CAN1_SCE_IRQHandler(void)
+{
+  BSP_CAN_IRQHandler();
 }
 
 /* USER CODE END 1 */

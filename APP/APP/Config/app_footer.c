@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 #define APP_VALID_MAGIC     0x4F54412Eu   /* "OTA."：BOOT 判定 RUN 有效 */
-#define APP_FOOTER_VERSION  198u          /* 与 config/version.json ota_version 同步 */
+#define APP_FOOTER_VERSION  201u          /* 与 config/version.json ota_version 同步 */
 
 __attribute__((section(".ota_footer"), used))
 const uint32_t ota_footer[2] = { APP_VALID_MAGIC, APP_FOOTER_VERSION };

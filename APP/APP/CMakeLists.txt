@@ -76,6 +76,7 @@ if(CMAKE_CROSSCOMPILING)
     Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc.c
     Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_rtc_ex.c
     Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c
+    Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_can.c
     Core/Src/system_stm32f4xx.c
     Middlewares/Third_Party/FreeRTOS/Source/croutine.c
     Middlewares/Third_Party/FreeRTOS/Source/event_groups.c
@@ -87,6 +88,7 @@ if(CMAKE_CROSSCOMPILING)
     Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.c
     Middlewares/Third_Party/FreeRTOS/Source/portable/MemMang/heap_4.c
     Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/port.c
+    Config/app_footer.c
     SystemServices/logger.c
     SystemServices/shell.c
     SystemServices/cmd_shell.c
@@ -116,6 +118,7 @@ if(CMAKE_CROSSCOMPILING)
     Application/key_app.c
     Application/led_app.c
     Application/ota_agent.c
+    Application/ota_can_svc.c
     Application/data_agent.c
     Application/lcd_app.c
     Application/buzzer_app.c
@@ -131,6 +134,7 @@ if(CMAKE_CROSSCOMPILING)
     Application/ota_http_svc.c
     BSP/bsp_system.c
     BSP/bsp_uart.c
+    BSP/bsp_can.c
     BSP/bsp_i2c.c
     BSP/bsp_eeprom.c
     BSP/bsp_watchdog.c

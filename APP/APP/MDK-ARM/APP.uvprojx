@@ -82,7 +82,7 @@
           <AfterMake>
             <RunUserProg1>1</RunUserProg1>
             <RunUserProg2>1</RunUserProg2>
-            <UserProg1Name>fromelf --bin --output=.\Output\APP.bin .\APP\APP.axf</UserProg1Name>
+            <UserProg1Name>cmd /c post_build_app.bat</UserProg1Name>
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
@@ -1517,6 +1517,11 @@
               <FileType>1</FileType>
               <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_uart.c</FilePath>
             </File>
+            <File>
+              <FileName>stm32f4xx_hal_can.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_can.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -2362,6 +2367,11 @@
               <FilePath>..\Application\ota_agent.c</FilePath>
             </File>
             <File>
+              <FileName>ota_can_svc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Application\ota_can_svc.c</FilePath>
+            </File>
+            <File>
               <FileName>data_agent.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Application\data_agent.c</FilePath>
@@ -2440,6 +2450,16 @@
               <FileName>bsp_uart.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\bsp_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_can.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_can.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_can.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\bsp_can.h</FilePath>
             </File>
             <File>
               <FileName>bsp_i2c.c</FileName>
