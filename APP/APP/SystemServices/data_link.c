@@ -64,7 +64,7 @@ void DataLink_Init(void)
     };
     osThreadAttr_t cmd_attr = {
         .name = "DL_CMD",
-        .stack_size = 2048,          /* 命令解析含协议栈调用 */
+        .stack_size = 1024,          /* 命令解析含协议栈调用；峰值 ~396B（HW 413 词） */
         .priority = osPriorityLow,
     };
 

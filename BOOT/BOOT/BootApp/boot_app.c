@@ -367,7 +367,9 @@ static bool boot_apply_download(bool emit_status)
 
     uint32_t sp = *(volatile uint32_t *)APP_BASE_ADDR;
     uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
-    if (sp < 0x20000000 || sp > 0x20020000 ||
+    /* 栈顶边界：0x20020000 是 RAM 末端+1（越界），必须拒绝——
+     * BOOT 跳转尾声会从新栈顶弹栈，越界 SP 会触发精确总线错误。 */
+    if (sp < 0x20000000 || sp >= 0x20020000 ||
         pc < APP_BASE_ADDR || pc > APP_BASE_ADDR + APP_SIZE) {
         printf("APP vector invalid! SP=0x%08X PC=0x%08X\r\n", sp, pc);
         return false;

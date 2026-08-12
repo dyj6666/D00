@@ -4,17 +4,26 @@
  * 架构位置：APP 服务层；DMA 采样落地与 HOSTLINK 导出
  * ================================================================ */
 #include "la_buffer.h"
+#include "main.h"
+
+#define LA_SRAM_TEST_TIMEOUT_MS  500u  /* 512KB 全量自检上限：正常 <50ms，
+                                        * 外部 SRAM/FSMC 偶发慢响应时防止
+                                        * 启动无限爬行（实测卡死复现 3 次） */
 
 static LA_SamplePoint *la_buffer = (LA_SamplePoint *)LA_SRAM_START_ADDR;
 static volatile uint32_t write_idx = 0;
 static volatile uint32_t sample_count = 0;
 static volatile uint8_t  la_sram_ok = 0;
 
-/* 外部 SRAM 写读自检：全量填充 + 回读比对，检测芯片/FSMC 故障 */
+/* 外部 SRAM 写读自检：全量填充 + 回读比对，检测芯片/FSMC 故障。
+ * 带 HAL tick 超时：读回阶段若 SRAM 响应异常缓慢（CPU 仍能执行循环指令，
+ * 但单次访问被拉长），超过时限立即判失败返回，保证启动流程不被拖死；
+ * 若访问彻底总线停摆（CPU 卡在 ldrh），由 IWDG 兜底复位。 */
 static uint8_t la_sram_self_test(void)
 {
     volatile uint16_t *mem = (volatile uint16_t *)LA_SRAM_START_ADDR;
     uint32_t words = LA_BUFFER_SIZE / sizeof(uint16_t);
+    uint32_t t0 = HAL_GetTick();
 
     for (uint32_t i = 0; i < words; i++) {
         mem[i] = (uint16_t)(0xA500 + (i & 0xFF));
@@ -22,6 +31,9 @@ static uint8_t la_sram_self_test(void)
     for (uint32_t i = 0; i < words; i++) {
         if (mem[i] != (uint16_t)(0xA500 + (i & 0xFF))) {
             return 0;
+        }
+        if ((HAL_GetTick() - t0) > LA_SRAM_TEST_TIMEOUT_MS) {
+            return 0;   /* 超时：判定 SRAM 不可用，不阻塞启动 */
         }
     }
     return 1;

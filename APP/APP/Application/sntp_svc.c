@@ -191,7 +191,10 @@ uint8_t SntpSvc_Auto(void)
     return s_auto;
 }
 
-/* 自动同步任务：上电 5s 后首同步，之后每小时一次 */
+/* 自动同步任务：上电 5s 后首同步，之后每小时一次。
+ * 注意：不要改成"失败后短周期重试"——实测 netconn 反复调用会让 lwIP
+ * 在第二次同步时挂死（看门狗复位→BOOT 回滚）。上电实时校准改由
+ * SntpSvc_Sync 单次调用 + ETH 就绪后再触发的方式保证。 */
 static void sntp_task(void *arg)
 {
     (void)arg;
@@ -220,7 +223,7 @@ void SntpSvc_Init(void)
     }
     osThreadAttr_t attr = {
         .name = "SntpSvc",
-        .stack_size = 1024,
+        .stack_size = 1024,   /* 峰值 ~752B（netconn 路径），768B 余量仅 16B 太险 */
         .priority = osPriorityBelowNormal,
     };
     osThreadNew(sntp_task, NULL, &attr);

@@ -77,7 +77,7 @@ void DataAgent_Init(void)
     /* 独立任务负责周期上报，避免占用定时器服务任务栈 */
     osThreadAttr_t attr = {
         .name = "DataAgent",
-        .stack_size = 1536,
+        .stack_size = 1024,   /* 峰值 ~664B（HW 218 词） */
         .priority = osPriorityNormal
     };
     osThreadNew(DataAgentTaskFunc, NULL, &attr);

@@ -16,7 +16,7 @@
  * ================================================================ */
 
 #define UI_QUEUE_LEN    8
-#define UI_TASK_STACK   2560   /* 字节（CMSIS-RTOS2）；含 3D 渲染/格式化栈帧余量 */
+#define UI_TASK_STACK   1536   /* 字节（CMSIS-RTOS2）；峰值 ~724B（HW 459 词） */
 #define UI_TEXT_MAX     32
 
 typedef enum {

@@ -35,7 +35,7 @@
  *   - SYSTEM 1s 刷新只重画任务列表（行内先清后画），不整页重绘 → 无频闪
  * ================================================================ */
 
-#define LCD_MAX_TASKS    20
+#define LCD_MAX_TASKS    24   /* 须 >= 实际任务数（当前 21），保证 IDLE 不被截断 */
 #define LCD_VAL_RIGHT    150   /* 数值右对齐边线（FONT16，8px/字符） */
 
 static uint32_t lcd_run_prev = 0, lcd_idle_prev = 0;
@@ -78,12 +78,19 @@ static void lcd_update_cpu(void)
 
     uint32_t d_run = total - lcd_run_prev;
     uint32_t d_idle = idle_run - lcd_idle_prev;
-    if (dt <= 5000u && lcd_run_prev != 0 && d_run > 0 && d_idle <= d_run) {
+    /* IDLE 未找到（数组截断/状态异常）则保持上次读数，不污染显示 */
+    if (dt <= 5000u && lcd_run_prev != 0 && d_run > 0 &&
+        d_idle <= d_run && idle_run != 0) {
         lcd_cpu_pct = (uint8_t)(100u - (uint32_t)((uint64_t)d_idle * 100u / d_run));
     }
     lcd_run_prev = total;
     lcd_idle_prev = idle_run;
     lcd_cpu_last_ms = now_ms;
+}
+
+uint8_t LcdApp_GetCpuPct(void)
+{
+    return lcd_cpu_pct;
 }
 
 /* ---------- 页眉 / 页脚 / 内容区 ---------- */

@@ -19,7 +19,7 @@
  * 触摸服务实现
  * ================================================================ */
 
-#define TSV_TASK_STACK   768
+#define TSV_TASK_STACK   1024   /* GCC 浮点标定运算/打印栈深更大，512B 偏薄 */
 #define TSV_IDLE_MS      8    /* 空闲探测周期（XY 有效性判定，无需 PEN） */
 #define TSV_SAMPLE_MS    2    /* 按下采样节拍（500Hz，兼顾系统负载） */
 #define TSV_PROBE_N      2    /* 按下消抖：连续 N 次有效判定为按下 */

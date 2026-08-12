@@ -14,7 +14,9 @@ ENTRY(Reset_Handler)
 _Min_Heap_Size = 0x400;
 _Min_Stack_Size = 0x800;
 
-_estack = ORIGIN(RAM) + LENGTH(RAM);
+/* 主栈顶必须落在 RAM 有效范围内（0x20020000 越界），
+ * 留 1KB 安全余量，与 Keil 工程行为对齐。 */
+_estack = ORIGIN(RAM) + LENGTH(RAM) - 0x400;
 
 MEMORY
 {

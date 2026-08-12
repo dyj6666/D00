@@ -265,7 +265,10 @@ void OtaTcpSvc_Init(void)
 {
     osThreadAttr_t attr = {
         .name = "OtaTcpSvc",
-        .stack_size = 2048,
+        .stack_size = 2048,   /* GCC 下 Ota_Begin(擦除+会话保存)+netconn 路径
+                               * 栈深超过 Keil 实测 504B；1024B 导致 BEGIN 处理
+                               * 后连接异常断开（实测断点确认进入 Ota_Begin 后
+                               * 任务栈不足） */
         /* 与 TCP 控制台/HTTP 服务同优先级，避免低优先级导致
          * 每请求唤醒延迟 ~40ms（实测 :9000 Normal=1.6ms vs :9020 Below=43ms） */
         .priority = osPriorityNormal,

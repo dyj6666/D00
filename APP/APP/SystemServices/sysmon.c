@@ -238,6 +238,9 @@ static void handle_sysmon_msg(const message_t *msg)
     for (size_t i = 0; i < MONITOR_ITEM_COUNT; i++) {
         if (monitor_items[i].print) {
             monitor_items[i].print();
+            /* 节间退让：UART@115200 排水 ~11.5KB/s，不加延时整段输出会
+             * 撑满 2KB LOG 流缓冲导致中段被截断（sysmon 曾只显示首行） */
+            vTaskDelay(pdMS_TO_TICKS(25));
         }
     }
     LOG_Printf("===========================\r\n");

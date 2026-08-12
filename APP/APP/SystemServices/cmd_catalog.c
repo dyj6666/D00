@@ -18,6 +18,7 @@
 #include "err_mgr.h"
 #include "bsp_lcd.h"
 #include "lcd_ui.h"
+#include "lcd_app.h"
 #include "lcd_test.h"
 #include "touch_svc.h"
 #include "bsp_touch.h"
@@ -1357,6 +1358,9 @@ static void cmd_lcd(const char *args)
     if (args == NULL || strcmp(args, "info") == 0) {
         LOG_Printf("LCD: id=0x%04X, %ux%u\r\n",
                    BSP_LCD_GetId(), BSP_LCD_GetWidth(), BSP_LCD_GetHeight());
+        LOG_Printf("LCD: page=%u cpu=%u%%\r\n",
+                   (unsigned)LcdUI_GetPage(),
+                   (unsigned)LcdApp_GetCpuPct());
         return;
     }
     if (strncmp(args, "page", 4) == 0) {

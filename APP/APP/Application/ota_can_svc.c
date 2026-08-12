@@ -14,17 +14,15 @@
 #include "ota_transport.h"
 #include "bsp_can.h"
 #include "can_proto.h"
+#include "event_bus.h"
 #include "logger.h"
 #include "app_config.h"
 
 #include "stm32f4xx_hal.h"
-#include "FreeRTOS.h"
-#include "task.h"
 
 #include <string.h>
 
 #define OTA_CAN_IDLE_TIMEOUT_MS  5000u   /* 无数据超时自动中止 */
-#define OTA_CAN_SUPERVISE_MS     1000u   /* 监管任务巡检周期 */
 
 /* 会话状态 */
 static uint8_t  s_active;                    /* BEGIN 成功后置位 */
@@ -225,23 +223,21 @@ static void ota_can_rx(uint32_t id, const uint8_t *data, uint8_t dlc, void *ctx)
     }
 }
 
-/** @brief 监管任务：OTA 会话无数据超时自动 ABORT */
-static void ota_can_supervise(void *arg)
+/** @brief 监管（事件总线 1s 心跳）：OTA 会话无数据超时自动 ABORT。
+ *  不单独建任务——并入 eventBusTask 的 MSG_TICK_1S，省一个任务与 512B 栈。 */
+static void ota_can_supervise_tick(const message_t *msg)
 {
-    (void)arg;
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(OTA_CAN_SUPERVISE_MS));
-        if (s_active && (HAL_GetTick() - s_last_rx_tick) > OTA_CAN_IDLE_TIMEOUT_MS) {
-            LOG_Printf("[OTA-CAN] idle timeout, aborting session\r\n");
-            (void)Ota_Reset();
-            s_active = 0;
-            s_stream_len = 0;
-            s_stream_seq = 0;
-        }
+    (void)msg;
+    if (s_active && (HAL_GetTick() - s_last_rx_tick) > OTA_CAN_IDLE_TIMEOUT_MS) {
+        LOG_Printf("[OTA-CAN] idle timeout, aborting session\r\n");
+        (void)Ota_Reset();
+        s_active = 0;
+        s_stream_len = 0;
+        s_stream_seq = 0;
     }
 }
 
-/** @brief 注册 CAN 传输（available=1）并挂接 RX/监管任务 */
+/** @brief 注册 CAN 传输（available=1）并挂接 RX 回调与 1s 监管 */
 void OtaCanSvc_Init(void)
 {
     static const ota_transport_t can = {
@@ -251,7 +247,7 @@ void OtaCanSvc_Init(void)
         return;                                /* 已注册（幂等） */
     }
     if (BSP_CAN_RegisterRxCb(ota_can_rx, NULL) == 0) {
-        xTaskCreate(ota_can_supervise, "otaCan", 128, NULL, 3, NULL);
+        EventBus_Subscribe(MSG_TICK_1S, ota_can_supervise_tick);
         LOG_Printf("[OTA] CAN transport ready (ctrl 0x%03X data 0x%03X)\r\n",
                    (unsigned)CAN_OTA_CTRL_ID, (unsigned)CAN_OTA_DATA_ID);
     }

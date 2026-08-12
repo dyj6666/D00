@@ -132,9 +132,20 @@ static bool ota_session_latest(ota_session_t *out)
 /** @brief 失效全部会话槽：魔数写 0（1→0 无需擦除），约几十毫秒 */
 static void ota_session_clear(void)
 {
-    uint8_t zero[4] = {0, 0, 0, 0};
+    uint32_t zero[8] = {0, 0, 0, 0, 0, 0, 0, 0};   /* 32B = 槽间距 */
     for (uint32_t i = 0; i < OTA_SESSION_SLOTS; i++) {
-        (void)ota_flash_write(OTA_SESSION_BASE + i * 32, zero, sizeof(zero));
+        /* 已擦除（全 0xFF）的槽无需写：Flash 写 ~50µs/字，正常会话只写少量槽，
+         * 跳过可把整区清除从 ~300ms 降到微秒级（Ota_Reset 可安全在事件总线执行） */
+        const uint32_t *p =
+            (const uint32_t *)(OTA_SESSION_BASE + i * 32u);
+        if (p[0] == 0xFFFFFFFFu && p[1] == 0xFFFFFFFFu &&
+            p[2] == 0xFFFFFFFFu && p[3] == 0xFFFFFFFFu &&
+            p[4] == 0xFFFFFFFFu && p[5] == 0xFFFFFFFFu &&
+            p[6] == 0xFFFFFFFFu && p[7] == 0xFFFFFFFFu) {
+            continue;
+        }
+        (void)ota_flash_write(OTA_SESSION_BASE + i * 32u,
+                              (const uint8_t *)zero, sizeof(zero));
     }
 }
 

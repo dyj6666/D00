@@ -16,7 +16,11 @@ MEMORY
   CCMRAM (xrw)  : ORIGIN = 0x10000000, LENGTH = 0x00010000
 }
 
-_estack = ORIGIN(RAM) + LENGTH(RAM);
+/* 主栈顶必须落在 RAM 有效范围内：
+ * 0x20020000 是 128KB SRAM 的末端+1（越界），BOOT 跳转尾声会从
+ * 新栈顶弹栈，越界立即触发精确总线错误（HardFault 复位循环）。
+ * 留 1KB 安全余量，与 Keil 工程（__initial_sp 位于 RAM 内）行为对齐。 */
+_estack = ORIGIN(RAM) + LENGTH(RAM) - 0x400;
 
 SECTIONS
 {
@@ -38,6 +42,19 @@ SECTIONS
     *(.rodata*)
     . = ALIGN(4);
     _etext = .;
+  } > FLASH
+
+  /* libc 构造/析构桩：必须 KEEP 完整收集 crti.o（入口）+ crtn.o（尾声），
+   * 否则 --gc-sections 会丢弃 crtn 的 .init/.fini 尾声，_init 执行后
+   * 落穿到后续数据区触发 UNDEFINSTR（实测 HardFault）。 */
+  .init :
+  {
+    KEEP (*(SORT_NONE(.init)))
+  } > FLASH
+
+  .fini :
+  {
+    KEEP (*(SORT_NONE(.fini)))
   } > FLASH
 
   .ARM.extab :

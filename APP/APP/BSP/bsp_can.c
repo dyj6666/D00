@@ -253,7 +253,7 @@ void BSP_CAN_Init(void)
     /* RX 优先级高于 TX：突发收发时 RX 任务先排空队列，防 ISR 丢帧；
      * TX 以总线速率自然节流，低优先级不影响吞吐。 */
     xTaskCreate(can_rx_task, "canRx", 256, NULL, 9, &s_rx_task);
-    xTaskCreate(can_tx_task, "canTx", 256, NULL, 8, &s_tx_task);
+    xTaskCreate(can_tx_task, "canTx", 128, NULL, 8, &s_tx_task); /* 峰值 47 词 */
 }
 
 void BSP_CAN_SetMode(bsp_can_mode_t mode)

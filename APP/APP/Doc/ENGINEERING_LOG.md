@@ -2505,3 +2505,153 @@ auto-stop）全部按设计工作。
     与带回环的廉价适配器不兼容时，改用**生产者主动 ACK** 的推模型；
     ④逐帧节流（0.15ms）+ 单块在飞（35 帧）+ ACK 确认 = 通用可靠的
     CAN 流控组合，可移植到其它 CAN 设备。
+
+### 10.23 GCC 交叉编译固件上电后整体失活（已定位，见 10.24）——重点问题硬性复盘
+- **现象**：改用 GCC（cmake+ninja，-Os）构建的 APP 通过 TCP OTA 推送后，BOOT
+  正常应用（参数区 last_build 更新、PENDING 写入），APP 能完整启动并打印
+  "Boot complete / 各服务就绪 / ETH link UP / [SNTP] sync FAIL"（约 +5s），
+  随后整系统失活——**无任何崩溃记录**（err_mgr 无新条目，非 fault 是 hang），
+  BOOT 因 PENDING 未确认、启动计数超限回滚到 BACKUP（旧 Keil 固件）。
+  用脚注版本 202 做标记验证：推送 v202 后 `ver` 仍为 v201 → GCC 固件确实未存活。
+- **影响面**：GCC 工具链无法产出可运行固件 → 快速开发闭环被阻断
+  （Keil 3.5min/次 vs GCC 30s/次）；用户明确要求弃用 Keil 优先 GCC。
+- **排查思路**：先分清"我的优化改动导致"还是"GCC 工具链通病"，用
+  `git stash` 构建**纯净提交源码**做对照；再用"单变量"逐项排除服务与配置；
+  每次用 `ver`/`lcd info`/last_build 三个可观测点判断"应用过没/还活着没"。
+- **排查过程**（按时间顺序，含被推翻的方向）：
+  1. 推 b9078（我的改动 + GCC -Os）→ 回滚。**第一假设：SntpSvc 栈 1024→768
+     余量仅 16B 溢出** → 回退 1024 → b9079 仍回滚。
+  2. 抓 130s 完整日志：GCC 版在 `[SNTP] sync FAIL` 后无任何输出 → 疑似 SNTP
+     netconn 触发挂死。**第二假设：SNTP 失败重试（我加的 10s 重试）反复调用
+     netconn 导致 lwIP 状态损坏** → 回退重试为原始每小时一次 → b9080 仍回滚。
+  3. **第三假设：SNTP 服务本身（单次调用）** → 用 `usr erase 4` 清掉 EEPROM
+     的 SNTP 服务器 → b9084 仍回滚（排除）。
+  4. **第四假设：MQTT 自动连接（broker 192.168.10.201:1883 无服务）** →
+     `usr erase 5` 清掉 broker → b9085 仍回滚（排除）。
+  5. `git stash` 纯净源码 + GCC -Os（v202 标记）→ 仍回滚 → **确认与我的改动
+     无关，是 GCC 工具链/构建配置层面问题**。
+  6. **第五假设：GCC strict aliasing 误编译 lwIP/HAL**（经典雷区）→ 加
+     `-fno-strict-aliasing` → b9086 仍回滚（排除）。
+  7. 内存布局核验：.ccmram 正确落在 CCM（heap 53KB@0x10000000 + 事件池 +
+     LA 缓冲 = 63.7KB/64KB），RAM .bss+data ≈114KB/128KB，无越界（排除）。
+  8. GCC -O2/-O1 体积 247.8KB/243.2KB 超 OTA_DOWNLOAD_SAFE（237.6KB），
+     无法经 OTA 验证是否 -Os 特有问题（记录为待办）。
+- **根因**：**未定位**。已知事实：GCC 版 APP 能完整启动（模块/ETH/IMU/SNTP
+  均正常），约 +5~10s 后以"挂死"（非 fault）形式整体失活；BOOT 输出走
+  HOSTLINK UART（COM13 已拔）无法观测，COM5 只见 APP 日志。
+- **解决方案/下一步**（二选一，需用户配合）：
+  ① 接 DAP：直接烧录 GCC 固件 + 断点/栈回溯定位挂死点（最直接）；
+  ② 接 COM13：抓 BOOT 状态帧与"PENDING 未确认"细节，并可用 YMODEM 直推验证。
+  期间 Keil 保留为**发布产物**路径（仅发版时构建，开发迭代仍走 GCC 快速
+  编译/语法/单测闭环）。
+- **验证**：所有 GCC 测试构建（b9078~b9086）均复现"应用后回滚"；Keil b9077
+  稳定运行不受影响；优化改动在源码层完整保留（编译通过，待 GCC 修复后验证）。
+- **经验沉淀**：①"编译通过"与"能上板跑"是两回事，切换工具链必须做真机冒烟；
+  ②判断 OTA 是否被应用：查参数区 last_build；判断新固件是否存活：用脚注版本
+  或行为差异做标记，`ver`/`info` 同版本无法区分；③无崩溃记录的"挂死"优先查
+  IWDG 复位循环 + BOOT PENDING 超限回滚链路，别只看 APP 侧日志；④单变量
+  对照（stash 纯净版）是隔离"我的改动 vs 工具链"的最快路径；⑤廉价工具链
+  迁移先小步验证（先跑最小服务集），再全量切换。
+
+### 10.24 GCC 固件失活三连环根因定位（DAP + OpenOCD + GDB）——重点问题硬性复盘
+- **现象**：10.23 中"GCC 固件应用后整体失活、无崩溃记录"问题。本次接入
+  Keil CMSIS-DAP（VID_C251/PID_F001）+ OpenOCD 0.12 + GDB 13.3 直接定位，
+  实际是**三个连环故障叠加**，修复后 GCC 固件正常启动并持续运行。
+- **排查思路**：DAP 三件套（halt 抓 PC → 读 RAM 故障记录 g_rec → GDB 断点
+  抓异常帧/assert 参数）逐层剥离：先确定"是 fault 还是 hang"，再定位 fault
+  种类与指令，最后还原调用链。
+- **排查过程**（含被推翻的方向）：
+  1. 烧录 GCC v201 后 20s halt：CPU 停在 APP `err_recover`，xPSR=0x21000003
+     （HardFault），MSP=0x2001FF98 近耗尽。RAM 中 `g_rec`（0x20002DC0）：
+     src=HardFault、CFSR=0x8200（PRECISERR|BFARVALID）、BFAR=**0x20020000**、
+     PC=0x08004194（BOOT `boot_jump_to_app`）、exc_return=0xFFFFFFF9（线程
+     模式 MSP）、psp=0、primask=1（BOOT 跳转前关中断）。**方向 A：以为是
+     APP 运行中栈溢出**——推翻：psp=0 说明调度器从未启动，fault 发生在
+     BOOT→APP 跳转瞬间。
+  2. GDB 在 HardFault_Handler 入口断点抓完整异常帧：pre-fault MSP=0x20020000，
+     PC=0x08004194 正是 BOOT 跳转尾声 `ldmia.w sp!,{r4,r5,r6,lr}`（Keil
+     ARMCC 在 `__set_MSP(app_stack)` 后、`bx ip` 前用**新栈指针弹栈**）。
+     **根因①**：GCC APP 向量表首字（初始 SP）为 `_estack = RAM 基址+长度`
+     = **0x20020000（RAM 末端+1，越界）**；BOOT 弹栈读 0x20020000 → 精确
+     总线错误。Keil APP 首字 SP=0x2001CA20（合法）所以 Keil 正常。
+  3. 修复①（`_estack = RAM+LEN-0x400 = 0x2001FC00`）后重烧：BOOT 跳转成功，
+     Reset_Handler 已运行（r12/调用栈含 0x08037649），新 fault：CFSR=
+     0x10000（**UNDEFINSTR**），PC=0x08046388（.data 初始化区，代码段之外）。
+     **根因②**：`__libc_init_array` 调用 `_init`（crti.o 的 `push+nop`，
+     4 字节），但 **链接脚本缺 .init/.fini 输出段 + `--gc-sections` 丢弃了
+     crtn.o 的尾声**（`pop…; bx lr`）→ `_init` 执行后落穿到 .data 初始值
+     上执行数据。Keil 用 ARMCC `__main` 不经过 crti/crtn，无此问题。
+  4. 修复②（补 KEEP 的 .init/.fini 输出段）后重烧：调度器启动，任务运行在
+     CCM 任务栈（SP=0x10001E08），但**整机静默、PC 恒停在 0x0803763c
+     （`_exit` 死循环）**，两次采样 PC/SP 完全一致。GDB 在 `__assert_func`
+     断点抓到：**assert 失败在 newlib `rand.c:82` "REENT malloc succeeded"**，
+     调用链 `StartStartupTask→MX_LWIP_Init→tcpip_init→lwip_init→udp_init→
+     rand()→malloc()`。**根因③**：`syscalls_gcc.c` 的 `_sbrk` 用
+     `register char *stack_ptr asm("sp")`（**当前 SP**）做堆上限；FreeRTOS
+     任务跑在 PSP（栈在 CCM 0x1000xxxx），而堆在 SRAM 0x2001BD90+，
+     `heap_end + incr > stack_ptr` 恒成立 → malloc 恒失败 → newlib rand48
+     状态申请失败 → assert → abort → `_exit` 死循环。Keil 的 rand 用静态
+     状态不 malloc，故正常。
+- **根因（汇总）**：GCC 构建链三处与 Keil 语义不一致的缺陷叠加：
+  ①链接脚本 `_estack` 越界（0x20020000）；②链接脚本缺 `.init/.fini`
+  输出段且被 `--gc-sections` 裁掉 crtn 尾声；③`_sbrk` 用运行期 SP 而非
+  链接期固定栈顶做堆边界。三者分别表现为：BOOT 跳转即 HardFault 复位循环
+  （无输出，曾被误判为"挂死"）、`_init` 落穿 UNDEFINSTR、lwIP 初始化
+  assert 静默死循环。
+- **解决方案**：
+  1. `APP/APP/cmake/APP.ld` 与 `Core/Startup/STM32F407ZGTx_APP.ld`：
+     `_estack = ORIGIN(RAM)+LENGTH(RAM)-0x400`（留 1KB 主栈余量，与 Keil
+     语义对齐，向量首字合法）；
+  2. `cmake/APP.ld` 补 `.init/.fini` 输出段并 `KEEP(SORT_NONE(.init/.fini))`
+     保留 crti+crtn 完整桩；
+  3. `Script/gcc_port/syscalls_gcc.c`：`_sbrk` 堆上限改为
+     `extern char _estack[]; heap_end+incr > (char*)&_estack - 0x400`，
+     与链接脚本固定栈顶一致，不再依赖运行期 SP；
+  4. `BOOT/BOOT/BootApp/boot_app.c`：向量校验边界 `sp > 0x20020000` 改为
+     `sp >= 0x20020000`（拒绝越界栈顶，防同类包再进 RUN）。
+- **验证**：修复后 OpenOCD 烧录，板卡持续运行 20s+ 无复位（任务上下文、
+  CCM 任务栈、非异常模式）；COM5 日志链路待串口确认后完整回归；Keil 构建
+  与既有 OTA 流程不受影响。BOOT 校验修复已用 Keil 增量构建 0 Error。
+- **经验沉淀**：①"挂死无崩溃记录"可能是 IWDG 复位循环 + 错误处理走
+  未接串口（USART3）导致日志全盲，必须用 DAP 停机看 PC；②端序：objdump
+  十六进制 `00 00 02 20` 是小端 0x20020000，易被误读为 0x20000200，导致
+  "flash 与文件不一致"的假象；③工具链切换的隐藏雷区：链接脚本符号
+  （_estack）、crt 段完整性（.init/.fini + gc-sections）、newlib 重入
+  malloc（_sbrk 用 SP 边界在 RTOS 下必然失效）；④GDB 断点抓
+  `__assert_func` 参数（r0=文件 r1=行 r2=函数 r3=表达式）是定位
+  "莫名静默"的最快手段；⑤CMSIS-DAP 探针在 320KB 全量烧录时易 HID 超时
+  假死，需物理重插；开发期建议小镜像/低速烧录。
+
+### 10.25 OTA 防重放拒绝 + LA 外部 SRAM 自检启动卡死——重点问题硬性复盘
+- **现象 A（OTA 包不应用）**：TCP OTA 数据全量传完（223,132B，174KB/s），
+  END 后设备复位，但 `ver` 仍为 v201；DOWNLOAD 区包完好、RUN 未变、PARAM
+  归一为 NORMAL。反复出现"推送 v202 后 ver 仍 v201"（与 10.23 观察一致）。
+- **排查过程**：①读 PARAM 区：slot1 CRC 无效（陈旧），slot2 CRC 有效
+  （`crc32` 用 init=0xFFFFFFFF 且**无最终异或**，zlib 结果需再 XOR 0xFFFFFFFF
+  才匹配）——字段为 state=NORMAL、rollback_count=11、last_build_no=9086；
+  ②核对 DOWNLOAD 头版本=202、build=9086；③`security_verify_and_decrypt`
+  防重放检查 `build_no <= last_build_no` 即拒——**9086 <= 9086 → SEC_ERR_REPLAY**；
+  ④追 last_build_no 唯一写入点（boot_app.c 应用成功路径）→ 9086 此前确实
+  被成功应用过一次（随后因旧 bug 回滚），防重放机制正确拦截了同号重推。
+- **根因 A**：推送脚本硬编码 BUILD=9086，与参数区已记录的 last_build_no 相同，
+  触发防重放拒绝；**非安全链路故障**（UID 匹配、私钥派生的公钥与 BOOT
+  `ECDSA_PUB_KEY_LEGACY` 完全一致）。
+- **解决 A**：推送构建号递增（9086→9087），重推即成功应用（v202 上线）。
+- **验证 A**：`ver` = v202；RUN 尾版本=202；应用后系统正常。
+- **现象 B（启动偶发卡死）**：GCC 固件启动时 CPU 长时间停在 LA 外部 SRAM
+  自检循环（PC 在 0x0801FECC~0x0801FEE4 区间，startupTask 上下文），系统
+  无 ETH、无崩溃记录；复位重试约半数可通过。实测复现 3 次，排除 DAP 干扰
+  （非停机期间也出现）。
+- **根因 B**：`la_sram_self_test` 对 512KB 外部 SRAM（FSMC 0x68000000）做
+  全量写读比对，无时间上限；外部 SRAM 偶发响应变慢时，循环仍在执行（CPU
+  未总线停摆），SysTick 正常喂 IWDG → **永不超时、启动无限爬行**。
+- **解决 B**：`la_buffer.c` 自检加 `HAL_GetTick` 500ms 截止，超时即判
+  SRAM 不可用返回，启动不阻塞；彻底总线停摆场景仍由 IWDG 兜底。
+- **验证 B**：构建通过；真机验证被 DAP 探针持续 HID 超时阻碍（探针多次
+  假死需重插），待恢复后分块烧录/OTA 验证。
+- **经验沉淀**：①"固件没升级上"先分两半查：APP 侧会话（BEGIN/DATA/END）与
+  BOOT 侧应用（防重放/验签/参数 CRC），用 `ver`+RUN 尾版本+PARAM 状态
+  三个观测点即可定位；②参数区 CRC 算法与 zlib 的差异（无最终异或）易误判
+  "参数损坏"；③有界硬件自检必须带时间截止，否则"慢但不挂"比"硬故障"
+  更隐蔽（IWDG 反而被喂饱）；④CMSIS-DAP 烧录失败时先小块验证探针是否
+  仍存活，别在坏探针上重试大镜像。

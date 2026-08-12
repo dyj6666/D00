@@ -186,7 +186,7 @@ void HttpSvc_Init(void)
 {
     osThreadAttr_t attr = {
         .name = "HttpSvc",
-        .stack_size = 2048,
+        .stack_size = 1024,   /* 峰值 ~544B（HW 376 词） */
         .priority = osPriorityBelowNormal,
     };
     osThreadNew(http_task, NULL, &attr);

@@ -31,7 +31,9 @@
  *      快速运动保持响应，静止时收敛到加速度计参考。
  * ================================================================ */
 
-#define IMU_TASK_STACK   1024
+#define IMU_TASK_STACK   2048   /* GCC + newlib 浮点打印（%+.3f）栈深明显大于
+                                 * Keil 实测 HW 664B；1024B 在校准后打印时溢出
+                                 * （实测 Stack Overflow 复位循环） */
 #define IMU_SAMPLE_MS    5      /* 200Hz */
 #define IMU_CAL_SAMPLES  200    /* 校准 ~1s（需静止） */
 #define IMU_MAX_DT       0.05f  /* dt 上限（防调度饥饿时积分爆炸） */

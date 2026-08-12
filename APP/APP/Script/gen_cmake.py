@@ -97,7 +97,7 @@ if(CMAKE_CROSSCOMPILING)
     add_compile_definitions(%(defines)s)
 
     set(CPU_FLAGS "-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16")
-    set(CMAKE_C_FLAGS "${CPU_FLAGS} -O2 -ffunction-sections -fdata-sections -Wall -Wno-unknown-attributes -Wno-attributes -fno-common" CACHE STRING "" FORCE)
+    set(CMAKE_C_FLAGS "${CPU_FLAGS} -Os -ffunction-sections -fdata-sections -Wall -Wno-unknown-attributes -Wno-attributes -fno-common -fno-strict-aliasing" CACHE STRING "" FORCE)
     set(CMAKE_C_FLAGS_RELEASE "" CACHE STRING "" FORCE)
     set(CMAKE_ASM_FLAGS "${CPU_FLAGS} -x assembler-with-cpp" CACHE STRING "" FORCE)
     set(CMAKE_ASM_FLAGS_RELEASE "" CACHE STRING "" FORCE)

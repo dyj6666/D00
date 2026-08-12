@@ -27,8 +27,8 @@
 #define TCP_SVC_PORT          9000
 #define TCP_SVC_BACKLOG       2
 #define TCP_SVC_MAX_CLIENTS   2
-#define TCP_SVC_TASK_STACK    2048
-#define TCP_SVC_CLIENT_STACK  2048
+#define TCP_SVC_TASK_STACK    1024   /* 峰值 ~544B（HW 376 词） */
+#define TCP_SVC_CLIENT_STACK  1024
 #define TCP_SVC_IDLE_MS       120000
 #define TCP_SVC_STREAM_MS     1000
 

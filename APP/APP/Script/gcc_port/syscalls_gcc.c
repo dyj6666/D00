@@ -9,9 +9,8 @@
 #include <sys/unistd.h>
 #include <stdint.h>
 
-register char *stack_ptr asm("sp");
-
-extern char end;   /* 由链接脚本 APP.ld 提供（.bss 末尾） */
+extern char end;      /* 由链接脚本 APP.ld 提供（.bss 末尾，堆起点） */
+extern char _estack[]; /* 由链接脚本 APP.ld 提供（主栈顶，堆上限基准） */
 
 int _close(int fd)
 {
@@ -66,7 +65,12 @@ void *_sbrk(int incr)
         heap_end = &end;
     }
     prev = heap_end;
-    if (heap_end + incr > stack_ptr) {
+    /* 堆上限用链接脚本的固定主栈顶（_estack），而非当前 SP：
+     * FreeRTOS 任务运行在 PSP（任务栈在 CCM 0x1000xxxx），当前 SP 远低于
+     * SRAM 堆区，若用 SP 做边界，malloc 恒判越界失败 → newlib rand() 的
+     * "REENT malloc succeeded" assert 触发 → abort/_exit 死循环（实测挂死）。
+     * 保留 1KB 主栈余量，与 APP.ld 的 _estack 定义一致。 */
+    if (heap_end + incr > (char *)&_estack - 0x400) {
         errno = ENOMEM;
         return (void *)-1;
     }
