@@ -83,3 +83,6 @@ HOST/OTA_Tool/local_keys.json
 
 # 本地工具链（OpenOCD 等，不入库）
 tools/
+
+# PC 侧服务运行时日志（NTP/DNS/DHCP/MQTT 等）
+HOST/_*.txt

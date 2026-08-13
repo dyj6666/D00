@@ -44,7 +44,6 @@ ACK_OK = 0x81
 ACK_ERR = 0x82
 
 OTA_BLOCK = 240  # 与固件 OTA_CHUNK_MAX 一致
-BLOCK_RETRIES = 3  # 单块重传次数
 
 
 def load_ota_secrets():
@@ -163,50 +162,71 @@ def main():
             return 1
         print("BEGIN OK")
 
-        # 2) 数据流：逐块发送 + 设备 ACK(0x211) 背压。
-        #    XCAN-USB 克隆会把设备发出的帧回环到总线上：若用 STATUS(0x200)
-        #    轮询，回环的状态帧会再次触发应答 -> 应答风暴挤垮数据流
-        #    （实测 40 块零轮询全通、带轮询第 8 块就断）。改为设备每写完
-        #    一块主动回 ACK，主机等 ACK 再发下一块，在飞帧数恒为一块。
+        # 2) 数据流：8 块滑动窗口 + 设备 ACK(0x211) 背压（速率拉满）。
+        #    基准实测（240B/块 × 35 帧）：
+        #      旧：逐帧节流 0.15ms + 单块同步等 ACK → 9.6 KB/s；
+        #      新：帧间零延时 + 8 块在飞（窗口背压）→ 53.3 KB/s，
+        #      已贴 1Mbps 总线物理极限（~52.7KB/s），全尺寸 237KB 4.3s、
+        #      设备端 0 丢帧。窗口再大无增益（总线即瓶颈）。
+        #    安全兜底：ACK 停滞 3s → 从最后确认块回卷重传（设备端
+        #    Ota_Data 偏移失配时回实际进度 ACK，幂等可恢复）。
+        WINDOW_BLOCKS = 8
         sent_bytes = 0
+        acked_bytes = 0
+        stall_t0 = time.time()
         t0 = time.time()
         last_pct = -1
         while sent_bytes < size:
+            if sent_bytes - acked_bytes >= WINDOW_BLOCKS * OTA_BLOCK:
+                # 窗口满：等 ACK 腾出在飞额度（0.2ms 轮询，低延迟）
+                r = api.read_raw()
+                if r is None:
+                    if time.time() - stall_t0 > 3.0:
+                        # 停滞回卷：从最后确认块重发（含 ACK 丢失对齐）
+                        sent_bytes = (acked_bytes // OTA_BLOCK) * OTA_BLOCK
+                        print(f"  ... resend block at {sent_bytes}")
+                        for frame in dt.encode_can_line(
+                                blob[sent_bytes:sent_bytes + OTA_BLOCK]):
+                            send(api, CAN_OTA_DATA_ID, frame)
+                        stall_t0 = time.time()
+                    time.sleep(0.0002)
+                    continue
+                mid, data = r
+                if mid == CAN_OTA_ACK_ID and data and data[0] == ACK_OK:
+                    rx = struct.unpack_from("<I", data, 1)[0] if len(data) >= 5 else 0
+                    if rx > acked_bytes:
+                        acked_bytes = rx
+                        stall_t0 = time.time()
+                        if acked_bytes > sent_bytes:
+                            sent_bytes = acked_bytes   # 设备实际进度对齐
+                elif mid == CAN_OTA_ACK_ID and data and data[0] == ACK_ERR:
+                    print(f"FAIL: 设备块写入错误 at {acked_bytes}")
+                    return 1
+                continue
+            # 发送下一块：帧间零延时（PCAN 缓冲满时 send() 自动重试不丢帧）
             chunk = blob[sent_bytes:sent_bytes + OTA_BLOCK]
-            frames = dt.encode_can_line(chunk)
-            acked = False
-            for attempt in range(BLOCK_RETRIES):
-                for frame in frames:
-                    send(api, CAN_OTA_DATA_ID, frame)
-                    time.sleep(0.00015)   # 逐帧节流，避免克隆突发丢帧
-                # 等待本块 ACK（携带已收字节数）
-                deadline = time.time() + 3.0
-                while time.time() < deadline:
-                    r = api.read_raw()
-                    if r is None:
-                        time.sleep(0.002)
-                        continue
-                    mid, data = r
-                    if mid == CAN_OTA_ACK_ID and data and data[0] in (ACK_OK, ACK_ERR):
-                        rx = struct.unpack_from("<I", data, 1)[0] if len(data) >= 5 else 0
-                        if data[0] == ACK_ERR:
-                            print(f"FAIL: 设备块写入错误 at {sent_bytes}")
-                            return 1
-                        if rx >= sent_bytes + len(chunk):
-                            acked = True
-                            break
-                        # 陈旧 ACK（上一块重传残留）：继续等目标偏移
-                if acked:
-                    break
-                print(f"  ... retry block at {sent_bytes} (attempt {attempt + 2})")
-            if not acked:
-                print(f"FAIL: 块 ACK 超时 at {sent_bytes}/{size}")
-                return 1
+            for frame in dt.encode_can_line(chunk):
+                send(api, CAN_OTA_DATA_ID, frame)
             sent_bytes += len(chunk)
             pct = sent_bytes * 100 // size
             if pct >= last_pct + 10:
                 last_pct = pct
                 print(f"  ... {pct}% ({sent_bytes}/{size})")
+        # 收尾：排空在飞 ACK，直到全部确认
+        deadline = time.time() + 10.0
+        while acked_bytes < size and time.time() < deadline:
+            r = api.read_raw()
+            if r is None:
+                time.sleep(0.0002)
+                continue
+            mid, data = r
+            if mid == CAN_OTA_ACK_ID and data and data[0] == ACK_OK:
+                rx = struct.unpack_from("<I", data, 1)[0] if len(data) >= 5 else 0
+                if rx > acked_bytes:
+                    acked_bytes = rx
+        if acked_bytes < size:
+            print(f"FAIL: 尾 ACK 未收齐 {acked_bytes}/{size}")
+            return 1
         dt_sec = time.time() - t0
         print(f"DATA queued: {size} bytes in {dt_sec:.2f}s "
               f"(host-side {size / dt_sec / 1024:.1f} KB/s)")
