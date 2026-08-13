@@ -23,11 +23,11 @@
 #define DOWNLOAD_BASE_ADDR      0x080A0000UL
 #define DOWNLOAD_SIZE           (256 * 1024)
 
-/* DOWNLOAD 尾部 24KB：OTA 断点续传会话区（APP ota_agent 写入；
- * BOOT 升级提交成功后失效全部会话槽，杜绝旧包续传残留）。
- * 与 APP/app_config.h 的 OTA_SESSION_* 严格一致。 */
-#define BOOT_SESSION_BASE       (DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE - 24 * 1024)
-#define BOOT_SESSION_SLOTS      768
+/* OTA 断点续传会话区：PARAM 扇区空余（0x080E2000，避开参数槽 +0/+1024）。
+ * APP ota_agent 下载期写入；BOOT 升级提交成功后失效全部会话槽，杜绝
+ * 旧包续传残留。下载区 256KB 全量留给固件。与 APP/app_config.h 严格一致。 */
+#define BOOT_SESSION_BASE       (PARAM_BASE_ADDR + 8 * 1024)
+#define BOOT_SESSION_SLOTS      1024
 #define BOOT_SESSION_STRIDE     32
 
 #define PARAM_BASE_ADDR         0x080E0000UL

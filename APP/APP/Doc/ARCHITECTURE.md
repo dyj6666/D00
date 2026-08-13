@@ -145,6 +145,38 @@ powershell -File Script/check_firmware_syntax.ps1
 - 事件总线：静态消息池，溢出计数可在 `sysmon` 查看；
 - 变量访问：互斥锁 + 超时保护。
 
+## 5.1 RTOS 使用策略（2026-08 定稿）
+
+**API 分工（二选一原则，消除双轨混乱）**：
+- 任务 / 软件定时器 / 优先级：**统一 CMSIS-RTOS2**（`osThreadNew` /
+  `osTimerNew` / `osPriority*` 枚举）；优先级总表见 STACK_BUDGET.md；
+- 队列 / 信号量 / 互斥量 / 任务通知 / 事件组 / 流缓冲：**统一原生
+  FreeRTOS**（ISR 变体完备、零包装开销、FreeRTOS 语义直接可见）；
+- 禁止在业务代码中混用两套 API 创建同一类对象（新增代码按本表审查）。
+
+**低功耗两级设计**：
+1. WFI 空闲钩子（常开）：CPU 空闲即 `__WFI()`，等 SysTick 1ms 唤醒，
+   外设零影响（纯省 CPU 功耗）；
+2. STOP Tickless（`power on` 可选）：全任务阻塞且空闲 >2s 时进入
+   STOP，RTC 唤醒定时器到点唤醒（上限 2 RTC 秒 = 50% IWDG 预算，
+   LSI 同源比例恒定，任何频率下安全）；`power off` 回常驻模式。
+   注意：休眠期间 CAN/ETH/UART 不接收数据，仅适合低功耗场景。
+
+**优先级设计原则**：
+- 事件分发（eventBus 48）> 日志（40）> 实时采样/协议栈（32）>
+  交互/网络服务（24）> 后台（16）> CAN/搬运/看门狗（8~9）；
+- lwIP `tcpip_thread`（32）恒高于所有 netconn 使用者，协议栈处理
+  不被应用任务拖延；CAN RX（9）恒高于 TX（8），防 FIFO 溢出。
+
+## 5.2 DMA → 任务管线
+
+- UART 收发（logger）：RX DMA 空闲断帧 → ISR `xStreamBufferSendFromISR`
+  → shell 块读；TX 流缓冲 → LoggerTXTask → DMA → 完成通知；
+- 逻辑分析仪：TIM1 → DMA2 整字搬入外置 SRAM 环形缓冲（高采样率突发
+  场景流缓冲拷贝不适用，原始 DMA 环为正确形态），命令驱动导出；
+- IMU：I2C1 400kHz **IT 模式** + 二值信号量——传输期间任务休眠，
+  200Hz 采样 CPU 占用从 ~8% 降到 ~1%。
+
 ## 6. 工程日志
 
 历次问题的完整复盘（现象/根因/解决/验证）见 [工程日志](ENGINEERING_LOG.md)。

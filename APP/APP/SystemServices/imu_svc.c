@@ -12,6 +12,7 @@
 #include "logger.h"
 
 #include <math.h>
+#include <stdio.h>
 
 /* ================================================================
  * IMU 服务（工业级数据管线，卡尔曼最优估计）
@@ -98,6 +99,24 @@ static float s_yaw_bias = 0.0f;    /* rad/s */
 static uint16_t s_still_n = 0;
 static double s_gz_acc = 0.0;
 
+/** @brief 浮点定点格式化：+123.456 写入 out（不依赖 %f，省 Flash） */
+void ImuSvc_FormatFixed(float v, int dec, char *out)
+{
+    static const int32_t scale[4] = { 1, 10, 100, 1000 };
+    int32_t m = (int32_t)(v * (float)scale[dec] + ((v < 0) ? -0.5f : 0.5f));
+    uint32_t u = (uint32_t)((m < 0) ? -m : m);
+    char *p = out;
+    *p++ = (m < 0) ? '-' : '+';
+    p += (size_t)sprintf(p, "%lu", (unsigned long)(u / (uint32_t)scale[dec]));
+    *p++ = '.';
+    for (int32_t d = scale[dec] / 10; d > 1 && (int32_t)(u % (uint32_t)scale[dec]) < d; d /= 10) {
+        *p++ = '0';
+    }
+    p += (size_t)sprintf(p, "%lu",
+                         (unsigned long)(u % (uint32_t)scale[dec]));
+    *p = '\0';
+}
+
 /* ---------- 采样任务 ---------- */
 static void imu_task(void *arg)
 {
@@ -117,14 +136,20 @@ static void imu_task(void *arg)
     {
         mpu6050_cal_t cal;
         BSP_MPU6050_GetCal(&cal);
-        LOG_Printf("[IMU] cal gyro_bias=(%+.3f,%+.3f,%+.3f) dps\r\n",
-                   cal.gx_bias, cal.gy_bias, cal.gz_bias);
+        char bx[16], by[16], bz[16];
+        ImuSvc_FormatFixed(cal.gx_bias, 3, bx);
+        ImuSvc_FormatFixed(cal.gy_bias, 3, by);
+        ImuSvc_FormatFixed(cal.gz_bias, 3, bz);
+        LOG_Printf("[IMU] cal gyro_bias=(%s,%s,%s) dps\r\n",
+                   bx, by, bz);
     }
 
     kf2d_init(&s_kf_roll, KF_Q_ANGLE, KF_Q_BIAS, KF_R_BASE);
     kf2d_init(&s_kf_pitch, KF_Q_ANGLE, KF_Q_BIAS, KF_R_BASE);
     s_state.ready = 1;
 
+    /* 精确 200Hz 节拍：vTaskDelayUntil 消除累积抖动（dt 自适应仍兜底） */
+    TickType_t xLastWake = xTaskGetTickCount();
     for (;;) {
         uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
         float dt = (float)(now - last_ms) * 0.001f;
@@ -228,7 +253,7 @@ static void imu_task(void *arg)
             LOG_Printf("[IMU] read fault %lu\r\n",
                        (unsigned long)s_state.fault_count);
         }
-        vTaskDelay(pdMS_TO_TICKS(IMU_SAMPLE_MS));
+        vTaskDelayUntil(&xLastWake, pdMS_TO_TICKS(IMU_SAMPLE_MS));
     }
 }
 

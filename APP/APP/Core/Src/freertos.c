@@ -92,10 +92,13 @@ const osThreadAttr_t eventBusTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-static void tmr_1s_callback(TimerHandle_t xTimer) {
+/* 系统节拍回调（CMSIS-RTOS2 osTimerFunc_t 签名）：仅发事件，不做业务 */
+static void tmr_1s_callback(void *arg) {
+    (void)arg;
     MSG_SEND_SIMPLE(MODULE_TIMER, MSG_TICK_1S);
 }
-static void tmr_200ms_callback(TimerHandle_t xTimer) {
+static void tmr_200ms_callback(void *arg) {
+    (void)arg;
     MSG_SEND_SIMPLE(MODULE_TIMER, MSG_TICK_200MS);
 }
 /* USER CODE END FunctionPrototypes */
@@ -227,11 +230,11 @@ void MX_FREERTOS_Init(void) {
 
   modules_init();   // 自动加载所有注册的模块
 
-  // 系统定时器仍发布事件，但现在是非阻塞异步发布
-  TimerHandle_t tmr_1s = xTimerCreate("t1s", pdMS_TO_TICKS(1000), pdTRUE, NULL, tmr_1s_callback);
-  TimerHandle_t tmr_200ms = xTimerCreate("t200ms", pdMS_TO_TICKS(200), pdTRUE, NULL, tmr_200ms_callback);
-  xTimerStart(tmr_1s, 0);
-  xTimerStart(tmr_200ms, 0);
+  // 系统节拍定时器：统一 CMSIS-RTOS2（周期事件，非阻塞异步发布）
+  osTimerId_t tmr_1s = osTimerNew(tmr_1s_callback, osTimerPeriodic, NULL, NULL);
+  osTimerId_t tmr_200ms = osTimerNew(tmr_200ms_callback, osTimerPeriodic, NULL, NULL);
+  if (tmr_1s != NULL)      osTimerStart(tmr_1s, 1000);
+  if (tmr_200ms != NULL)   osTimerStart(tmr_200ms, 200);
 
   /* Infinite loop */
 

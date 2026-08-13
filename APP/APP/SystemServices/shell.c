@@ -226,9 +226,12 @@ void ShellTaskFunction(void)
     StreamBufferHandle_t rx = LOG_GetRxStream();
     shell_prompt();   /* 初始提示符*/
     for (;;) {
-        uint8_t ch;
-        if (xStreamBufferReceive(rx, &ch, 1, portMAX_DELAY) > 0) {
-            Shell_ProcessChar(ch);
+        /* 块读（16B/次）代替逐字节读：一次唤醒处理一簇输入，
+         * 减少流缓冲唤醒次数（低负载时收益不大，高负载不丢字符） */
+        uint8_t buf[16];
+        size_t n = xStreamBufferReceive(rx, buf, sizeof(buf), portMAX_DELAY);
+        for (size_t i = 0; i < n; i++) {
+            Shell_ProcessChar(buf[i]);
         }
     }
 }

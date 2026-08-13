@@ -3007,3 +3007,80 @@ auto-stop）全部按设计工作。
   增长），last build 9103，Boot complete，堆余量 11368B。
 - **版本归一**：config/version.json 同步至 202/9103，与设备实际
   应用构建号一致；OTA_Tool/version_lib.json 登记 b9103。
+
+### 10.41 OTA 尺寸墙：固件超限 → 会话区迁 PARAM + BOOT 同步（重点问题）
+- **现象**：新增 RTOS 极致化功能后，APP.bin 增至 242,892B，CAN OTA
+  `BEGIN 被拒绝 code=2`（Ota_Begin 判 size > OTA_DOWNLOAD_SAFE）。
+- **影响面**：任何固件增长都会撞墙——下载区 256KB 中 24KB 被断点
+  续传会话槽占用，可用上限仅 237.5KB，而固件已达 243KB。
+- **排查思路**：先量化"为什么超"（代码增长来自哪），再评估"哪里能
+  让"（下载区/会话区/固件尺寸三者的三角权衡），最后选最不影响安全
+  与功能的方案。
+- **排查过程**：
+  1. 对照实验：BSP 改动前 bin 236,996B（余量 ~1KB），改动后
+     242,892B（超 6.3KB）。读 map 找最大增量 → `stm32f4xx_hal_i2c.o`
+     6.7KB（I2C IT 回调把整个中断态 HAL 状态机拉进来）+
+     bsp_power（~2.5KB）→ 确认"功能本身带来了尺寸"。
+  2. 尝试"减尺寸"路线：移除浮点 printf（%f→定点）→ bin 几乎不变
+     （AC5 链接器本就把浮点 printf 常驻，非增量来源）；lwIP 已
+     -O2 -Ospace（`<oTime>0</oTime>`）无空间可压。→ 结论：固件
+     增长是真实需求，必须扩大下载可用空间。
+  3. 分区盘点：1MB Flash 全部占用（BOOT 64K/RUN 320K/BACKUP 256K/
+     DOWNLOAD 256K/PARAM 128K），分区边界不可动（红线）；唯一可让
+     的是 DOWNLOAD 内部 24KB 会话区。
+  4. 读续传机制：会话槽 768×32B=24KB 在下载区尾部，`slot=received/240`
+     仅覆盖 ≤184KB 固件——**当前 237KB 固件早已超出续传覆盖**，
+     24KB 预留对现有固件是纯浪费。
+  5. 决策：把会话槽迁到 PARAM 扇区空余（0x080E2000，1024 槽=32KB），
+     下载区 256KB 全量可用（SAFE=261,120B），续传覆盖反而升到
+     245KB。APP 与 BOOT 两侧 `*_SESSION_*` 必须严格同步（BOOT 在
+     提交成功后清槽），因此需要 BOOT 改动 + DAP 烧录。
+  6. 部署踩坑：新 BOOT DAP 烧录成功；预置 243KB 包时 DAP 2MHz 写入
+     触发 HID 超时（0x3E5，已知假死点），包写坏 → BOOT 安全校验
+     拒绝 → 兜底回老 APP（验证了 BOOT 兜底逻辑有效）。降到
+     500kHz 重写 + verify → 完整通过。
+- **根因**：下载区 256KB 中 24KB 会话区预留与固件增长形成硬冲突；
+  会话区本可移出下载区（PARAM 有 120KB+ 空余），原设计把两者绑定
+  是架构可优化点。
+- **解决方案**：
+  - APP：`OTA_SESSION_BASE=0x080E2000`、`SLOTS=1024`、
+    `OTA_DOWNLOAD_SAFE=256KB-1KB`；
+  - BOOT：`BOOT_SESSION_BASE=PARAM+8KB`、`SLOTS=1024`（两侧严格
+    一致），BOOT 重构建 + DAP 烧录；
+  - 部署：DAP 500kHz 预置 b9104 包 → `ota` 触发新 BOOT 应用；
+    此后 b9105 已可走正常 CAN OTA（243KB / 4.46s / 53.2KB/s）。
+- **验证**：b9104/b9105 均应用成功（last build 确认）；243KB 大包
+  正常 OTA 全流程通过；崩溃序号稳定；BOOT 兜底（包校验失败回 APP）
+  实测有效。
+- **经验沉淀**：①OTA 下载区必须给固件增长留足空间，会话类数据不要
+  占用下载区；②"固件超限"先量化增量再决策，别盲目砍功能；③APP 与
+  BOOT 共享的地址/布局常量改动必须两侧同步 + 完整回归；④DAP 大包
+  写入降速（500kHz）规避 HID 假死，且 BOOT 的"校验失败回 APP"兜底
+  让错误包不会把板子困死在升级模式。
+
+### 10.42 RTOS 极致化：Tickless / IMU IT / API 统一 / 优先级体系
+- **Tickless 低功耗两级设计**：
+  - WFI 空闲钩子（常开）：`vApplicationIdleHook` → `__WFI()`，CPU
+    空闲不再旋转，等 SysTick 1ms 唤醒，外设零影响；
+  - STOP Tickless（`power on` 可选，默认关）：`configUSE_TICKLESS_IDLE`
+    + `portSUPPRESS_TICKS_AND_SLEEP` → RTC 唤醒定时器 + STOP。
+    安全约束：IWDG 与 RTC 同源 LSI，1 RTC"秒"恒占 IWDG 预算 25%，
+    故睡眠上限取 2 RTC 秒（≤50% 预算，任何 LSI 频率安全）；睡眠前
+    喂 IWDG、唤醒后重建时钟树（HAL 不自动恢复）+ `vTaskStepTick`
+    补 tick。注意：IMU 200Hz 等周期任务常驻时系统空闲 <2s，STOP
+    不触发（设计如此，避免误休眠丢 CAN/ETH 数据）。
+- **IMU CPU 8% → 0%**：I2C1 阻塞轮询改 IT 模式 + 二值信号量，任务
+  在传输期间休眠；14 字节突发读不变，200Hz 采样率不变；错误回调带
+  标志防"错误误判成功"；超时回退阻塞+总线自恢复。
+- **RTOS API 统一**：任务/定时器/优先级全部 CMSIS-RTOS2
+  （osThreadNew/osTimerNew/osPriority 枚举）；队列/信号量/通知/事件
+  组/流缓冲用原生 FreeRTOS（ISR 完备、零包装）——策略写入
+  ARCHITECTURE.md 5.1；lwIP `tcpip_thread` 24→32（高于所有 netconn
+  使用者）；CAN 任务优先级恢复 9/8（CMSIS Low1/Low 映射）。
+- **其它**：shell 流缓冲块读（16B/次）；IMU `vTaskDelayUntil` 精确
+  200Hz；STACK_BUDGET 优先级总表；浮点打印定点化（省栈省库）；
+  bsp_can 未用句柄清理；构建 0 错误 0 警告。
+- **验证**：b9105 全量回归——sysmon：canRx=9/canTx=8、tcpip=32、
+  ImuSvc=0%、IDLE=96%、崩溃序号 #188 稳定、堆 11408B；power on/off
+  命令正常、ON 态下 HTTP 50/50 与 TCP 控制台全通；CAN 300/300 零
+  丢帧；SNTP 实时校准；OTA 243KB 大包正常。

@@ -17,7 +17,8 @@
 | OtaTcpSvc | 2048B | Ota_Begin(擦除+会话)+netconn；曾 1024B 溢出 |
 | ShellTask | 2048B | 命令解析含协议栈调用 |
 | SntpSvc | 1024B | netconn 路径峰值 ~752B（不可再砍，768B 余量仅 16B） |
-| TcpSvc / TcpClient | 1024B | TCP 控制台会话 |
+| TcpSvc (server) | 1024B | TCP 控制台监听任务 |
+| TcpClient | 2048B | 命令处理(LOG_Printf+netconn_write)栈深 >1KB，实测 help 曾溢出 |
 | DL_TX / DL_CMD | 1024B | 纯搬运 / 命令解析 |
 | LoggerTXTask | 512B | 纯搬运 |
 | WDOG | 512B | 轻量监控 |
@@ -34,3 +35,24 @@
 
 - FreeRTOS 堆（CCM 0x10000000）：53KB，启动后空闲 ~13KB。
 - lwIP 内存：独立静态池（MEM_SIZE 12KB + pbuf 池），不占 FreeRTOS 堆。
+
+## 任务优先级总表（2026-08 更新）
+
+> 统一 CMSIS-RTOS2 优先级枚举；数值 = osPriority 值（越高越优先）。
+
+| 优先级 | 任务 | 职责 / 为什么在此档 |
+| --- | --- | --- |
+| 48 (Realtime) | eventBusTask | 事件分发中枢：最高，保证事件不被拖延 |
+| 40 (High) | loggerTXTask | 日志 DMA 搬运：高优先防日志积压 |
+| 32 (AboveNormal) | ImuSvc / TouchSvc / EthIf / tcpip_thread | 传感器实时采样 / 网包入栈 / lwIP 协议栈（高于 netconn 使用者） |
+| 24 (Normal) | shellTask / TcpSvc / OtaTcpSvc / LcdUI / DataAgent | 交互/网络服务/UI：同级时间片轮转 |
+| 16 (BelowNormal) | HttpSvc / SntpSvc / EthLink | 低优先级周期/后台服务 |
+| 9 (Low2) | canRx | CAN 接收分发：高于 TX，防 FIFO 溢出 |
+| 8 (Low1) | canTx / DL_CMD / DL_TX / WDOG | CAN 发送 / HOSTLINK 搬运 / 任务看门狗 |
+| 2 (BelowLow) | Tmr Svc | FreeRTOS 软件定时器守护 |
+| 0 | IDLE | 空闲（WFI 省电钩子） |
+
+规则补充：
+1. 任务创建统一 `osThreadNew`（CMSIS-RTOS2）；队列/信号量/通知用原生
+   FreeRTOS（ISR 友好、零包装开销）——见 ARCHITECTURE.md 策略。
+2. 新增任务必须登记本表 + 实测栈水位，禁止裸优先级数字。

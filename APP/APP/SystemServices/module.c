@@ -34,6 +34,7 @@
 #include "shell.h"
 #include "usr_store.h"
 #include "bsp_can.h"
+#include "bsp_power.h"
 #include "cmd_can.h"
 #include "ota_can_svc.h"
 
@@ -44,6 +45,7 @@
 static module_desc_t module_table[] = {
 MODULE_INIT("Cmd",    2,  Cmd_Init),
 MODULE_INIT("CmdCat", 3,  CmdCatalog_Register),
+MODULE_INIT("Power",  1,  BSP_Power_Init),
 MODULE_INIT("CanBsp", 3,  BSP_CAN_Init),
     MODULE_INIT("USR",    3,  UsrStore_Init),
     MODULE_INIT("Shell",  4,  Shell_Init),

@@ -14,6 +14,7 @@
 #include "FreeRTOS.h"
 #include "queue.h"
 #include "task.h"
+#include "cmsis_os2.h"
 
 #include "stm32f4xx_hal.h"
 
@@ -32,8 +33,6 @@ typedef struct {
 static CAN_HandleTypeDef s_hcan;                 /* HAL CAN 句柄 */
 static QueueHandle_t     s_rx_q;                 /* RX 帧队列（ISR → 任务） */
 static QueueHandle_t     s_tx_q;                 /* TX 帧队列（任务 → 邮箱） */
-static TaskHandle_t      s_rx_task;
-static TaskHandle_t      s_tx_task;
 
 static bsp_can_rx_cb_t   s_cbs[BSP_CAN_MAX_CB];  /* 帧消费者注册表 */
 static void             *s_cb_ctx[BSP_CAN_MAX_CB];
@@ -251,9 +250,16 @@ void BSP_CAN_Init(void)
     can_start(BSP_CAN_MODE_NORMAL);
 
     /* RX 优先级高于 TX：突发收发时 RX 任务先排空队列，防 ISR 丢帧；
-     * TX 以总线速率自然节流，低优先级不影响吞吐。 */
-    xTaskCreate(can_rx_task, "canRx", 256, NULL, 9, &s_rx_task);
-    xTaskCreate(can_tx_task, "canTx", 128, NULL, 8, &s_tx_task); /* 峰值 47 词 */
+     * TX 以总线速率自然节流，低优先级不影响吞吐。
+     * 统一走 CMSIS-RTOS2：栈尺寸按字节（256 词=1024B / 128 词=512B）。 */
+    osThreadAttr_t rx_attr = {
+        .name = "canRx", .stack_size = 256 * 4, .priority = osPriorityLow1,
+    };
+    osThreadAttr_t tx_attr = {
+        .name = "canTx", .stack_size = 128 * 4, .priority = osPriorityLow,
+    };
+    (void)osThreadNew(can_rx_task, NULL, &rx_attr);   /* 常驻任务：无需句柄 */
+    (void)osThreadNew(can_tx_task, NULL, &tx_attr);
 }
 
 void BSP_CAN_SetMode(bsp_can_mode_t mode)

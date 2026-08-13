@@ -2468,6 +2468,16 @@
               <FilePath>..\BSP\bsp_can.h</FilePath>
             </File>
             <File>
+              <FileName>bsp_power.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_power.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_power.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\BSP\bsp_power.h</FilePath>
+            </File>
+            <File>
               <FileName>bsp_i2c.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\bsp_i2c.c</FilePath>

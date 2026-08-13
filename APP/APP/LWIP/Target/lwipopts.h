@@ -70,7 +70,9 @@
 /*----- Value in opt.h for TCPIP_THREAD_STACKSIZE: 0 -----*/
 #define TCPIP_THREAD_STACKSIZE 1024
 /*----- Value in opt.h for TCPIP_THREAD_PRIO: 1 -----*/
-#define TCPIP_THREAD_PRIO 24
+/* tcpip 线程优先级 32（osPriorityAboveNormal）：高于所有 netconn 使用任务
+ * （TcpSvc 24 / OtaTcpSvc 24 / HttpSvc 16），协议栈处理不被应用任务拖延 */
+#define TCPIP_THREAD_PRIO 32
 /*----- Value in opt.h for TCPIP_MBOX_SIZE: 0 -----*/
 #define TCPIP_MBOX_SIZE 24   /* 突发下防止窗口更新消息被丢（HTTP 拉取实测 15s 停滞根因） */
 /*----- Value in opt.h for SLIPIF_THREAD_STACKSIZE: 0 -----*/

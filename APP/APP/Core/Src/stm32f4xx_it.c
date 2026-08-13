@@ -38,6 +38,8 @@
 #include "signal_gen.h"
 #include "err_mgr.h"
 #include "bsp_can.h"
+#include "rtc.h"
+#include "i2c.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -410,6 +412,28 @@ void CAN1_RX1_IRQHandler(void)
 void CAN1_SCE_IRQHandler(void)
 {
   BSP_CAN_IRQHandler();
+}
+
+/**
+  * @brief RTC 唤醒定时器中断：STOP Tickless 睡眠到点唤醒（bsp_power.c）。
+  */
+void RTC_WKUP_IRQHandler(void)
+{
+  HAL_RTCEx_WakeUpTimerIRQHandler(&hrtc);
+}
+
+/**
+  * @brief I2C1 事件/错误中断：MPU6050 IT 模式读取（bsp_mpu6050.c）。
+  *        优先级 7（数值 ≥5，可在 ISR 中安全使用 FromISR API）。
+  */
+void I2C1_EV_IRQHandler(void)
+{
+  HAL_I2C_EV_IRQHandler(&hi2c1);
+}
+
+void I2C1_ER_IRQHandler(void)
+{
+  HAL_I2C_ER_IRQHandler(&hi2c1);
 }
 
 /* USER CODE END 1 */

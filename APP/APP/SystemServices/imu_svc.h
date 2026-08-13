@@ -29,6 +29,9 @@ typedef struct {
 
 void ImuSvc_Init(void);
 const imu_svc_state_t *ImuSvc_GetState(void);
+/* 浮点定点格式化（如 +1.234）写入 out：避免 %f 拖入 AC5 浮点 printf
+ * 库，固件尺寸关键路径使用；dec=1..3；调用方提供 ≥16B 缓冲。 */
+void ImuSvc_FormatFixed(float v, int dec, char *out);
 
 /* 在线重校准（需静止、尽量水平；阻塞执行 ~1s） */
 void ImuSvc_Recalibrate(void);

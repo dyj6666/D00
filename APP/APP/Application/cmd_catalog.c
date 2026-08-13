@@ -42,6 +42,7 @@
 #include "bsp_i2c.h"
 #include "i2c.h"
 #include "bsp_can.h"
+#include "bsp_power.h"
 #include "can_proto.h"
 #include "lwip/ip4_addr.h"
 #include "task.h"
@@ -254,6 +255,7 @@ static void cmd_net(const char *args)
 static void cmd_lcd(const char *args);
 static void cmd_touch(const char *args);
 static void cmd_beep(const char *args);
+static void cmd_power(const char *args);
 static void cmd_mpu(const char *args);
 static void cmd_can(const char *args);
 static void cmd_ver(const char *args);
@@ -610,6 +612,7 @@ static const cmd_entry_t cmd_table[] = {
     {"touch",        "Touch <info|cal|test>", CMD_TRANSPORT_ALL, cmd_touch},
     {"usr",          "User storage <info|scan|get|set|erase|reset>", CMD_TRANSPORT_ALL, cmd_usr},
     {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
+    {"power",        "Power <on|off|info> (STOP tickless)", CMD_TRANSPORT_ALL, cmd_power},
     {"mpu",          "IMU MPU6050 <info|test|cal>", CMD_TRANSPORT_ALL, cmd_mpu},
     {"can",          "CAN1 <status|reset|loop <on|off|silent>|test <n>|send <id> <hex>>", CMD_TRANSPORT_ALL, cmd_can},
 #if CRASH_INJECT_ENABLE
@@ -1096,23 +1099,38 @@ static void cmd_mpu(const char *args)
 {
     const imu_svc_state_t *s = ImuSvc_GetState();
     if (args == NULL || strcmp(args, "info") == 0) {
+        char b1[16], b2[16], b3[16], b4[16], b5[16], b6[16], b7[16];
+        ImuSvc_FormatFixed(s->roll, 2, b1);
+        ImuSvc_FormatFixed(s->pitch, 2, b2);
+        ImuSvc_FormatFixed(s->yaw, 2, b3);
         LOG_Printf("MPU: ready=%u samples=%lu faults=%lu\r\n",
                    (unsigned)s->ready, (unsigned long)s->sample_count,
                    (unsigned long)s->fault_count);
-        LOG_Printf("MPU: R=%+.2f P=%+.2f Y=%+.2f deg\r\n",
-                   (double)s->roll, (double)s->pitch, (double)s->yaw);
-        LOG_Printf("MPU: A=(%+.3f,%+.3f,%+.3f)g G=(%+.2f,%+.2f,%+.2f)dps T=%+.1fC\r\n",
-                   (double)s->ax, (double)s->ay, (double)s->az,
-                   (double)s->gx, (double)s->gy, (double)s->gz,
-                   (double)s->temp);
+        LOG_Printf("MPU: R=%s P=%s Y=%s deg\r\n",
+                   b1, b2, b3);
+        ImuSvc_FormatFixed(s->ax, 3, b1);
+        ImuSvc_FormatFixed(s->ay, 3, b2);
+        ImuSvc_FormatFixed(s->az, 3, b3);
+        ImuSvc_FormatFixed(s->gx, 2, b4);
+        ImuSvc_FormatFixed(s->gy, 2, b5);
+        ImuSvc_FormatFixed(s->gz, 2, b6);
+        ImuSvc_FormatFixed(s->temp, 1, b7);
+        LOG_Printf("MPU: A=(%s,%s,%s)g G=(%s,%s,%s)dps T=%sC\r\n",
+                   b1, b2, b3, b4, b5, b6, b7);
         return;
     }
     if (strcmp(args, "test") == 0) {
         LOG_Printf("MPU: streaming R/P/Y and G for 2s...\r\n");
         for (int i = 0; i < 20; i++) {
-            LOG_Printf("MPU: %+8.2f %+8.2f %+8.2f | %+6.1f %+6.1f %+6.1f\r\n",
-                       (double)s->roll, (double)s->pitch, (double)s->yaw,
-                       (double)s->gx, (double)s->gy, (double)s->gz);
+            char b1[16], b2[16], b3[16], b4[16], b5[16], b6[16];
+            ImuSvc_FormatFixed(s->roll, 2, b1);
+            ImuSvc_FormatFixed(s->pitch, 2, b2);
+            ImuSvc_FormatFixed(s->yaw, 2, b3);
+            ImuSvc_FormatFixed(s->gx, 1, b4);
+            ImuSvc_FormatFixed(s->gy, 1, b5);
+            ImuSvc_FormatFixed(s->gz, 1, b6);
+            LOG_Printf("MPU: %8s %8s %8s | %6s %6s %6s\r\n",
+                       b1, b2, b3, b4, b5, b6);
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         return;
@@ -1230,8 +1248,8 @@ static void cmd_can(const char *args)
 }
 /* ================== 蜂鸣器命令 ==================
  * 用法：beep [<ms>|test|off] */
-static void cmd_beep(const char *args)
-{
+  static void cmd_beep(const char *args)
+  {
     if (args == NULL || strcmp(args, "test") == 0) {
         Buzzer_BeepPattern(2, 80, 60);
         LOG_Printf("BEEP: double beep\r\n");
@@ -1244,9 +1262,31 @@ static void cmd_beep(const char *args)
     }
     int ms = atoi(args);
     if (ms < 1 || ms > 3000) ms = 100;
-    Buzzer_Beep((uint16_t)ms);
-    LOG_Printf("BEEP: %d ms\r\n", ms);
-}
+      Buzzer_Beep((uint16_t)ms);
+      LOG_Printf("BEEP: %d ms\r\n", ms);
+  }
+
+  /* ================== 低功耗命令 ==================
+   * 用法：power <on|off|info>
+   * on 开启 STOP Tickless（空闲 >2s 时休眠；CAN/ETH 数据暂停）；
+   * off 回到常驻模式（默认，工业安全）；WFI 空闲钩子始终生效。 */
+  static void cmd_power(const char *args)
+  {
+      if (args == NULL || strcmp(args, "info") == 0) {
+          LOG_Printf("PWR: STOP tickless %s (WFI idle always on)\r\n",
+                     BSP_Power_IsEnabled() ? "ON" : "OFF");
+          return;
+      }
+      if (strcmp(args, "on") == 0) {
+          (void)BSP_Power_Enable();
+          return;
+      }
+      if (strcmp(args, "off") == 0) {
+          BSP_Power_Disable();
+          return;
+      }
+      LOG_Printf("Usage: power <on|off|info>\r\n");
+  }
 /* ================== 触摸屏命令 ==================
  * 用法：touch <info|cal|test> */
 static void cmd_touch(const char *args)
