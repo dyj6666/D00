@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -26,6 +26,11 @@ from PyQt5.QtWidgets import (
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dap_core as dc
+
+
+class _UiBridge(QObject):
+    """工作线程 → 主线程信号桥：所有 UI 更新经此路由，杜绝跨线程操作。"""
+    task = pyqtSignal(object, object)
 
 
 class LogHub:
@@ -63,6 +68,8 @@ class MainWindow(QMainWindow):
         self.session = None
         self.cancel_evt = threading.Event()
         self.op_thread = None
+        self.bridge = _UiBridge()
+        self.bridge.task.connect(self._on_bridge_task)
         self.hold_timer = QTimer(self)
         self.hold_timer.timeout.connect(self._hold_feed)
 
@@ -445,6 +452,17 @@ class MainWindow(QMainWindow):
 
     # ---------------- 操作 ----------------
 
+    def _on_bridge_task(self, kind, payload):
+        if kind == "done" and payload:
+            payload()
+        elif kind == "progress":
+            frac, msg = payload
+            self.progress.setValue(int(frac * 100))
+            self.flash_status.setText(msg)
+            self.log.write("I", msg)
+        elif kind == "error":
+            self.log.write("E", payload)
+
     def _require(self):
         if self.session is None:
             raise dc.DapError("请先连接 DAP")
@@ -454,14 +472,14 @@ class MainWindow(QMainWindow):
             try:
                 fn()
             except dc.DapError as e:
-                self.log.write("E", str(e))
+                self.bridge.task.emit("error", str(e))
             except Exception as e:
-                self.log.write("E", "异常: %s" % e)
+                self.bridge.task.emit("error", "异常: %s" % e)
             finally:
                 if progress:
-                    progress(1.0, "结束")
+                    self.bridge.task.emit("progress", (1.0, "结束"))
                 if done:
-                    done()
+                    self.bridge.task.emit("done", done)
 
         self.cancel_evt.clear()
         t = threading.Thread(target=wrapper, daemon=True)
@@ -503,9 +521,7 @@ class MainWindow(QMainWindow):
         self.flash_status.setText("烧录中...")
 
         def progress(frac, msg):
-            self.progress.setValue(int(frac * 100))
-            self.flash_status.setText(msg)
-            self.log.write("I", msg)
+            self.bridge.task.emit("progress", (frac, msg))
 
         def work():
             self._require()

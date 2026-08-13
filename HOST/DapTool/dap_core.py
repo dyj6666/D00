@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import psutil
 
 OPENOCD = r"D:\GIT-SPACE\D00\tools\xpack-openocd-0.12.0-7\bin\openocd.exe"
 SCRIPTS = r"D:\GIT-SPACE\D00\tools\xpack-openocd-0.12.0-7\openocd\scripts"
@@ -57,6 +58,24 @@ class DapError(Exception):
     pass
 
 
+def kill_orphan_openocd():
+    """清理本工具链残留的孤儿 OpenOCD 进程（强杀上位机后子进程常驻）。
+    仅匹配本仓库内置工具链路径，避免误杀其它会话。"""
+    killed = []
+    for p in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            if (p.info["name"] or "").lower() == "openocd.exe":
+                exe = (p.info["exe"] or "").lower()
+                if "xpack-openocd" in exe or "d00" in exe:
+                    p.terminate()
+                    killed.append(p.info["pid"])
+        except Exception:
+            continue
+    if killed:
+        time.sleep(1)
+    return killed
+
+
 class DapSession:
     """管理一个后台 OpenOCD 进程 + telnet 命令通道。"""
 
@@ -79,7 +98,18 @@ class DapSession:
             pre.bind(("127.0.0.1", TELNET_PORT))
             pre.close()
         except OSError:
-            raise DapError("telnet 端口被占用：请先关闭其他 DAP 会话")
+            # 端口被占用：先尝试自动清理残留 OpenOCD，再报错（重试由 GUI 驱动）
+            killed = kill_orphan_openocd()
+            if killed:
+                self.log("已清理残留 OpenOCD: %s，重新探测端口..." % killed)
+                try:
+                    pre = socket.socket()
+                    pre.bind(("127.0.0.1", TELNET_PORT))
+                    pre.close()
+                except OSError:
+                    raise DapError("telnet 端口仍被占用：请关闭其他 DAP 会话")
+            else:
+                raise DapError("telnet 端口被占用：请先关闭其他 DAP 会话")
         args = [OPENOCD, "-s", SCRIPTS,
                 "-f", "interface/cmsis-dap.cfg",
                 "-f", "target/stm32f4x.cfg",
