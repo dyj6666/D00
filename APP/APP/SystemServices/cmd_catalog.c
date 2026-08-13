@@ -128,6 +128,20 @@ static void cmd_net(const char *args)
         }
         return;
     }
+    if (args != NULL && strncmp(args, "gw ", 3) == 0) {
+        const char *gw = args + 3;
+        while (*gw == ' ' || *gw == '\t') gw++;
+        if (*gw == '\0') {
+            LOG_Printf("Usage: net gw <a.b.c.d>\r\n");
+            return;
+        }
+        if (EthApp_SetStaticGWPersist(gw) == 0) {
+            LOG_Printf("Gateway set to %s (saved to EEPROM)\r\n", gw);
+        } else {
+            LOG_Printf("Invalid gateway: %s\r\n", gw);
+        }
+        return;
+    }
     if (args != NULL && strncmp(args, "cap", 3) == 0) {
         const char *m = args + 3;
         while (*m == ' ' || *m == '\t') {
@@ -406,7 +420,7 @@ static void cmd_sntp(const char *args)
         while (*p == ' ' || *p == '\t') p++;
         const uint8_t *srv = SntpSvc_GetServer();
         uint8_t local[4];
-        uint16_t port = 123u;
+        uint16_t port = 1123u;   /* 与 SNTP_PORT 保持一致（本地 NTP 服务器） */
         if (*p != '\0') {
             const char *sp = p;
             char ip[32];

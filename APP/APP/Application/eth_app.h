@@ -42,6 +42,10 @@ int EthApp_SetStaticIP(const char *addr_str);
 /* 修改静态 IP 并持久化到 flash（上电自动恢复）；`net ip <a.b.c.d>` */
 int EthApp_SetStaticIPPersist(const char *addr_str);
 
+/* 修改静态网关并持久化到 flash（上电自动恢复）；`net gw <a.b.c.d>`。
+ * 仅更新网关，保留当前 IP/掩码；供 SNTP/MQTT 等出网服务使用。 */
+int EthApp_SetStaticGWPersist(const char *gw_str);
+
 /* 恢复出厂默认 IP 192.168.1.10 并清除保存配置；`net ip default` */
 int EthApp_SetStaticIPDefault(void);
 

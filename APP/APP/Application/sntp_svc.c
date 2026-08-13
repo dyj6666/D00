@@ -20,7 +20,9 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SNTP_PORT           123u
+#define SNTP_PORT           1123u  /* 本机 NTP 服务器(HOST/ntp_server.py)监听端口：
+                                     * PC 与板子直连无外网，Windows 的 123 端口被
+                                     * w32time 占用，故本地 NTP 用 1123 */
 #define SNTP_EPOCH_DELTA    2208988800UL   /* 1900→1970 秒差 */
 #define SNTP_TZ_OFFSET      28800UL        /* UTC+8（Asia/Shanghai） */
 #define SNTP_AUTO_PERIOD_S  3600u

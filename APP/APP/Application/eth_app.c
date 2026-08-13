@@ -508,6 +508,42 @@ int EthApp_SetStaticIPPersist(const char *addr_str)
     return 0;
 }
 
+int EthApp_SetStaticGWPersist(const char *gw_str)
+{
+    ip4_addr_t gw;
+    if (gw_str == NULL || !ip4addr_aton(gw_str, &gw)) {
+        return -1;
+    }
+
+    /* 以已保存配置为基准（无则取当前 netif 的 IP/掩码），仅更新网关 */
+    net_cfg_t cfg;
+    if (NetConfig_Load(&cfg) == 0) {
+        const ip4_addr_t *ip = ip_2_ip4(&gnetif.ip_addr);
+        const ip4_addr_t *mask = ip_2_ip4(&gnetif.netmask);
+        cfg.ip[0] = ip4_addr1(ip); cfg.ip[1] = ip4_addr2(ip);
+        cfg.ip[2] = ip4_addr3(ip); cfg.ip[3] = ip4_addr4(ip);
+        cfg.mask[0] = ip4_addr1(mask); cfg.mask[1] = ip4_addr2(mask);
+        cfg.mask[2] = ip4_addr3(mask); cfg.mask[3] = ip4_addr4(mask);
+    }
+    cfg.gw[0] = ip4_addr1(&gw); cfg.gw[1] = ip4_addr2(&gw);
+    cfg.gw[2] = ip4_addr3(&gw); cfg.gw[3] = ip4_addr4(&gw);
+
+    /* 立即应用（保留现有 IP/掩码，仅改网关；tcpip 线程安全） */
+    s_net_addr.ip = *ip_2_ip4(&gnetif.ip_addr);
+    s_net_addr.mask = *ip_2_ip4(&gnetif.netmask);
+    s_net_addr.gw = gw;
+    if (tcpip_callback(netif_set_addr_cb, &s_net_addr) != ERR_OK) {
+        return -2;
+    }
+
+    int r = NetConfig_Save(&cfg);
+    LOG_Printf("GW %u.%u.%u.%u %s\r\n",
+               (unsigned)cfg.gw[0], (unsigned)cfg.gw[1],
+               (unsigned)cfg.gw[2], (unsigned)cfg.gw[3],
+               (r == 0) ? "saved to EEPROM" : "applied, save FAILED");
+    return 0;
+}
+
 int EthApp_SetStaticIPDefault(void)
 {
     NetConfig_Clear();

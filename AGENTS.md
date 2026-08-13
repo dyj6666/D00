@@ -39,6 +39,11 @@
 - Python：`D:\Python\python.exe`
 - GCC 交叉编译：cmake + Ninja + arm-none-eabi-gcc
 
+> **烧录约定（2026-08-13 起）**：APP 固件更新**一律走 OTA**
+> （TCP :9020 / HTTP / UART / CAN），不再用 DAP 烧 APP——CMSIS-DAP 探针
+> 连续烧录 320KB 约 20s 即 HID 超时假死（多次中断烧录需物理重插）。
+> DAP 仅用于 BOOT 区更新。
+
 ## 4. 自动开发闭环（全自动模式：每轮任务默认执行）
 
 完成任何固件改动后，按影响范围自动执行，直到全部通过或明确报告失败原因：
