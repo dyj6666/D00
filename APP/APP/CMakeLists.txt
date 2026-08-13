@@ -239,6 +239,19 @@ if(CMAKE_CROSSCOMPILING)
 
     add_executable(APP.elf ${APP_SOURCES} ${APP_ASM})
 
+    # LCD/FSMC 驱动对写时序敏感：-Os 的激进代码生成会改变 FSMC 写间隔，
+    # 导致 ST7789 面板命令/窗口写入错乱（画面重叠/花屏，Keil 正常）。
+    # 对驱动文件降级为 -O1，其余代码保持 -Os。
+    set_source_files_properties(
+        BSP/LCD/lcd.c
+        BSP/LCD/lcd_ex.c
+        BSP/bsp_lcd.c
+        SystemServices/lcd_ui.c
+        Application/lcd_app.c
+        SystemServices/lcd_test.c
+        SystemServices/touch_svc.c
+        PROPERTIES COMPILE_FLAGS "-O1")
+
     add_custom_command(TARGET APP.elf POST_BUILD
         COMMAND ${CMAKE_OBJCOPY} -O binary APP.elf APP.bin
         COMMAND ${CMAKE_SIZE} APP.elf
