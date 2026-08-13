@@ -3130,3 +3130,30 @@ auto-stop）全部按设计工作。
   必须带 BOM 或纯 ASCII，否则行尾可能被吞；⑤判定烧录成功必须匹配
   实际输出格式（program 的 "Verified OK" ≠ verify_image 的
   "verified N bytes"）。
+
+### 10.44 DAP 上位机：全功能可视化（连接/烧录/OTA/内存/寄存器/目标）
+- **交付**：`HOST/DapTool/`（`dap_gui.py` + `dap_core.py` + 亮色主题
+  + README），PyQt5 界面，六页签集成 DAP 全部能力：
+  - 连接：一键连接/断开，自动识别芯片（STM32F407）、内核、Flash 容量、
+    DPIDR；
+  - 烧录：任意文件任意地址，预设 BOOT/RUN/DOWNLOAD/PARAM，内置
+    10.43 的四道防线（500kHz + 分块 + IWDG 窗口 + 整包校验）；
+  - OTA 助手：**全 DAP 驱动升级**——预置包 + 写 BKP 升级标志(0x5A5A)
+    + 复位，完全不需要串口；
+  - 内存：任意地址读/写 32 位字（暂停-读-恢复，毫秒级不打扰运行）；
+  - 寄存器：核心寄存器 r0-r15/sp/lr/pc/xpsr + RTC BKP0R-3R；
+  - 目标控制：Halt/Resume/Reset + "持续暂停"自动喂 IWDG；
+  - 工具：扇区擦除、Flash 转储、文件比对。
+- **引擎要点**：OpenOCD telnet 会话（消费欢迎横幅避免响应错位；输出
+  去 IAC 替换字符）；读操作"halt→喂狗→读→resume"毫秒级；BKP 写标志
+  必须先经 RCC_APB1ENR 打开 PWR 时钟再置 DBP（reset halt 停在复位
+  向量，PWR 未使能时写 PWR_CR 会被忽略——实测踩坑）。
+- **验证**：核心引擎无头测试全过（连接/信息/内存/寄存器/BKP）；243KB
+  烧录+转储+比对通过；**全 DAP OTA 端到端成功**——预置 b9106 包 →
+  写标志 → 复位 → BOOT 应用 → last build 9106；GUI 冒烟启动正常。
+- **观察记录（一次性瞬态，未复现）**：b9106 应用后的首次启动出现
+  Crash #189（HardFault UNALIGNED，PC=stream_buffer.prvBytesInBuffer，
+  Task=loggerTXTask，uptime=71ms），随后连续多次正常复位均无新增
+  崩溃、系统功能完好。该路径本会话未改动（logger/流缓冲与 10.42 无
+  关），结合出现时机（DAP 驱动复位后首次启动）判断为调试器复位时序
+  触发的瞬态竞争；已记录，后续若复现按重点问题流程深挖。

@@ -1,0 +1,199 @@
+/* ================================================================
+ * D00 DAP 调试台 · 亮色主题
+ * 浅蓝灰底 / 白卡片 / 蓝紫主色 / 充足留白
+ * ================================================================ */
+
+QMainWindow, QWidget {
+    background-color: #f2f5fa;
+    color: #1e293b;
+    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    font-size: 14px;
+}
+
+QLabel#app_title {
+    color: #0f172a;
+    font-size: 23px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+QLabel#app_subtitle {
+    color: #64748b;
+    font-size: 13px;
+}
+QLabel#info_line {
+    color: #0f172a;
+    font-size: 13px;
+    font-weight: 600;
+}
+QLabel#hint {
+    color: #64748b;
+    font-size: 12px;
+}
+
+QLabel#device_pill {
+    background-color: #e2e8f0;
+    border: 1px solid #cbd5e1;
+    border-radius: 16px;
+    padding: 8px 22px;
+    color: #475569;
+    font-weight: 700;
+}
+QLabel#device_pill[cls="ok"] {
+    background-color: #dcfce7;
+    border: 1px solid #bbf7d0;
+    color: #15803d;
+}
+QLabel#device_pill[cls="off"] {
+    background-color: #fee2e2;
+    border: 1px solid #fecaca;
+    color: #b91c1c;
+}
+
+QPushButton {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 8px 18px;
+    color: #334155;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background-color: #f8fafc;
+    border-color: #94a3b8;
+}
+QPushButton:pressed {
+    background-color: #e2e8f0;
+}
+QPushButton:disabled {
+    color: #94a3b8;
+    background-color: #f1f5f9;
+    border-color: #e2e8f0;
+}
+QPushButton#btn_primary {
+    background-color: #4f46e5;
+    border: none;
+    color: #ffffff;
+}
+QPushButton#btn_primary:hover {
+    background-color: #4338ca;
+}
+QPushButton#btn_primary:disabled {
+    background-color: #c7d2fe;
+    color: #eef2ff;
+}
+
+QGroupBox {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    margin-top: 14px;
+    padding: 16px 14px 14px 14px;
+    font-weight: 700;
+    color: #0f172a;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 14px;
+    padding: 0 6px;
+    color: #4f46e5;
+}
+
+QLineEdit, QComboBox, QSpinBox {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 7px 10px;
+    color: #0f172a;
+    selection-background-color: #c7d2fe;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border-color: #4f46e5;
+}
+
+QTabWidget::pane {
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background-color: #f8fafc;
+    top: -1px;
+}
+QTabBar::tab {
+    background: #e2e8f0;
+    color: #475569;
+    border: 1px solid #cbd5e1;
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 9px 22px;
+    font-weight: 600;
+    margin-right: 3px;
+}
+QTabBar::tab:selected {
+    background: #4f46e5;
+    color: #ffffff;
+    border-color: #4f46e5;
+}
+
+QProgressBar {
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    background-color: #e2e8f0;
+    text-align: center;
+    color: #0f172a;
+    height: 22px;
+}
+QProgressBar::chunk {
+    border-radius: 7px;
+    background-color: #4f46e5;
+}
+
+QPlainTextEdit {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    color: #0f172a;
+    font-family: "Consolas", "Microsoft YaHei", monospace;
+    font-size: 12px;
+    padding: 8px;
+}
+
+QTableWidget {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    gridline-color: #e2e8f0;
+}
+QHeaderView::section {
+    background-color: #f1f5f9;
+    color: #334155;
+    border: none;
+    border-bottom: 1px solid #cbd5e1;
+    padding: 6px 10px;
+    font-weight: 700;
+}
+
+QDockWidget {
+    color: #0f172a;
+    font-weight: 700;
+}
+QDockWidget::title {
+    background: #e2e8f0;
+    padding: 6px 10px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+
+QCheckBox {
+    spacing: 8px;
+    color: #334155;
+}
+QCheckBox::indicator {
+    width: 17px;
+    height: 17px;
+    border: 1px solid #94a3b8;
+    border-radius: 5px;
+    background: #ffffff;
+}
+QCheckBox::indicator:checked {
+    background: #4f46e5;
+    border-color: #4f46e5;
+}
