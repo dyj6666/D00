@@ -10,6 +10,7 @@
 
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -346,23 +347,60 @@ class MainWindow(QMainWindow):
 
     def _connect(self):
         def work():
-            try:
-                self.log.write("I", "启动 OpenOCD 会话...")
-                self.session = dc.DapSession(
-                    clock_khz=int(self.f_clock.currentText().split()[0]),
-                    log=lambda m: self.log.write("D", m))
-                self.session.start()
-                info = self.session.info
-                self.log.write("S", "连接成功: %s  core=%s  flash=%sKB" % (
-                    info.get("device_id", "?"), info.get("core", "?"),
-                    info.get("flash_kb", "?")))
-            except dc.DapError as e:
-                self.log.write("E", str(e))
-                self.session = None
+            # 最多 2 次尝试：首次失败自动 USB 重枚举（免拔插）后重试
+            for attempt in (1, 2):
+                try:
+                    self.log.write("I", "启动 OpenOCD 会话（第 %d 次）..." % attempt)
+                    self.session = dc.DapSession(
+                        clock_khz=int(self.f_clock.currentText().split()[0]),
+                        log=lambda m: self.log.write("D", m))
+                    self.session.start()
+                    info = self.session.info
+                    self.log.write("S", "连接成功: %s  core=%s  flash=%sKB" % (
+                        info.get("device_id", "?"), info.get("core", "?"),
+                        info.get("flash_kb", "?")))
+                    return
+                except dc.DapError as e:
+                    self.log.write("E", str(e))
+                    self.session = None
+                    if attempt == 1 and self._recover_usb():
+                        self.log.write("I", "已重枚举探针，自动重试...")
+                        continue
+                    self._connect_error = str(e)
+                    return
+                except Exception as e:
+                    self.log.write("E", "异常: %s" % e)
+                    self.session = None
+                    self._connect_error = str(e)
+                    return
 
         self._run_thread(work, done=self._on_connect_done)
 
+    def _recover_usb(self):
+        """尽力而为的 DAP USB 重枚举（需管理员）；失败不阻塞，交人工重插。"""
+        ps = (
+            "$d = Get-PnpDevice | Where-Object { $_.FriendlyName -match "
+            "'CMSIS-DAP|DAP' -or $_.InstanceId -match 'VID_0D28' }; "
+            "if ($d) { $d | Disable-PnpDevice -Confirm:$false -ErrorAction "
+            "SilentlyContinue; Start-Sleep -Seconds 2; "
+            "$d | Enable-PnpDevice -Confirm:$false -ErrorAction SilentlyContinue }"
+        )
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True, timeout=12)
+            self.log.write("D", "USB 重枚举: rc=%d" % r.returncode)
+            time.sleep(1)
+            return r.returncode == 0
+        except Exception as e:
+            self.log.write("D", "USB 重枚举不可用: %s" % e)
+            return False
+
     def _on_connect_done(self):
+        if getattr(self, "_connect_error", None):
+            QMessageBox.warning(self, "连接失败", self._connect_error)
+            self._connect_error = None
+            return
         if self.session:
             info = self.session.info
             self.status_pill.setText("● 已连接")

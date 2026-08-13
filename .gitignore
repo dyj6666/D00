@@ -86,3 +86,4 @@ tools/
 
 # PC 侧服务运行时日志（NTP/DNS/DHCP/MQTT 等）
 HOST/_*.txt
+HOST/DapTool/_*.log
