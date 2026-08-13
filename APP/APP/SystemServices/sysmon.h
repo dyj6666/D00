@@ -6,6 +6,12 @@
 #ifndef SYSMON_H
 #define SYSMON_H
 
+/** 监控项采集函数：采集并直接打印到当前终端 */
+typedef void (*sysmon_item_func)(void);
+
+/** 注册一个监控项（应用/服务模块在各自 Init 中调用，打印时按注册顺序执行） */
+int SysMon_RegisterItem(const char *name, sysmon_item_func print);
+
 void SysMon_Init(void);
 
 #endif

@@ -92,7 +92,6 @@ if(CMAKE_CROSSCOMPILING)
     SystemServices/logger.c
     SystemServices/shell.c
     SystemServices/cmd_shell.c
-    SystemServices/cmd_catalog.c
     SystemServices/cmd_can.c
     SystemServices/net_config.c
     SystemServices/usr_store.c
@@ -116,6 +115,7 @@ if(CMAKE_CROSSCOMPILING)
     SystemServices/imu_fusion.c
     SystemServices/imu_svc.c
     Application/key_app.c
+    Application/cmd_catalog.c
     Application/led_app.c
     Application/ota_agent.c
     Application/ota_can_svc.c
@@ -133,6 +133,7 @@ if(CMAKE_CROSSCOMPILING)
     Application/ota_tcp_svc.c
     Application/ota_http_svc.c
     BSP/bsp_system.c
+    BSP/bsp_flash.c
     BSP/bsp_uart.c
     BSP/bsp_can.c
     BSP/bsp_i2c.c

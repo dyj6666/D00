@@ -39,6 +39,9 @@ void IcmpSvc_Init(void);
 
 const icmp_svc_stat_t *IcmpSvc_GetStat(void);
 
+/* 监控项：打印 ICMP 统计（注册到 sysmon） */
+void IcmpSvc_PrintStats(void);
+
 /* 清零统计（保留 enabled/limit 配置）；`icmp reset` */
 void IcmpSvc_Reset(void);
 

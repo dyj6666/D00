@@ -58,6 +58,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+
+  architecture-layering:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 分层守门（禁 HAL/Application 头越层）
+        run: python APP/APP/Script/check_layering.py .
         with:
           python-version: "3.11"
       - name: Install deps

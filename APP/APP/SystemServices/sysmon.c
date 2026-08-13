@@ -1,4 +1,4 @@
-/* ================================================================
+﻿/* ================================================================
  * sysmon —— 系统监控：堆/栈/任务状态周期汇总
  *
  * 架构位置：APP 服务层；sysmon 命令与 LCD 页共用
@@ -15,8 +15,6 @@
 #include "watchdog.h"
 #include "data_link.h"
 #include "err_mgr.h"
-#include "eth_app.h"
-#include "icmp_svc.h"
 
 #include <string.h>
 
@@ -43,6 +41,22 @@ typedef struct {
     monitor_item_func print;   // 采集+打印函数
 } monitor_item_t;
 
+/* 监控项注册表（可扩展：模块在各自 Init 注册，避免 sysmon 向上依赖应用层） */
+#define SYSMON_ITEMS_MAX 24
+static monitor_item_t s_monitor_items[SYSMON_ITEMS_MAX];
+static uint8_t s_monitor_count = 0;
+
+int SysMon_RegisterItem(const char *name, monitor_item_func print)
+{
+    if (name == NULL || print == NULL || s_monitor_count >= SYSMON_ITEMS_MAX) {
+        return -1;
+    }
+    s_monitor_items[s_monitor_count].name = name;
+    s_monitor_items[s_monitor_count].print = print;
+    s_monitor_count++;
+    return 0;
+}
+
 /* ---- 各监控项的采集打印函数 ---- */
 static void print_event_bus_stats(void)
 {
@@ -56,43 +70,6 @@ static void print_data_link_stats(void)
     LOG_Printf("  Cmd queue lost: %lu\r\n", DataLink_GetCmdLostCount());
     LOG_Printf("  TX frames lost: %lu\r\n", DataLink_GetTxLostCount());
     LOG_Printf("  TX errors:      %lu\r\n", DataLink_GetTxErrorCount());
-}
-
-static void print_eth_stats(void)
-{
-    EthApp_RefreshStatus();
-    const eth_status_t *st = EthApp_GetStatus();
-    LOG_Printf("=== ETH ===\r\n");
-    LOG_Printf("  Link: %s", st->link_up ? "UP" : "DOWN");
-    if (st->link_up) {
-        LOG_Printf("  IP: %u.%u.%u.%u  MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
-                   st->ip[0], st->ip[1], st->ip[2], st->ip[3],
-                   st->mac[0], st->mac[1], st->mac[2],
-                   st->mac[3], st->mac[4], st->mac[5]);
-        LOG_Printf("  RX: %lu packets  TX: %lu packets  UP: %lu s\r\n",
-                   (unsigned long)st->rx_packets,
-                   (unsigned long)st->tx_packets,
-                   (unsigned long)st->link_uptime_s);
-    } else {
-        LOG_Printf("\r\n");
-    }
-}
-
-static void print_icmp_stats(void)
-{
-    const icmp_svc_stat_t *st = IcmpSvc_GetStat();
-    LOG_Printf("=== ICMP ===\r\n");
-    LOG_Printf("  Echo rx/tx/drop: %lu/%lu/%lu  Other rx: %lu\r\n",
-               (unsigned long)st->echo_rx,
-               (unsigned long)st->echo_tx,
-               (unsigned long)st->echo_drop,
-               (unsigned long)st->other_rx);
-    LOG_Printf("  Rate: %lu pps (peak %lu)  RTT: %lu/%lu/%lu us\r\n",
-               (unsigned long)st->rate_pps,
-               (unsigned long)st->peak_pps,
-               (unsigned long)st->min_rtt_us,
-               (unsigned long)st->avg_rtt_us,
-               (unsigned long)st->max_rtt_us);
 }
 
 static void print_crash_info(void)
@@ -211,23 +188,6 @@ static void print_reset_reason(void)
     }
 }
 
-/* ---- 监控项注册表（添加新监控只需在这里加一行） ---- */
-static const monitor_item_t monitor_items[] = {
-    {"Tasks",       print_task_list},
-    {"CPU Usage",   print_cpu_usage},
-    {"Heap",        print_heap_info},
-    {"Watchdog",    print_watchdog_status},
-    {"Reset Reason",print_reset_reason},
-      {"Event Bus",   print_event_bus_stats},
-      {"DataLink",    print_data_link_stats},
-      {"ETH",         print_eth_stats},
-      {"ICMP",        print_icmp_stats},
-      {"Last Crash",  print_crash_info},
-    // 示例：未来添加监控变量
-    // {"Custom Sensor", print_custom_sensor},
-};
-#define MONITOR_ITEM_COUNT (sizeof(monitor_items) / sizeof(monitor_items[0]))
-
 /* ================== 事件处理：收到 sysmon 请求时打印所有监控项 ================== */
 static void handle_sysmon_msg(const message_t *msg)
 {
@@ -235,9 +195,9 @@ static void handle_sysmon_msg(const message_t *msg)
     if (msg->hdr.type != MSG_CMD_SYSMON) return;
 
     LOG_Printf("\r\n===== SYSTEM MONITOR =====\r\n");
-    for (size_t i = 0; i < MONITOR_ITEM_COUNT; i++) {
-        if (monitor_items[i].print) {
-            monitor_items[i].print();
+    for (uint8_t i = 0; i < s_monitor_count; i++) {
+        if (s_monitor_items[i].print) {
+            s_monitor_items[i].print();
             /* 节间退让：UART@115200 排水 ~11.5KB/s，不加延时整段输出会
              * 撑满 2KB LOG 流缓冲导致中段被截断（sysmon 曾只显示首行） */
             vTaskDelay(pdMS_TO_TICKS(25));
@@ -266,4 +226,13 @@ void SysMon_Init(void)
     // 2. 订阅 sysmon 命令事件（使用新消息类型）
     EventBus_Subscribe(MSG_CMD_SYSMON, handle_sysmon_msg);
 
+    /* 核心监控项（服务层自身）；ETH/ICMP 等由各自应用模块注册 */
+    SysMon_RegisterItem("Tasks",        print_task_list);
+    SysMon_RegisterItem("CPU Usage",    print_cpu_usage);
+    SysMon_RegisterItem("Heap",         print_heap_info);
+    SysMon_RegisterItem("Watchdog",     print_watchdog_status);
+    SysMon_RegisterItem("Reset Reason", print_reset_reason);
+    SysMon_RegisterItem("Event Bus",    print_event_bus_stats);
+    SysMon_RegisterItem("DataLink",     print_data_link_stats);
+    SysMon_RegisterItem("Last Crash",   print_crash_info);
 }

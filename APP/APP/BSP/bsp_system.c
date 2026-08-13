@@ -16,6 +16,22 @@ void BSP_DelayMs(uint32_t ms)
     HAL_Delay(ms);
 }
 
+uint32_t BSP_GetTick(void)
+{
+    return HAL_GetTick();
+}
+
+void BSP_DWT_Enable(void)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+uint32_t BSP_DWT_GetCycleCount(void)
+{
+    return DWT->CYCCNT;
+}
+
 bsp_reset_reason_t BSP_GetResetReason(void)
 {
     uint32_t flags = RCC->CSR;

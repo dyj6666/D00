@@ -7,6 +7,7 @@
  * ================================================================ */
 #include "module.h"
 #include "logger.h"
+#include "cmd_catalog.h"
 #include "led_app.h"
 #include "key_app.h"
 #include "buzzer_app.h"
@@ -41,8 +42,9 @@
 /* 模块注册表：priority 数值小者先初始化。
  * 依赖顺序：VAR -> DataLink -> LA_Buffer -> LA_Sample -> 应用模块 -> SysMon/DataAgent */
 static module_desc_t module_table[] = {
-    MODULE_INIT("Cmd",    2,  Cmd_Init),
-    MODULE_INIT("CanBsp", 3,  BSP_CAN_Init),
+MODULE_INIT("Cmd",    2,  Cmd_Init),
+MODULE_INIT("CmdCat", 3,  CmdCatalog_Register),
+MODULE_INIT("CanBsp", 3,  BSP_CAN_Init),
     MODULE_INIT("USR",    3,  UsrStore_Init),
     MODULE_INIT("Shell",  4,  Shell_Init),
     MODULE_INIT("CmdCan", 5,  CmdCan_Register),

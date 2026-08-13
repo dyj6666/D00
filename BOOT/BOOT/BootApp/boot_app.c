@@ -164,7 +164,19 @@ static uint8_t boot_check_app_valid(uint32_t addr)
     return 1;
 }
 
-/* 跳转到 APP：清外设/中断、设 VTOR、切栈、跳转 */
+/* 裸跳板：设置 MSP 后立即跳转，中间无任何栈操作。
+ * 不能写成普通 C 调用（编译器尾声可能在切栈后用新栈弹栈 → 越界 HardFault）。 */
+__asm void boot_jump_exec(uint32_t sp, uint32_t pc)
+{
+    msr msp, r0
+    dsb
+    isb
+    bx  r1
+}
+
+/* 跳转到 APP：清外设/中断、设 VTOR、切栈、跳转。
+ * 切栈动作在裸跳板内完成，本函数尾声即使被编译器合并为尾调用，
+ * 弹栈也发生在切栈之前（用 BOOT 自己的栈），从根上杜绝越界弹栈。 */
 static void boot_jump_to_app(uint32_t addr)
 {
     uint32_t app_stack = *(volatile uint32_t *)addr;
@@ -202,11 +214,9 @@ static void boot_jump_to_app(uint32_t addr)
     __DSB();
     __ISB();
 
-    __set_MSP(app_stack);
     __DSB();
     __ISB();
-
-    ((void (*)(void))app_reset)();
+    boot_jump_exec(app_stack, app_reset);
 }
 
 static void boot_enter_upgrade_mode(void);

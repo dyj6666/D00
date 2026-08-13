@@ -1,4 +1,4 @@
-/* ================================================================
+﻿/* ================================================================
  * ota_agent —— 运行时 OTA：下载到 DOWNLOAD 区 + 启动确认
  *
  * 架构位置：APP 应用层；供 data_link / cmd_shell / OtaTcp / OtaHttp 调用
@@ -17,10 +17,12 @@
 #include "event_bus.h"
 #include "logger.h"
 #include "msg_types.h"
-#include "stm32f4xx_hal.h"
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "buzzer_app.h"
+#include "bsp_flash.h"
+#include "data_link.h"
+#include "protocol.h"
 
 /* ---------------- 参数区（与 BOOT/boot_param.c 结构一致） ---------------- */
 #pragma pack(1)
@@ -45,8 +47,6 @@ typedef struct {
     uint32_t crc32;       /* 覆盖 magic..received */
 } ota_session_t;          /* 20B，槽间距 32B */
 #pragma pack()
-
-static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len);
 
 /* ---------------- 内部状态 ---------------- */
 static volatile uint8_t  ota_state = OTA_ST_IDLE;
@@ -102,7 +102,7 @@ static void ota_session_save(uint32_t slot, uint32_t version,
     s.total = total;
     s.received = received;
     s.crc32 = ota_session_crc(&s);
-    bool ok = ota_flash_write(OTA_SESSION_BASE + slot * 32,
+    bool ok = BSP_Flash_Write(OTA_SESSION_BASE + slot * 32,
                               (const uint8_t *)&s, sizeof(s));
     if (!ok) {
         LOG_Printf("OTA: sess save FAIL slot=%lu addr=0x%08lX\r\n",
@@ -144,7 +144,7 @@ static void ota_session_clear(void)
             p[6] == 0xFFFFFFFFu && p[7] == 0xFFFFFFFFu) {
             continue;
         }
-        (void)ota_flash_write(OTA_SESSION_BASE + i * 32u,
+        (void)BSP_Flash_Write(OTA_SESSION_BASE + i * 32u,
                               (const uint8_t *)zero, sizeof(zero));
     }
 }
@@ -159,122 +159,6 @@ static void handle_ota_start_msg(const message_t *msg)
     BSP_RTC_WriteBackupReg(0, BOOT_FLAG_UPGRADE);
     BSP_DelayMs(100);
     BSP_SystemReset();
-}
-
-/* ---------------- Flash 操作（HAL） ---------------- */
-/** @brief 把 Flash 绝对地址映射为扇区号（覆盖 0x0800_0000~0x080F_FFFF） */
-static uint32_t ota_flash_sector_of(uint32_t addr)
-{
-    if (addr >= 0x08000000 && addr < 0x08004000) return FLASH_SECTOR_0;
-    if (addr < 0x08008000) return FLASH_SECTOR_1;
-    if (addr < 0x0800C000) return FLASH_SECTOR_2;
-    if (addr < 0x08010000) return FLASH_SECTOR_3;
-    if (addr < 0x08020000) return FLASH_SECTOR_4;
-    if (addr < 0x08040000) return FLASH_SECTOR_5;
-    if (addr < 0x08060000) return FLASH_SECTOR_6;
-    if (addr < 0x08080000) return FLASH_SECTOR_7;
-    if (addr < 0x080A0000) return FLASH_SECTOR_8;
-    if (addr < 0x080C0000) return FLASH_SECTOR_9;
-    if (addr < 0x080E0000) return FLASH_SECTOR_10;
-    return FLASH_SECTOR_11;
-}
-
-/**
- * @brief  擦除 [addr, addr+len) 覆盖的全部扇区
- * @param  addr  起始地址
- * @param  len   长度；0 表示仅擦 addr 所在扇区
- * @return true=全部扇区擦除成功
- * @note   DOWNLOAD 区 256KB（扇区 9+10）必须整区擦除后再写，
- *         否则编程 0→1 会失败
- */
-static bool ota_flash_erase(uint32_t addr, uint32_t len)
-{
-    uint32_t start_sector = ota_flash_sector_of(addr);
-    uint32_t end_sector = (len == 0) ? start_sector
-                                     : ota_flash_sector_of(addr + len - 1);
-    for (uint32_t sector = start_sector; sector <= end_sector; sector++) {
-        HAL_FLASH_Unlock();
-        /* 清全部错误标志（含 OPTERR/SOP）：RDP 解除或此前操作可能残留，
-         * HAL_FLASHEx_Erase 检测到错误会直接返回 HAL_ERROR */
-        __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_PGSERR | FLASH_FLAG_PGPERR |
-                               FLASH_FLAG_PGAERR | FLASH_FLAG_WRPERR |
-                               FLASH_FLAG_OPERR);
-        FLASH_EraseInitTypeDef er = {
-            .TypeErase = FLASH_TYPEERASE_SECTORS,
-            .Sector = sector,
-            .NbSectors = 1,
-            .VoltageRange = FLASH_VOLTAGE_RANGE_3,
-        };
-        uint32_t err = 0;
-        HAL_StatusTypeDef st = HAL_FLASHEx_Erase(&er, &err);
-        HAL_FLASH_Lock();
-        LOG_Printf("OTA: flash erase sector=%lu st=%d err=0x%08lX\r\n",
-                   (unsigned long)sector, (int)st, (unsigned long)err);
-        if (st != HAL_OK || err != 0xFFFFFFFF) return false;
-    }
-    return true;
-}
-
-/**
- * @brief  单字 Flash 编程（每字短暂关中断）
- * @note   CAN 1Mbps 下整段关中断会撑爆 3 深 FIFO（OTA 数据帧连续到达），
- *         改为逐字关中断：每字编程 ~100µs，帧间隔 130µs，FIFO 可被 ISR
- *         在两字之间排空；写者唯一性由 OTA 互斥量保证，原子性不受影响。
- */
-static bool flash_program_word(uint32_t addr, uint32_t val)
-{
-    __disable_irq();   /* 仅保护单字编程：防止与其它 Flash 访问交错 */
-    HAL_StatusTypeDef hs = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, addr, val);
-    __enable_irq();
-    return (hs == HAL_OK);
-}
-
-/**
- * @brief  向 Flash 写入任意长度数据（自动处理字对齐）
- * @param  addr  目标地址（任意字节对齐）
- * @param  data  源数据指针
- * @param  len   字节数
- * @return true=全部写入成功
- * @note   逐字关中断（见 flash_program_word）；互斥量保证唯一写者
- */
-static bool ota_flash_write(uint32_t addr, const uint8_t *data, uint32_t len)
-{
-    if (len == 0) return true;
-    HAL_FLASH_Unlock();
-
-    /* 前导非对齐字节 */
-    while ((addr & 0x03) && len > 0) {
-        uint32_t wa = addr & ~0x03u;
-        uint32_t val = *(volatile uint32_t *)wa;
-        ((uint8_t *)&val)[addr & 0x03] = *data;
-        if (!flash_program_word(wa, val)) {
-            HAL_FLASH_Lock();
-            return false;
-        }
-        addr++; data++; len--;
-    }
-    while (len >= 4) {
-        uint32_t word;
-        memcpy(&word, data, 4);
-        if (!flash_program_word(addr, word)) {
-            HAL_FLASH_Lock();
-            return false;
-        }
-        addr += 4; data += 4; len -= 4;
-    }
-    /* 尾部非对齐 */
-    while (len > 0) {
-        uint32_t wa = addr & ~0x03u;
-        uint32_t val = *(volatile uint32_t *)wa;
-        ((uint8_t *)&val)[addr & 0x03] = *data;
-        if (!flash_program_word(wa, val)) {
-            HAL_FLASH_Lock();
-            return false;
-        }
-        addr++; data++; len--;
-    }
-    HAL_FLASH_Lock();
-    return true;
 }
 
 /** @brief 计算参数块 CRC32（只覆盖 crc32 字段之前的数据） */
@@ -308,9 +192,9 @@ static void ota_confirm_startup(void)
     p.boot_state = OTA_STATE_NORMAL;
     p.boot_count = 0;
     p.crc32 = ota_param_crc(&p);
-    bool e = ota_flash_erase(OTA_PARAM_ADDR, 0);
-    bool w0 = ota_flash_write(OTA_PARAM_ADDR, (const uint8_t *)&p, sizeof(p));
-    bool w1 = ota_flash_write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
+    bool e = BSP_Flash_EraseRange(OTA_PARAM_ADDR, 0);
+    bool w0 = BSP_Flash_Write(OTA_PARAM_ADDR, (const uint8_t *)&p, sizeof(p));
+    bool w1 = BSP_Flash_Write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
                               (const uint8_t *)&p, sizeof(p));
     LOG_Printf("OTA: confirm erase=%d write0=%d write1=%d\r\n",
                (int)e, (int)w0, (int)w1);
@@ -365,11 +249,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
         LOG_Printf("OTA: resume session from %lu/%lu\r\n",
                    (unsigned long)sess.received, (unsigned long)sess.total);
         /* 恢复路径不擦下载区：重置 Flash 控制器状态，避免残留导致编程 BSY 卡死 */
-        __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_PGSERR | FLASH_FLAG_PGPERR |
-                               FLASH_FLAG_PGAERR | FLASH_FLAG_WRPERR |
-                               FLASH_FLAG_OPERR);
-        HAL_FLASH_Unlock();
-        HAL_FLASH_Lock();
+        BSP_Flash_ResetController();
         ota_total = size;
         ota_received = sess.received;
         ota_state = OTA_ST_RECEIVING;
@@ -379,7 +259,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     }
 
     LOG_Printf("OTA: erasing download area...\r\n");
-    if (!ota_flash_erase(OTA_DOWNLOAD_ADDR, OTA_DOWNLOAD_SIZE)) {
+    if (!BSP_Flash_EraseRange(OTA_DOWNLOAD_ADDR, OTA_DOWNLOAD_SIZE)) {
         LOG_Printf("OTA: download erase FAILED\r\n");
         ota_mutex_give();
         Buzzer_OtaFail();
@@ -417,11 +297,11 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
         ota_mutex_give();
         return 2;
     }
-    if (!ota_flash_write(OTA_DOWNLOAD_ADDR + offset, data, len)) {
+    if (!BSP_Flash_Write(OTA_DOWNLOAD_ADDR + offset, data, len)) {
         uint32_t probe = *(volatile uint32_t *)(OTA_DOWNLOAD_ADDR + offset);
         LOG_Printf("OTA: flash write FAILED at %lu probe=0x%08X SR=0x%08X\r\n",
                    (unsigned long)offset, (unsigned)probe,
-                   (unsigned)(FLASH->SR));
+                   (unsigned)BSP_Flash_GetStatusSR());
         ota_state = OTA_ST_IDLE;
         ota_mutex_give();
         Buzzer_OtaFail();
@@ -482,9 +362,9 @@ uint8_t Ota_End(void)
     param.boot_count = 0;
     param.last_error = 0;
     param.crc32 = ota_param_crc(&param);
-    ota_flash_erase(OTA_PARAM_ADDR, 0);
-    ota_flash_write(OTA_PARAM_ADDR, (const uint8_t *)&param, sizeof(param));
-    ota_flash_write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
+    BSP_Flash_EraseRange(OTA_PARAM_ADDR, 0);
+    BSP_Flash_Write(OTA_PARAM_ADDR, (const uint8_t *)&param, sizeof(param));
+    BSP_Flash_Write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
                     (const uint8_t *)&param, sizeof(param));
 
     BSP_RTC_WriteBackupReg(0, BOOT_FLAG_UPGRADE);
@@ -532,9 +412,9 @@ void Ota_ForceRollbackTest(void)
     param.boot_count = 3;      /* 与 BOOT MAX_BOOT_TRIES 一致：下次复位即回滚 */
     param.last_error = 0;
     param.crc32 = ota_param_crc(&param);
-    ota_flash_erase(OTA_PARAM_ADDR, 0);
-    ota_flash_write(OTA_PARAM_ADDR, (const uint8_t *)&param, sizeof(param));
-    ota_flash_write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
+    BSP_Flash_EraseRange(OTA_PARAM_ADDR, 0);
+    BSP_Flash_Write(OTA_PARAM_ADDR, (const uint8_t *)&param, sizeof(param));
+    BSP_Flash_Write(OTA_PARAM_ADDR + OTA_PARAM_SLOT_OFFSET,
                     (const uint8_t *)&param, sizeof(param));
     LOG_Printf("OTA: rollback test armed (PENDING+MAX), resetting...\r\n");
     BSP_DelayMs(100);
@@ -543,8 +423,82 @@ void Ota_ForceRollbackTest(void)
 }
 
 /** @brief OTA Agent 初始化：订阅命令、执行启动确认、打印参数区状态 */
+/* HOSTLINK 数据链路的 OTA 命令处理（BEGIN/DATA/END/STATUS/RESET）。
+ * 由 DataLink_SetOtaHandler 注册，data_link 层只透传帧，不感知 OTA 细节。 */
+static void data_link_ota_handler(uint8_t cmd, const uint8_t *payload,
+                                  uint8_t payload_len)
+{
+    switch (cmd) {
+        case CMD_OTA_BEGIN: {
+            /* 请求：version(u32 LE) + size(u32 LE) */
+            if (payload_len != 8u) {
+                DataLink_SendError(cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                break;
+            }
+            uint32_t ver = (uint32_t)(payload[0] | (payload[1] << 8) |
+                                      (payload[2] << 16) | (payload[3] << 24));
+            uint32_t size = (uint32_t)(payload[4] | (payload[5] << 8) |
+                                       (payload[6] << 16) | (payload[7] << 24));
+            uint8_t st = Ota_Begin(ver, size);
+            DataLink_SendFrame(cmd, &st, 1);
+            break;
+        }
+        case CMD_OTA_DATA: {
+            /* 请求：offset(u32 LE) + data(<=120B) */
+            if (payload_len < 5u || payload_len > 4u + OTA_CHUNK_MAX) {
+                DataLink_SendError(cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                break;
+            }
+            uint32_t off = (uint32_t)(payload[0] | (payload[1] << 8) |
+                                      (payload[2] << 16) | (payload[3] << 24));
+            uint8_t st = Ota_Data(off, &payload[4],
+                                  (uint16_t)(payload_len - 4u));
+            uint32_t rx = 0, total = 0;
+            uint8_t state = 0;
+            Ota_Status(&state, &rx, &total);
+            uint8_t resp[5] = { st, 0, 0, 0, 0 };
+            resp[1] = (uint8_t)(rx & 0xFF);
+            resp[2] = (uint8_t)((rx >> 8) & 0xFF);
+            resp[3] = (uint8_t)((rx >> 16) & 0xFF);
+            resp[4] = (uint8_t)((rx >> 24) & 0xFF);
+            DataLink_SendFrame(cmd, resp, sizeof(resp));
+            break;
+        }
+        case CMD_OTA_END: {
+            uint8_t st = Ota_End();
+            DataLink_SendFrame(cmd, &st, 1);
+            break;
+        }
+        case CMD_OTA_STATUS: {
+            uint8_t state = 0;
+            uint32_t rx = 0, total = 0;
+            Ota_Status(&state, &rx, &total);
+            uint8_t resp[9] = { state, 0, 0, 0, 0, 0, 0, 0, 0 };
+            resp[1] = (uint8_t)(rx & 0xFF);
+            resp[2] = (uint8_t)((rx >> 8) & 0xFF);
+            resp[3] = (uint8_t)((rx >> 16) & 0xFF);
+            resp[4] = (uint8_t)((rx >> 24) & 0xFF);
+            resp[5] = (uint8_t)(total & 0xFF);
+            resp[6] = (uint8_t)((total >> 8) & 0xFF);
+            resp[7] = (uint8_t)((total >> 16) & 0xFF);
+            resp[8] = (uint8_t)((total >> 24) & 0xFF);
+            DataLink_SendFrame(cmd, resp, sizeof(resp));
+            break;
+        }
+        case CMD_OTA_RESET: {
+            uint8_t st = Ota_Reset();
+            DataLink_SendFrame(cmd, &st, 1);
+            break;
+        }
+        default:
+            DataLink_SendError(cmd, PROTO_ERR_UNKNOWN_CMD);
+            break;
+    }
+}
+
 void OtaAgent_Init(void)
 {
+    DataLink_SetOtaHandler(data_link_ota_handler);
     if (s_ota_mutex == NULL) {
         s_ota_mutex = xSemaphoreCreateMutex();
     }

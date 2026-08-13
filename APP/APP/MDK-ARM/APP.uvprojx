@@ -2211,15 +2211,11 @@
               <FileType>5</FileType>
               <FilePath>..\SystemServices\cmd_shell.h</FilePath>
             </File>
-            <File>
-              <FileName>cmd_catalog.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\SystemServices\cmd_catalog.c</FilePath>
-            </File>
+
             <File>
               <FileName>cmd_catalog.h</FileName>
               <FileType>5</FileType>
-              <FilePath>..\SystemServices\cmd_catalog.h</FilePath>
+              <FilePath>..\Application\cmd_catalog.h</FilePath>
             </File>
             <File>
               <FileName>cmd_can.c</FileName>
@@ -2352,6 +2348,11 @@
           <GroupName>Application</GroupName>
           <Files>
             <File>
+              <FileName>cmd_catalog.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Application\cmd_catalog.c</FilePath>
+            </File>
+            <File>
               <FileName>key_app.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Application\key_app.c</FilePath>
@@ -2445,6 +2446,11 @@
               <FileName>bsp_system.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BSP\bsp_system.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_flash.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_flash.c</FilePath>
             </File>
             <File>
               <FileName>bsp_uart.c</FileName>

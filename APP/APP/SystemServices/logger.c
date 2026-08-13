@@ -8,9 +8,9 @@
 #include "logger.h"
 #include "bsp.h"
 #include "app_config.h"
-#include "main.h"
 #include "cmsis_os.h"
 #include "stream_buffer.h"
+#include "stm32f4xx.h"
 
 #include <stdarg.h>
 #include <stdio.h>

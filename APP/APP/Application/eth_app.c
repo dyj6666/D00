@@ -1,4 +1,4 @@
-/* ================================================================
+﻿/* ================================================================
  * eth_app —— 以太网应用模块：状态聚合与诊断
  *
  * 架构位置：APP 应用层；LCD/sysmon/shell 展示侧驱动 1s 数据同步
@@ -8,8 +8,8 @@
 #include "eth_app.h"
 
 #include <string.h>
+#include "bsp_system.h"
 
-#include "main.h"
 #include "lwip/netif.h"
 #include "lwip/ip.h"
 #include "lwip/def.h"
@@ -30,6 +30,7 @@
 #include "var_manager.h"
 #include "var_ids.h"
 #include "net_config.h"
+#include "sysmon.h"
 
 extern struct netif gnetif;   /* lwip.c 全局网络接口 */
 
@@ -371,7 +372,7 @@ static uint8_t ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p,
         ((uint8_t *)&reply.id)[1] == want_id_lo &&
         ((uint8_t *)&reply.seqno)[0] == want_seq_hi &&
         ((uint8_t *)&reply.seqno)[1] == want_seq_lo) {
-        s_ping_rtt_ms = (uint32_t)(HAL_GetTick() - s_ping_start_ms);
+        s_ping_rtt_ms = (uint32_t)(BSP_GetTick() - s_ping_start_ms);
         s_ping_done = 1;
         pbuf_free(p);
         if (s_ping_sem != NULL) {
@@ -403,10 +404,10 @@ int EthApp_Ping(const char *host, uint32_t timeout_ms)
         raw_recv(s_ping_pcb, ping_recv, NULL);
     }
 
-    s_ping_id = (uint16_t)(HAL_GetTick() & 0xFFFFu);
+    s_ping_id = (uint16_t)(BSP_GetTick() & 0xFFFFu);
     s_ping_seq++;
     s_ping_done = 0;
-    s_ping_start_ms = HAL_GetTick();
+    s_ping_start_ms = BSP_GetTick();
 
     struct pbuf *p = pbuf_alloc(PBUF_IP, sizeof(struct icmp_echo_hdr) + 32u,
                                 PBUF_RAM);
@@ -432,7 +433,7 @@ int EthApp_Ping(const char *host, uint32_t timeout_ms)
         return -4;
     }
 
-    while (!s_ping_done && (HAL_GetTick() - s_ping_start_ms) < timeout_ms) {
+    while (!s_ping_done && (BSP_GetTick() - s_ping_start_ms) < timeout_ms) {
         osSemaphoreAcquire(s_ping_sem, 50u);
     }
     return s_ping_done ? (int)s_ping_rtt_ms : -5;
@@ -649,7 +650,7 @@ static uint8_t udp_echo_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p,
 void EthApp_SetLinkState(uint8_t up)
 {
     if (up && !s_eth.link_up) {
-        s_link_start_ms = HAL_GetTick();   /* 链路刚建立，起算时长 */
+        s_link_start_ms = BSP_GetTick();   /* 链路刚建立，起算时长 */
     }
     s_eth.link_up = up ? 1 : 0;
 }
@@ -707,6 +708,27 @@ const eth_status_t *EthApp_GetStatus(void)
     return &s_eth;
 }
 
+/* 监控项：ETH 状态（由 sysmon 注册表调用，运行在事件总线任务上下文） */
+void EthApp_PrintStats(void)
+{
+    EthApp_RefreshStatus();
+    const eth_status_t *st = &s_eth;
+    LOG_Printf("=== ETH ===\r\n");
+    LOG_Printf("  Link: %s", st->link_up ? "UP" : "DOWN");
+    if (st->link_up) {
+        LOG_Printf("  IP: %u.%u.%u.%u  MAC: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+                   st->ip[0], st->ip[1], st->ip[2], st->ip[3],
+                   st->mac[0], st->mac[1], st->mac[2],
+                   st->mac[3], st->mac[4], st->mac[5]);
+        LOG_Printf("  RX: %lu packets  TX: %lu packets  UP: %lu s\r\n",
+                   (unsigned long)st->rx_packets,
+                   (unsigned long)st->tx_packets,
+                   (unsigned long)st->link_uptime_s);
+    } else {
+        LOG_Printf("\r\n");
+    }
+}
+
 void EthApp_RefreshStatus(void)
 {
     const struct netif *ni = &gnetif;
@@ -723,7 +745,7 @@ void EthApp_RefreshStatus(void)
         s_eth.gw[1] = ip4_addr2(g);
         s_eth.gw[2] = ip4_addr3(g);
         s_eth.gw[3] = ip4_addr4(g);
-        s_eth.link_uptime_s = (HAL_GetTick() - s_link_start_ms) / 1000u;
+        s_eth.link_uptime_s = (BSP_GetTick() - s_link_start_ms) / 1000u;
     } else {
         s_eth.link_uptime_s = 0;
     }
@@ -735,6 +757,7 @@ void EthApp_RefreshStatus(void)
 void EthApp_Init(void)
 {
     memset(&s_eth, 0, sizeof(s_eth));
+    SysMon_RegisterItem("ETH", EthApp_PrintStats);
     VAR_Register(VAR_ID_ETH_LINK, "eth_link", VAR_TYPE_INT32, 0,
                  &s_eth.link_up);
     VAR_Register(VAR_ID_ETH_RX,   "eth_rx",   VAR_TYPE_INT32, 0,

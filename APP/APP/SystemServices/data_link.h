@@ -21,6 +21,14 @@ int DataLink_SendFrame(uint8_t cmd, const uint8_t *payload, uint16_t payload_len
 int DataLink_SendFrameWait(uint8_t cmd, const uint8_t *payload,
                            uint16_t payload_len, uint32_t timeout_ms);
 
+/* 发送统一错误帧（CMD_ERROR + 原命令码 + 错误码），供命令实现方使用 */
+void DataLink_SendError(uint8_t orig_cmd, uint8_t err_code);
+
+/* OTA 命令处理器：由 OTA 模块注册（data_link 不感知 OTA 细节，避免向上依赖） */
+typedef void (*data_link_ota_handler_t)(uint8_t cmd, const uint8_t *payload,
+                                        uint8_t payload_len);
+void DataLink_SetOtaHandler(data_link_ota_handler_t handler);
+
 /* 命令队列溢出计数（上位机突发时丢了多少帧） */
 uint32_t DataLink_GetCmdLostCount(void);
 

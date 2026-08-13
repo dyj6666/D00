@@ -7,7 +7,6 @@
  * ================================================================ */
 #include "shell.h"
 #include "cmd_shell.h"
-#include "cmd_catalog.h"
 #include "logger.h"
 #include "app_config.h"
 #include "stream_buffer.h"
@@ -219,7 +218,7 @@ void Shell_ProcessChar(uint8_t ch)
 void Shell_Init(void)
 {
     Cmd_TransportRegister(&s_uart_transport);
-    CmdCatalog_Register();
+    /* 命令目录由应用层模块注册表（CmdCat，prio 3）注册，本层不感知具体命令 */
 }
 
 void ShellTaskFunction(void)

@@ -25,7 +25,19 @@
 ```
 
 **依赖规则**：上层只依赖下层接口。Application/SystemServices 禁止直接调用 HAL
-（`stm32f4xx_hal.h` 等）；唯一例外是 `la_*` 平台模块（DMA 采样引擎本身与芯片强相关）。
+（`stm32f4xx_hal.h` 等）；**已登记的平台模块豁免**（与芯片强相关/故障上下文）：
+
+- `la_*`（逻辑分析仪 DMA 采样引擎）
+- `err_mgr`（故障处理需裸寄存器/关中断上下文，无法走 HAL）
+- `signal_gen`（产线信号发生器，软件位操作测试工具）
+
+其余越层由 `Script/check_layering.py` 在 CI 守门（禁用 HAL 头与向上 include）；
+`main.h`（CubeMX 总头，内含 HAL）命中记 WARNING，应逐步收敛到 BSP 接口。
+
+**组合根例外**：`SystemServices/module.c`（模块注册表）与命令目录
+`Application/cmd_catalog.c` 需要"认识"全部模块以完成接线——这是声明式
+组合根模式，属有意为之；其余 SystemServices 禁止向上依赖 Application。
+`cmd_shell`（通用分发器）与 `cmd_can`（传输适配器）保持平台无关。
 
 ## 2. 如何新增一个模块
 
@@ -42,6 +54,8 @@
    - GCC：`CMakeLists.txt` 的 `FW_SOURCES`。
 4. 需要跨模块通信：在 `msg_types.h` 注册消息类型，然后
    `EventBus_Subscribe(type, handler)` 订阅、`MSG_SEND_SIMPLE/DATA` 发布。
+5. 需要出现在 `sysmon` 报告里：在模块 `Init` 调用
+   `SysMon_RegisterItem("名称", print_fn)`，避免 sysmon 向上依赖应用模块。
 
 ### 2.2 新增外设驱动
 
@@ -57,9 +71,12 @@
 
 ### 2.4 新增 shell 命令
 
-在 `SystemServices/cmd_catalog.c` 添加 `cmd_xxx` 实现 + `cmd_table` 一行，
+在 `Application/cmd_catalog.c` 添加 `cmd_xxx` 实现 + `cmd_table` 一行，
 声明允许的传输掩码（`CMD_TRANSPORT_UART/TCP/...`）。命令实现与具体物理传输
 （串口 / TCP / 未来 CAN）解耦：`LOG_Printf` 输出自动路由到当前终端。
+
+> 命令目录位于 Application 层（应用级接线），由模块注册表（CmdCat，prio 3）
+> 在 Shell 启动前注册；`cmd_shell` 是平台无关的通用分发器。
 
 ### 2.5 Shell 传输适配器（新增物理协议）
 

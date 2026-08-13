@@ -1,4 +1,4 @@
-/* ================================================================
+﻿/* ================================================================
  * data_link —— HOSTLINK 串口协议链路（DMA 收发 + 双任务队列）
  *
  * 架构位置：APP 服务层；对上提供 DataLink_Send* 接口，对下挂 BSP UART
@@ -17,7 +17,6 @@
 #include "task.h"
 #include "var_manager.h"
 #include "la_sample.h"
-#include "ota_agent.h"
 
 #include <string.h>
 
@@ -48,10 +47,17 @@ static volatile uint32_t g_tx_err = 0;      /* TX DMA 异常/超时自愈计数 
 static void TXTask(void *arg);
 static void CmdTask(void *arg);
 static void handle_command(const uint8_t *data, uint16_t len);
-static void send_error_response(uint8_t orig_cmd, uint8_t err_code);
 static void data_link_rx_isr(bsp_uart_id_t id, const uint8_t *data,
                              uint16_t len, void *ctx);
 static void data_link_tx_isr(bsp_uart_id_t id, void *ctx);
+
+/* OTA 命令处理器（由 ota_agent 注册，数据链路层不感知 OTA 协议细节） */
+static data_link_ota_handler_t s_ota_handler = NULL;
+
+void DataLink_SetOtaHandler(data_link_ota_handler_t handler)
+{
+    s_ota_handler = handler;
+}
 
 /* ---------------- 初始化 ---------------- */
 /** @brief 初始化 HOSTLINK：建队列、起 TX/Cmd 双任务、挂 DMA 中断回调 */
@@ -255,7 +261,7 @@ int DataLink_SendFrameWait(uint8_t cmd, const uint8_t *payload,
 }
 
 /* ================== 命令处理 ================== */
-static void send_error_response(uint8_t orig_cmd, uint8_t err_code)
+void DataLink_SendError(uint8_t orig_cmd, uint8_t err_code)
 {
     uint8_t payload[PROTOCOL_ERR_PAYLOAD_LEN];
     payload[0] = orig_cmd;
@@ -271,14 +277,14 @@ static void handle_command(const uint8_t *data, uint16_t len)
     int err = Protocol_ParseHeader(data, len, &f);
     if (err != PROTO_ERR_NONE) {
         uint8_t cmd = (len >= 3) ? data[2] : 0xFF;
-        send_error_response(cmd, (uint8_t)err);
+        DataLink_SendError(cmd, (uint8_t)err);
         return;
     }
 
     switch (f.cmd) {
         case CMD_LIST_VARS:
             if (f.payload_len != 0) {
-                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                DataLink_SendError(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
                 break;
             }
             VAR_SendList();
@@ -286,7 +292,7 @@ static void handle_command(const uint8_t *data, uint16_t len)
 
         case CMD_SUBSCRIBE: {
             if (f.payload_len < 2 || (f.payload_len % 2) != 0) {
-                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                DataLink_SendError(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
                 break;
             }
             VAR_ClearSubscriptions();
@@ -299,14 +305,14 @@ static void handle_command(const uint8_t *data, uint16_t len)
 
         case CMD_READ_VAR: {
             if (f.payload_len < 2) {
-                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                DataLink_SendError(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
                 break;
             }
             uint16_t id = (uint16_t)(f.payload[0] | (f.payload[1] << 8));
             uint16_t var_len = 0;
             uint8_t val_buf[8] = {0};
             if (VAR_Read(id, val_buf, &var_len) != 0) {
-                send_error_response(f.cmd, PROTO_ERR_VAR_NOT_FOUND);
+                DataLink_SendError(f.cmd, PROTO_ERR_VAR_NOT_FOUND);
                 break;
             }
             /* 响应 payload: ID(2) + len(1) + reserved(1) + value */
@@ -322,18 +328,18 @@ static void handle_command(const uint8_t *data, uint16_t len)
 
         case CMD_WRITE_VAR: {
             if (f.payload_len < 4) {
-                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                DataLink_SendError(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
                 break;
             }
             uint16_t id = (uint16_t)(f.payload[0] | (f.payload[1] << 8));
             uint8_t wlen = f.payload[2];
             /* 布局兼容原协议: id(2) + wlen(1) + value(wlen) */
             if ((uint16_t)wlen > f.payload_len - 3) {
-                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                DataLink_SendError(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
                 break;
             }
             if (VAR_Write(id, &f.payload[3], wlen) != 0) {
-                send_error_response(f.cmd, PROTO_ERR_VAR_NOT_FOUND);
+                DataLink_SendError(f.cmd, PROTO_ERR_VAR_NOT_FOUND);
             }
             break;
         }
@@ -350,7 +356,7 @@ static void handle_command(const uint8_t *data, uint16_t len)
              * 响应：多帧 CMD_LA_DUMP，payload = offset(u32) + sent(u16) + samples(4B each)
              * 从逻辑分析仪 DMA 缓冲导出原始采样（二进制，供上位机分析）。 */
             if (f.payload_len != 8) {
-                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                DataLink_SendError(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
                 break;
             }
             uint32_t offset = (uint32_t)(f.payload[0] | (f.payload[1] << 8) |
@@ -360,7 +366,7 @@ static void handle_command(const uint8_t *data, uint16_t len)
 
             uint32_t buf_size = LA_Sample_GetDMABufferSize();
             if (offset >= buf_size || count == 0) {
-                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
+                DataLink_SendError(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
                 break;
             }
             if (count > buf_size - offset) count = buf_size - offset;
@@ -385,7 +391,7 @@ static void handle_command(const uint8_t *data, uint16_t len)
                 if (DataLink_SendFrameWait(CMD_LA_DUMP, payload,
                                            6 + n * 4, 500) != 0) {
                     /* TX 通道异常（队列满 500ms 仍无法排空）：中止导出 */
-                    send_error_response(f.cmd, PROTO_ERR_BUF_TOO_SMALL);
+                    DataLink_SendError(f.cmd, PROTO_ERR_BUF_TOO_SMALL);
                     break;
                 }
                 sent += n;
@@ -393,74 +399,22 @@ static void handle_command(const uint8_t *data, uint16_t len)
             break;
         }
 
-        case CMD_OTA_BEGIN: {
-            /* 请求：version(u32 LE) + size(u32 LE) */
-            if (f.payload_len != 8) {
-                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
-                break;
+        case CMD_OTA_BEGIN:
+        case CMD_OTA_DATA:
+        case CMD_OTA_END:
+        case CMD_OTA_STATUS:
+        case CMD_OTA_RESET:
+            /* OTA 命令细节归 OTA 模块（处理器由 OtaAgent 注册），
+             * 数据链路层只做透传，避免向上依赖应用层。 */
+            if (s_ota_handler != NULL) {
+                s_ota_handler(f.cmd, f.payload, (uint8_t)f.payload_len);
+            } else {
+                DataLink_SendError(f.cmd, PROTO_ERR_UNKNOWN_CMD);
             }
-            uint32_t ver = (uint32_t)(f.payload[0] | (f.payload[1] << 8) |
-                                      (f.payload[2] << 16) | (f.payload[3] << 24));
-            uint32_t size = (uint32_t)(f.payload[4] | (f.payload[5] << 8) |
-                                       (f.payload[6] << 16) | (f.payload[7] << 24));
-            uint8_t st = Ota_Begin(ver, size);
-            DataLink_SendFrame(CMD_OTA_BEGIN, &st, 1);
             break;
-        }
-
-        case CMD_OTA_DATA: {
-            /* 请求：offset(u32 LE) + data(<=120B) */
-            if (f.payload_len < 5 || f.payload_len > 4 + OTA_CHUNK_MAX) {
-                send_error_response(f.cmd, PROTO_ERR_BAD_PAYLOAD_LEN);
-                break;
-            }
-            uint32_t off = (uint32_t)(f.payload[0] | (f.payload[1] << 8) |
-                                      (f.payload[2] << 16) | (f.payload[3] << 24));
-            uint8_t st = Ota_Data(off, &f.payload[4],
-                                  (uint16_t)(f.payload_len - 4));
-            uint32_t rx = 0, total = 0;
-            uint8_t state = 0;
-            Ota_Status(&state, &rx, &total);
-            uint8_t resp[5] = { st, 0, 0, 0, 0 };
-            resp[1] = (uint8_t)(rx & 0xFF);
-            resp[2] = (uint8_t)((rx >> 8) & 0xFF);
-            resp[3] = (uint8_t)((rx >> 16) & 0xFF);
-            resp[4] = (uint8_t)((rx >> 24) & 0xFF);
-            DataLink_SendFrame(CMD_OTA_DATA, resp, sizeof(resp));
-            break;
-        }
-
-        case CMD_OTA_END: {
-            uint8_t st = Ota_End();
-            DataLink_SendFrame(CMD_OTA_END, &st, 1);
-            break;
-        }
-
-        case CMD_OTA_STATUS: {
-            uint8_t state = 0;
-            uint32_t rx = 0, total = 0;
-            Ota_Status(&state, &rx, &total);
-            uint8_t resp[9] = { state, 0, 0, 0, 0, 0, 0, 0, 0 };
-            resp[1] = (uint8_t)(rx & 0xFF);
-            resp[2] = (uint8_t)((rx >> 8) & 0xFF);
-            resp[3] = (uint8_t)((rx >> 16) & 0xFF);
-            resp[4] = (uint8_t)((rx >> 24) & 0xFF);
-            resp[5] = (uint8_t)(total & 0xFF);
-            resp[6] = (uint8_t)((total >> 8) & 0xFF);
-            resp[7] = (uint8_t)((total >> 16) & 0xFF);
-            resp[8] = (uint8_t)((total >> 24) & 0xFF);
-            DataLink_SendFrame(CMD_OTA_STATUS, resp, sizeof(resp));
-            break;
-        }
-
-        case CMD_OTA_RESET: {
-            uint8_t st = Ota_Reset();
-            DataLink_SendFrame(CMD_OTA_RESET, &st, 1);
-            break;
-        }
 
         default:
-            send_error_response(f.cmd, PROTO_ERR_UNKNOWN_CMD);
+            DataLink_SendError(f.cmd, PROTO_ERR_UNKNOWN_CMD);
             break;
     }
 }

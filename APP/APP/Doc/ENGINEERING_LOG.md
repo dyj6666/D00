@@ -2765,3 +2765,29 @@ auto-stop）全部按设计工作。
   稳定可靠。
 - **约定**：APP 固件更新一律走 OTA（TCP/HTTP/UART/CAN 四通道）；DAP 仅
   在需要更新 BOOT 时使用。已写入 AGENTS.md 工作流。
+
+### 10.31 架构分层全面优化（消除 HAL 越层 / 向上依赖）
+- **目标**：架构评审发现的 P1/P2 问题全部落地（详见评审结论）。
+- **改动清单**：
+  1. 新增 `BSP/bsp_flash`（扇区擦除/字编程/任意对齐写/控制器复位），
+     `ota_agent` 的 HAL_FLASH 全部改走 BSP；
+  2. BSP 新增 `BSP_GetTick`/`BSP_DWT_Enable/GetCycleCount`/
+     `BSP_RTC_Set/GetDateTime`，`ota_can/eth_app/icmp_svc/la_buffer/sntp_svc`
+     全部去除 main.h 与 HAL_GetTick/HAL_RTC 直调；
+  3. `sysmon` 监控项改为可扩展注册（`SysMon_RegisterItem`），ETH/ICMP
+     监控移回各自应用模块，sysmon 不再向上依赖；
+  4. `data_link` 的 OTA 命令处理反转：新增 `DataLink_SetOtaHandler`，
+     `ota_agent` 注册自己的处理（data_link 不再 include 应用头）；
+  5. `cmd_catalog`（命令表）从 SystemServices 移入 Application，注册由
+     模块注册表（CmdCat，prio 3）触发；`cmd_shell` 保持通用分发器；
+  6. 新增 `Script/check_layering.py` 分层守门（禁 HAL 头/向上 include，
+     白名单 la_*/err_mgr/signal_gen + 组合根 module.c），接入 CI；
+  7. BOOT 跳转改裸跳板（`boot_jump_exec`：msr msp + dsb/isb + bx），
+     反汇编验证切栈后无任何弹栈操作；
+  8. 文档对齐：AGENTS.md UART 映射、ARCHITECTURE.md 豁免登记/组合根、
+     新增 STACK_BUDGET.md 任务栈预算表。
+- **验证**：GCC 编译通过（守门 0 错误 0 警告）；Keil 发布构建 0 错误
+  0 警告；OTA 部署 b9093 后 shell/sysmon(ETH/ICMP)/SNTP 自动校准全正常。
+- **经验**：①分层规则必须有 CI 守门，否则会漂移；②命令表/监控项等
+  "需要认识全部模块"的接线点是组合根，应显式登记而不是散落；③uvprojx
+  手工编辑易破坏 XML 结构（UV4 退出码 15），改后必须 XML 校验 + 构建。

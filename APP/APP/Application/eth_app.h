@@ -21,6 +21,9 @@ void EthApp_Init(void);
 
 const eth_status_t *EthApp_GetStatus(void);
 
+/* 监控项：打印 ETH 状态（注册到 sysmon） */
+void EthApp_PrintStats(void);
+
 /* 链路变化回调（lwip.c 的 link callback USER CODE 区调用） */
 void EthApp_SetLinkState(uint8_t up);
 

@@ -1,4 +1,4 @@
-/* ================================================================
+﻿/* ================================================================
  * ota_can_svc —— CAN OTA 服务实现
  *
  * 架构位置：APP 应用层；仅做"CAN 帧 ↔ OTA 下载核心"的协议翻译
@@ -13,12 +13,11 @@
 #include "ota_agent.h"
 #include "ota_transport.h"
 #include "bsp_can.h"
+#include "bsp_system.h"
 #include "can_proto.h"
 #include "event_bus.h"
 #include "logger.h"
 #include "app_config.h"
-
-#include "stm32f4xx_hal.h"
 
 #include <string.h>
 
@@ -85,7 +84,7 @@ static void ota_can_ctrl(const uint8_t *d, uint8_t dlc)
             uint32_t total = 0;
             Ota_Status(&st, &s_received, &total);
             s_active = 1;
-            s_last_rx_tick = HAL_GetTick();
+            s_last_rx_tick = BSP_GetTick();
             rep[0] = CAN_OTA_REP_BEGIN_OK;
             rep[1] = 0;
         } else {
@@ -215,7 +214,7 @@ static void ota_can_rx(uint32_t id, const uint8_t *data, uint8_t dlc, void *ctx)
     if (id != CAN_OTA_CTRL_ID && id != CAN_OTA_DATA_ID) {
         return;
     }
-    s_last_rx_tick = HAL_GetTick();
+    s_last_rx_tick = BSP_GetTick();
     if (id == CAN_OTA_CTRL_ID) {
         ota_can_ctrl(data, dlc);
     } else if (id == CAN_OTA_DATA_ID && s_active) {
@@ -228,7 +227,7 @@ static void ota_can_rx(uint32_t id, const uint8_t *data, uint8_t dlc, void *ctx)
 static void ota_can_supervise_tick(const message_t *msg)
 {
     (void)msg;
-    if (s_active && (HAL_GetTick() - s_last_rx_tick) > OTA_CAN_IDLE_TIMEOUT_MS) {
+    if (s_active && (BSP_GetTick() - s_last_rx_tick) > OTA_CAN_IDLE_TIMEOUT_MS) {
         LOG_Printf("[OTA-CAN] idle timeout, aborting session\r\n");
         (void)Ota_Reset();
         s_active = 0;

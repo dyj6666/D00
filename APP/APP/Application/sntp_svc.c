@@ -7,8 +7,7 @@
 #include "sntp_svc.h"
 #include "usr_store.h"
 #include "logger.h"
-#include "main.h"
-#include "rtc.h"
+#include "bsp_rtc.h"
 #include "cmsis_os2.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -114,19 +113,15 @@ int SntpSvc_Sync(const uint8_t server[4], uint16_t port, uint32_t timeout_ms)
                     epoch_to_ymd(local, &y, &m, &d);
                     uint32_t secs = local % 86400u;
 
-                    RTC_TimeTypeDef rt;
-                    rt.Hours = (uint8_t)(secs / 3600u);
-                    rt.Minutes = (uint8_t)((secs % 3600u) / 60u);
-                    rt.Seconds = (uint8_t)(secs % 60u);
-                    rt.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
-                    rt.StoreOperation = RTC_STOREOPERATION_RESET;
-                    RTC_DateTypeDef rd;
-                    rd.Year = (uint8_t)(y % 100u);
-                    rd.Month = m;
-                    rd.Date = d;
-                    rd.WeekDay = epoch_weekday(local);
-                    if (HAL_RTC_SetTime(&hrtc, &rt, RTC_FORMAT_BIN) == HAL_OK &&
-                        HAL_RTC_SetDate(&hrtc, &rd, RTC_FORMAT_BIN) == HAL_OK) {
+                    bsp_rtc_datetime_t dt;
+                    dt.hours = (uint8_t)(secs / 3600u);
+                    dt.minutes = (uint8_t)((secs % 3600u) / 60u);
+                    dt.seconds = (uint8_t)(secs % 60u);
+                    dt.year = y;
+                    dt.month = m;
+                    dt.day = d;
+                    dt.weekday = epoch_weekday(local);
+                    if (BSP_RTC_SetDateTime(&dt) == 0) {
                         ret = 0;
                     } else {
                         ret = -5;
@@ -145,16 +140,14 @@ void SntpSvc_GetTimeStr(char *buf, uint32_t len)
     if (buf == NULL || len == 0u) {
         return;
     }
-    RTC_TimeTypeDef rt;
-    RTC_DateTypeDef rd;
-    if (HAL_RTC_GetTime(&hrtc, &rt, RTC_FORMAT_BIN) != HAL_OK ||
-        HAL_RTC_GetDate(&hrtc, &rd, RTC_FORMAT_BIN) != HAL_OK) {
+    bsp_rtc_datetime_t dt;
+    if (BSP_RTC_GetDateTime(&dt) != 0) {
         snprintf(buf, len, "RTC unavailable");
         return;
     }
     snprintf(buf, len, "20%02u-%02u-%02u %02u:%02u:%02u",
-             (unsigned)rd.Year, (unsigned)rd.Month, (unsigned)rd.Date,
-             (unsigned)rt.Hours, (unsigned)rt.Minutes, (unsigned)rt.Seconds);
+             (unsigned)(dt.year % 100u), (unsigned)dt.month, (unsigned)dt.day,
+             (unsigned)dt.hours, (unsigned)dt.minutes, (unsigned)dt.seconds);
 }
 
 int SntpSvc_SetServer(const char *ip)

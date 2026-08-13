@@ -26,11 +26,10 @@
 | APP 有效魔数 | 0x4F54412E @ 0x0805FFF8 |
 | APP 版本号 | 0x0805FFFC |
 | 升级标志 | RTC_BKP_DR1 == 0x5A5A |
-| 调试串口 | COM9 @ 115200 |
-| HOSTLINK | COM13 @ 921600 |
+| APP 调试/Shell 控制台 | USART3（当前物理 CH340，COM 号动态；@115200） |
+| APP HOSTLINK 上位机链路 | USART1 |
+| BOOT 日志 | USART2 |
 
-> 注意：仓库根 README 中"APP 魔数 @0x0804FFF8"已过时，以
-> `BOOT/BOOT/Config/boot_config.h` 与 `APP/APP/Config/app_config.h` 为准（0x0805FFF8 / 0x0805FFFC）。
 
 ## 3. 工具链（固定路径，见 workflow/common.ps1）
 
