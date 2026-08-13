@@ -79,3 +79,7 @@ workflow/last_report.json
 # OTA_Tool 本地状态（含设备 UID/本地路径，不入库）
 HOST/OTA_Tool/config.json
 HOST/OTA_Tool/version_lib.json
+HOST/OTA_Tool/local_keys.json
+
+# 本地工具链（OpenOCD 等，不入库）
+tools/

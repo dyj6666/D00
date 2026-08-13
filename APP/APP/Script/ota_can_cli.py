@@ -10,6 +10,8 @@
     控制 0x200：BEGIN(version+size) / END / STATUS / ABORT；
     数据 0x201：行帧规约（首字节序号+0x80 末帧，负载 ≤7B），每 240B 一组；
     应答 0x210：BEGIN_OK/ERR、END_RESULT、STATUS、ABORT 回执。
+注意：必须先把 APP.bin 加密签名为 OTA 包再发送（BOOT 验签），
+     不能裸发 APP.bin（否则 BOOT 安全校验拒绝、无法应用）。
 """
 
 import os
@@ -43,6 +45,19 @@ ACK_ERR = 0x82
 
 OTA_BLOCK = 240  # 与固件 OTA_CHUNK_MAX 一致
 BLOCK_RETRIES = 3  # 单块重传次数
+
+
+def load_ota_secrets():
+    """从本地配置读取签名私钥/UID/芯片ID（不入库，避免密钥进 git）。"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    cfg = os.path.abspath(os.path.join(here, r"..\..\..\HOST\OTA_Tool\local_keys.json"))
+    if not os.path.exists(cfg):
+        sys.exit("缺少本地密钥配置，请创建 " + cfg +
+                 " （字段 private_key / device_uid / chip_id）")
+    import json
+    with open(cfg, "r", encoding="utf-8") as f:
+        d = json.load(f)
+    return d["private_key"], d["device_uid"], int(d.get("chip_id", 0x413))
 
 
 def open_can():
@@ -127,10 +142,17 @@ def main():
         if not os.path.exists(fw):
             print(f"FAIL: 固件文件不存在 {fw}")
             return 1
-        with open(fw, "rb") as f:
+        # 加密签名成 OTA 包（BOOT 验签必需；不能裸发 APP.bin）
+        sys.path.insert(0, r"D:\GIT-SPACE\D00\HOST\OTA_Tool")
+        from core.ymodem_sender import encrypt_and_sign, derive_aes_key_from_uid  # noqa: E402
+        priv, uid, chip = load_ota_secrets()
+        aes = derive_aes_key_from_uid(uid)
+        pkg = os.path.join(os.path.dirname(fw), "_ota_can_pkg.bin")
+        encrypt_and_sign(fw, pkg, priv, aes.hex(), version, chip, build)
+        with open(pkg, "rb") as f:
             blob = f.read()
         size = len(blob)
-        print(f"[OTA-CAN] file={fw} size={size} v{version} b{build}")
+        print(f"[OTA-CAN] file={fw} pkg={size}B v{version} b{build}")
 
         # 1) BEGIN：size LE32 + version LE16 + 保留（8B 单帧）
         send(api, CAN_OTA_CTRL_ID,

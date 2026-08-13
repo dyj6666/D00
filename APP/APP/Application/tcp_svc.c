@@ -17,6 +17,7 @@
 #include "task.h"
 #include "lwip/api.h"
 #include "lwip/netif.h"
+#include "lwip/tcp.h"
 #include "lwip/pbuf.h"
 #include "lwip/ip_addr.h"
 #include "logger.h"
@@ -27,7 +28,9 @@
 #define TCP_SVC_BACKLOG       2
 #define TCP_SVC_MAX_CLIENTS   2
 #define TCP_SVC_TASK_STACK    1024   /* 峰值 ~544B（HW 376 词） */
-#define TCP_SVC_CLIENT_STACK  1024
+#define TCP_SVC_CLIENT_STACK  2048   /* 命令处理(LOG_Printf+netconn_write)栈深
+                                      * 大于 1024B，实测 help/info 触发栈溢出
+                                      * 连接被重置（Crash seq 递增） */
 #define TCP_SVC_IDLE_MS       120000
 #define TCP_SVC_STREAM_MS     1000
 
@@ -130,6 +133,10 @@ static void tcp_client_task(void *arg)
     struct netconn *conn = (struct netconn *)arg;
     struct tcp_cli cli;
     cmd_session_t sess;
+
+    /* 禁用 Nagle：命令输出为多段小写，Nagle+延迟ACK 会拖慢/阻塞大输出
+     * （实测 help/taskstats/info 超时断连，ver 正常）。与 OTA-TCP 一致。 */
+    tcp_nagle_disable(conn->pcb.tcp);
 
     memset(&cli, 0, sizeof(cli));
     cli.conn = conn;
