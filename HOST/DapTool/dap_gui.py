@@ -117,6 +117,10 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.info_label)
         bar.addStretch(1)
         root.addLayout(bar)
+        # 工具栏按钮信号（此前的连接遗漏导致点击无反应）
+        self.btn_connect.clicked.connect(self._connect)
+        self.btn_disconnect.clicked.connect(self._disconnect)
+        self.btn_refresh.clicked.connect(self._refresh_info)
 
         # 标签页
         self.tabs = QTabWidget()
