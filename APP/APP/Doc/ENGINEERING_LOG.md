@@ -3084,3 +3084,49 @@ auto-stop）全部按设计工作。
   ImuSvc=0%、IDLE=96%、崩溃序号 #188 稳定、堆 11408B；power on/off
   命令正常、ON 态下 HTTP 50/50 与 TCP 控制台全通；CAN 300/300 零
   丢帧；SNTP 实时校准；OTA 243KB 大包正常。
+
+### 10.43 DAP 假死/红灯根治：烧录工具四道防线（重点问题）
+- **现象**：KEIL CMSIS-DAP 在大体积连续写入（2MHz SWD）约 20s 后频繁
+  HID 超时假死（`hid_write/WaitForSingleObject 0x3E5`，红灯常亮），
+  必须物理重插；曾导致 243KB 包写入后 BOOT 安全校验拒绝（包已损坏）。
+- **影响面**：任何大体积 DAP 烧录（BOOT/预置包）都可能在最坏时机
+  失败，且假死后板子可能停在半烧录状态。
+- **排查思路**：把"假死"拆成可独立验证的分量：①HID 传输吞吐与
+  时长；②目标 IWDG 在 halt 期间持续复位打断长写入；③OpenOCD 命令
+  构造（路径/扇区/判定）。用对照实验逐一确认。
+- **排查过程**：
+  1. 对照实验：2MHz 下 33KB BOOT 写入成功、243KB 包写入 HID 假死
+     → 与"持续时长/吞吐"相关；降速 500kHz 后 243KB 写入+校验完整
+     通过（12.6s）→ **HID 超载是主因之一**。
+  2. 观察 erase 失败："failed erasing sectors" + "target was in
+     unknown state" → 目标 IWDG 约 4.1s 复位，长操作中途复位污染
+     Flash 控制器状态 → 需 `reset halt` 复位到已知态 + 延长 IWDG
+     窗口（经调试口写 PR=256，超时扩到 ~22s，覆盖整次烧录）。
+  3. 工具自身三处 bug（写工具时暴露）：F407 扇区映射用错（正确为
+     s4=64KB、s5~s11=128KB）；OpenOCD `-c` 字符串里反斜杠路径被
+     Tcl 转义吞掉（必须正斜杠）；`verify_image` 输出是小写
+     "verified N bytes" 而误用 "Verified OK" 判定。
+  4. 编码坑：PowerShell 5.1 无 BOM 读取 .ps1 时把 UTF-8 中文当
+     ANSI，多字节序列会吞行尾导致 return 被注释掉——脚本必须纯 ASCII。
+- **根因**：①探针固件对持续高吞吐 HID 写入不耐受（2MHz 触发）；
+  ②目标 IWDG 与长烧录冲突，复位污染 Flash 状态；③工具链命令
+  构造细节（扇区映射/路径转义/输出判定）不到位。
+- **解决方案**：新增 `workflow/flash_dap.ps1`，四道防线：
+  1. SWD 固定 500kHz（实测稳定边界）；
+  2. `reset halt` 干净复位 + 调试口临时把 IWDG 预分频改 256
+     （~22s 窗口），整次擦除+写入+校验（~13s）不被看门狗打断，
+     结束后 `reset run` 由 BOOT 恢复原 IWDG 配置；
+  3. 先整区擦除（按 F407 真实扇区映射对齐），分块 `flash write_bank`
+     （48KB/块，块间喂狗兜底），同一会话内 `verify_image` 整包回读；
+  4. HID 超时自动重试（冷却 3s）+ 连续失败尝试 USB 重枚举
+     （需管理员），仍失败给出人工重插提示。
+- **验证**：243KB 大包连续 4 轮写入+校验全部一次通过（此前 2MHz 单轮
+  即假死）；BOOT 33KB 烧录通过；全程无 HID 错误、无红灯；烧录后板子
+  功能完好（v202 / OTA 四通道就绪）。
+- **经验沉淀**：①CMSIS-DAP 大包烧录铁律：500kHz + 分块 + 防目标
+  看门狗复位；②调试口可以直接改写 IWDG 预分频临时延长窗口，复位后
+  自动恢复，是处理"halt 期间看门狗捣乱"的通用手法；③给 OpenOCD 的
+  `-c` 传路径必须正斜杠（Tcl 转义）；④PowerShell 5.1 脚本含中文
+  必须带 BOM 或纯 ASCII，否则行尾可能被吞；⑤判定烧录成功必须匹配
+  实际输出格式（program 的 "Verified OK" ≠ verify_image 的
+  "verified N bytes"）。
