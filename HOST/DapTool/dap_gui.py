@@ -10,6 +10,7 @@
 
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -31,6 +32,11 @@ import dap_core as dc
 class _UiBridge(QObject):
     """工作线程 → 主线程信号桥：所有 UI 更新经此路由，杜绝跨线程操作。"""
     task = pyqtSignal(object, object)
+
+
+def re_asm(line):
+    """OpenOCD 反汇编行判定：以 8 位 hex 地址开头。"""
+    return bool(re.match(r"0x[0-9a-fA-F]{8}", line))
 
 
 class LogHub:
@@ -126,6 +132,8 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._tab_flash(), "烧录")
         self.tabs.addTab(self._tab_ota(), "OTA 助手")
+        self.tabs.addTab(self._tab_debug(), "调试")
+        self.tabs.addTab(self._tab_tasks(), "RTOS 任务")
         self.tabs.addTab(self._tab_mem(), "内存")
         self.tabs.addTab(self._tab_regs(), "寄存器")
         self.tabs.addTab(self._tab_target(), "目标控制")
@@ -191,16 +199,19 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         self.btn_flash = QPushButton("开始烧录")
         self.btn_flash.setObjectName("btn_primary")
+        self.btn_flash_both = QPushButton("BOOT+APP 一键")
         self.btn_cancel = QPushButton("取消")
         self.progress = QProgressBar()
         self.progress.setTextVisible(True)
         row.addWidget(self.btn_flash)
+        row.addWidget(self.btn_flash_both)
         row.addWidget(self.btn_cancel)
         row.addWidget(self.progress, 1)
         lay.addLayout(row)
         self.flash_status = QLabel("就绪")
         lay.addWidget(self.flash_status)
         self.btn_flash.clicked.connect(self._run_flash)
+        self.btn_flash_both.clicked.connect(self._run_flash_both)
         self.btn_cancel.clicked.connect(self._cancel_op)
         lay.addStretch(1)
         return w
@@ -241,6 +252,92 @@ class MainWindow(QMainWindow):
         lay.addStretch(1)
         return w
 
+    def _tab_debug(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        g = QGroupBox("断点")
+        gl = QGridLayout(g)
+        self.d_bp_addr = QLineEdit("08010000")
+        b_set = QPushButton("设置断点")
+        b_clr = QPushButton("清除断点")
+        b_lst = QPushButton("列出断点")
+        gl.addWidget(QLabel("地址(HEX)"), 0, 0)
+        gl.addWidget(self.d_bp_addr, 0, 1)
+        gl.addWidget(b_set, 0, 2)
+        gl.addWidget(b_clr, 0, 3)
+        gl.addWidget(b_lst, 0, 4)
+        lay.addWidget(g)
+        g2 = QGroupBox("执行控制")
+        gl2 = QGridLayout(g2)
+        b_halt = QPushButton("暂停")
+        b_run = QPushButton("继续")
+        b_step = QPushButton("单步")
+        gl2.addWidget(b_halt, 0, 0)
+        gl2.addWidget(b_run, 0, 1)
+        gl2.addWidget(b_step, 0, 2)
+        self.d_bp_info = QLabel("断点: 无")
+        gl2.addWidget(self.d_bp_info, 0, 3, 1, 2)
+        lay.addWidget(g2)
+        g3 = QGroupBox("反汇编")
+        gl3 = QGridLayout(g3)
+        self.d_dis_addr = QLineEdit("08010000")
+        self.d_dis_n = QSpinBox()
+        self.d_dis_n.setRange(4, 64)
+        self.d_dis_n.setValue(16)
+        b_dis = QPushButton("反汇编")
+        gl3.addWidget(QLabel("地址"), 0, 0)
+        gl3.addWidget(self.d_dis_addr, 0, 1)
+        gl3.addWidget(QLabel("条数"), 0, 2)
+        gl3.addWidget(self.d_dis_n, 0, 3)
+        gl3.addWidget(b_dis, 0, 4)
+        self.d_dis = QPlainTextEdit()
+        self.d_dis.setReadOnly(True)
+        self.d_dis.setFont(QFont("Consolas", 10))
+        gl3.addWidget(self.d_dis, 1, 0, 1, 5)
+        lay.addWidget(g3, 1)
+        g4 = QGroupBox("故障 / 复位诊断")
+        gl4 = QGridLayout(g4)
+        b_fault = QPushButton("读取故障与复位原因")
+        self.d_fault = QPlainTextEdit()
+        self.d_fault.setReadOnly(True)
+        self.d_fault.setFont(QFont("Consolas", 10))
+        self.d_fault.setMaximumHeight(110)
+        gl4.addWidget(b_fault, 0, 0)
+        gl4.addWidget(self.d_fault, 1, 0)
+        lay.addWidget(g4)
+        b_set.clicked.connect(self._bp_set)
+        b_clr.clicked.connect(self._bp_clear)
+        b_lst.clicked.connect(self._bp_list)
+        b_halt.clicked.connect(self._target_halt)
+        b_run.clicked.connect(self._target_resume)
+        b_step.clicked.connect(self._debug_step)
+        b_dis.clicked.connect(self._debug_disasm)
+        b_fault.clicked.connect(self._debug_fault)
+        return w
+
+    def _tab_tasks(self):
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        row = QHBoxLayout()
+        b = QPushButton("刷新任务")
+        b.setObjectName("btn_primary")
+        self.tk_info = QLabel("")
+        row.addWidget(b)
+        row.addWidget(self.tk_info, 1)
+        lay.addLayout(row)
+        self.tk_table = QTableWidget(0, 5)
+        self.tk_table.setHorizontalHeaderLabels(
+            ["任务", "优先级", "状态", "栈已用(词)", "TCB"])
+        self.tk_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.Stretch)
+        for i in (1, 2, 3, 4):
+            self.tk_table.horizontalHeader().setSectionResizeMode(
+                i, QHeaderView.ResizeToContents)
+        self.tk_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        lay.addWidget(self.tk_table, 1)
+        b.clicked.connect(self._tasks_refresh)
+        return w
+
     def _tab_mem(self):
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -276,13 +373,16 @@ class MainWindow(QMainWindow):
     def _tab_regs(self):
         w = QWidget()
         lay = QVBoxLayout(w)
-        row = QHBoxLayout()
+        top = QHBoxLayout()
         b = QPushButton("刷新寄存器")
         b.setObjectName("btn_primary")
-        row.addWidget(b)
-        self.reg_extra = QLabel("")
-        row.addWidget(self.reg_extra, 1)
-        lay.addLayout(row)
+        b2 = QPushButton("读取设备/固件/崩溃信息")
+        top.addWidget(b)
+        top.addWidget(b2)
+        top.addStretch(1)
+        lay.addLayout(top)
+        split = QHBoxLayout()
+        left = QVBoxLayout()
         self.reg_table = QTableWidget(0, 2)
         self.reg_table.setHorizontalHeaderLabels(["寄存器", "值"])
         self.reg_table.horizontalHeader().setSectionResizeMode(
@@ -290,8 +390,18 @@ class MainWindow(QMainWindow):
         self.reg_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.Stretch)
         self.reg_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        lay.addWidget(self.reg_table, 1)
+        left.addWidget(self.reg_table, 1)
+        split.addLayout(left, 1)
+        right = QVBoxLayout()
+        self.reg_extra = QPlainTextEdit()
+        self.reg_extra.setReadOnly(True)
+        self.reg_extra.setFont(QFont("Consolas", 10))
+        right.addWidget(QLabel("设备 / 固件 / 崩溃记录"))
+        right.addWidget(self.reg_extra, 1)
+        split.addLayout(right, 1)
+        lay.addLayout(split, 1)
         b.clicked.connect(self._reg_refresh)
+        b2.clicked.connect(self._info_refresh)
         return w
 
     def _tab_target(self):
@@ -352,7 +462,8 @@ class MainWindow(QMainWindow):
     # ---------------- 连接 ----------------
 
     def _set_ops_enabled(self, en):
-        for wdg in (self.btn_flash, self.btn_cancel, self.btn_ota_all,
+        for wdg in (self.btn_flash, self.btn_flash_both, self.btn_cancel,
+                    self.btn_ota_all,
                     self.btn_ota_stage, self.btn_ota_trig):
             wdg.setEnabled(en)
 
@@ -541,6 +652,29 @@ class MainWindow(QMainWindow):
 
         self._run_thread(work, done=done, progress=progress)
 
+    def _run_flash_both(self):
+        """BOOT + APP 一键顺序烧录（各含校验）。"""
+        boot = r"D:\GIT-SPACE\D00\BOOT\BOOT\MDK-ARM\BOOT.bin"
+        app = r"D:\GIT-SPACE\D00\APP\APP\MDK-ARM\Output\APP.bin"
+        if not (os.path.exists(boot) and os.path.exists(app)):
+            QMessageBox.warning(self, "提示", "BOOT.bin 或 APP.bin 不存在，请先构建")
+            return
+
+        def progress(frac, msg):
+            self.bridge.task.emit("progress", (frac, msg))
+
+        def work():
+            self._require()
+            self.log.write("S", "一键烧录 BOOT -> 0x08000000")
+            self.session.flash_file(boot, 0x08000000,
+                                    progress=progress, cancel=self.cancel_evt)
+            self.log.write("S", "一键烧录 APP -> 0x08010000")
+            self.session.flash_file(app, 0x08010000,
+                                    progress=progress, cancel=self.cancel_evt)
+            self.log.write("S", "BOOT+APP 一键烧录完成")
+
+        self._run_thread(work)
+
     def _run_ota(self, mode):
         path = self.o_file.text().strip()
         try:
@@ -613,6 +747,127 @@ class MainWindow(QMainWindow):
             self.reg_extra.setText(extra)
             self.log.write("S", "寄存器刷新完成 (pc=0x%08X)" %
                            regs.get("pc", 0))
+
+        self._run_thread(work)
+
+    def _info_refresh(self):
+        def work():
+            self._require()
+            lines = []
+            uid = self.session.device_uid()
+            if uid:
+                b = b"".join(bytes(((x >> 0) & 0xFF, (x >> 8) & 0xFF,
+                                    (x >> 16) & 0xFF, (x >> 24) & 0xFF))
+                             for x in uid)
+                lines.append("UID : %s" % b.hex())
+            fi = self.session.firmware_info()
+            if fi:
+                lines.append("固件: 魔数=0x%08X 版本=%s 最后应用构建=%s" % (
+                    fi.get("magic", 0), fi.get("version", "?"),
+                    fi.get("last_build", "?")))
+            cr = self.session.crash_record()
+            if cr:
+                lines.append("崩溃: #%d %s task=%s pc=0x%08X lr=0x%08X "
+                             "uptime=%dms" % (
+                                 cr["seq"], cr["src_name"], cr["task"],
+                                 cr["pc"], cr["lr"], cr["tick"]))
+                lines.append("  CFSR: %s" % cr["cfsr_text"])
+                lines.append("  HFSR: %s" % cr["hfsr_text"])
+            else:
+                lines.append("崩溃: 无有效记录")
+            self.reg_extra.setPlainText("\n".join(lines))
+            self.log.write("S", "设备/固件/崩溃信息刷新完成")
+
+        self._run_thread(work)
+
+    def _tasks_refresh(self):
+        def work():
+            self._require()
+            tasks = self.session.rtos_tasks()
+            self.tk_table.setRowCount(len(tasks))
+            for r, t in enumerate(sorted(tasks, key=lambda x: (-x["prio"],
+                                                              x["name"]))):
+                for c, key in enumerate(("name", "prio", "state",
+                                         "stack_used", "tcb")):
+                    val = t[key]
+                    if key == "prio":
+                        text = str(val)
+                    elif key == "stack_used":
+                        text = "%d" % val
+                    elif key == "tcb":
+                        text = "0x%08X" % val
+                    else:
+                        text = str(val)
+                    self.tk_table.setItem(r, c, QTableWidgetItem(text))
+            self.tk_info.setText("共 %d 个任务（就绪/延时/当前）" % len(tasks))
+            self.log.write("S", "RTOS 任务刷新完成")
+
+        self._run_thread(work)
+
+    def _bp_set(self):
+        def work():
+            self._require()
+            addr = self._parse_hex(self.d_bp_addr.text())
+            self.session.bp_set(addr)
+            self.log.write("S", "断点已设 0x%08X" % addr)
+            self._bp_list()
+
+        self._run_thread(work)
+
+    def _bp_clear(self):
+        def work():
+            self._require()
+            addr = self._parse_hex(self.d_bp_addr.text())
+            self.session.bp_clear(addr)
+            self.log.write("S", "断点已清 0x%08X" % addr)
+            self._bp_list()
+
+        self._run_thread(work)
+
+    def _bp_list(self):
+        bps = self.session.bp_list()
+        self.d_bp_info.setText("断点: " + (" ".join("0x%08X" % b for b in bps)
+                                           if bps else "无"))
+        self.log.write("I", "当前断点: %s" % self.d_bp_info.text())
+
+    def _debug_step(self):
+        def work():
+            self._require()
+            self.session.step()
+            self.log.write("S", "单步执行")
+
+        self._run_thread(work)
+
+    def _debug_disasm(self):
+        def work():
+            self._require()
+            addr = self._parse_hex(self.d_dis_addr.text())
+            out = self.session.disasm(addr, self.d_dis_n.value())
+            # 提取反汇编行
+            lines = []
+            for ln in out.splitlines():
+                ln = ln.strip()
+                if re_asm(ln):
+                    lines.append(ln)
+            self.d_dis.setPlainText("\n".join(lines) if lines else out)
+            self.log.write("S", "反汇编 0x%08X x%d" % (
+                addr, self.d_dis_n.value()))
+
+        self._run_thread(work)
+
+    def _debug_fault(self):
+        def work():
+            self._require()
+            f = self.session.fault_regs()
+            txt = ("CFSR = 0x%08X  %s\n"
+                   "HFSR = 0x%08X  %s\n"
+                   "DFSR = 0x%08X   BFAR=0x%08X  MMFAR=0x%08X\n"
+                   "复位原因: %s" % (
+                       f["cfsr"], f["cfsr_text"], f["hfsr"], f["hfsr_text"],
+                       f["dfsr"], f["bfar"], f["mmfar"],
+                       f["reset_reason"]))
+            self.d_fault.setPlainText(txt)
+            self.log.write("S", "故障/复位诊断完成")
 
         self._run_thread(work)
 

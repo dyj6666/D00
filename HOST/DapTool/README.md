@@ -16,13 +16,25 @@ python HOST\DapTool\dap_gui.py
 
 | 页签 | 功能 |
 | --- | --- |
-| 连接 | 一键连接/断开；自动识别芯片（STM32F407）、内核、Flash 容量、DPIDR |
-| 烧录 | 任意 .bin 烧录到任意地址；预设 BOOT/RUN/DOWNLOAD/PARAM；500kHz + 分块 + IWDG 窗口扩展 + 整包校验（实测 243KB 连续 4 轮零假死） |
+| 连接 | 一键连接/断开；自动识别芯片（STM32F407）、内核、Flash 容量、DPIDR；失败自动 USB 重枚举重试 |
+| 烧录 | 任意 .bin 任意地址；预设 BOOT/RUN/DOWNLOAD/PARAM；**BOOT+APP 一键**；500kHz + 分块 + IWDG 窗口 + 整包校验（实测 243KB 连续 4 轮零假死） |
 | OTA 助手 | 全 DAP 驱动升级：预置加密包 → 写 BKP 升级标志(0x5A5A) → 复位 → BOOT 自动应用；完全不需要串口 |
+| 调试 | 断点（硬件）/清除/列表、暂停/继续/单步、反汇编、**故障诊断**（CFSR/HFSR/DFSR/BFAR 解码 + RCC 复位原因） |
+| RTOS 任务 | **FreeRTOS 内核感知**：遍历就绪/延时链表显示任务名/优先级/状态/栈已用/TCB，符号自动解析 APP.map |
 | 内存 | 任意地址读/写 32 位字，Hex 视图 |
-| 寄存器 | 核心寄存器（r0-r15/sp/lr/pc/xpsr）+ RTC 备份寄存器（BKP0R-3R） |
-| 目标控制 | Halt / Resume / Reset；"持续暂停"自动喂 IWDG 防看门狗复位 |
-| 工具 | 扇区擦除、Flash 转储到文件、文件与 Flash 比对 |
+| 寄存器 | 核心寄存器 + 设备 UID + 固件信息（魔数/版本/最后构建）+ **板载崩溃记录解码**（BKP 'ERR1'） |
+| 目标控制 | Halt / Resume / Reset；"持续暂停"自动喂 IWDG |
+| 工具 | 扇区擦除、Flash 转储、文件比对 |
+
+## 世界级亮点
+
+- **崩溃记录直读**：APP 崩溃摘要存在 RTC 备份寄存器（'ERR1'），一键
+  读出原因/PC/LR/CFSR-HFSR 位解码/任务名/运行时长，零串口；
+- **RTOS 内核感知**：遍历 FreeRTOS 就绪/延时链表，按优先级展示任务
+  与实时栈水位（0xA5 填充扫描），符号地址随构建自动更新；
+- **故障诊断**：SCB CFSR/HFSR/DFSR/BFAR/MMFAR 逐位解码 + 复位原因
+  （RCC_CSR）解析；
+- **全 DAP OTA**：预置包 → 升级标志 → 复位，整条升级链零串口。
 
 ## 关键设计（可靠性）
 

@@ -34,6 +34,34 @@ PWR_CR = 0x40007000
 RTC_BKP0R = 0x40002850
 
 BOOT_FLAG_UPGRADE = 0x5A5A
+ERR_BKP_MAGIC_VAL = 0x45525231   # 'ERR1'
+ERR_SRC_NAMES = {1: "NMI", 2: "HardFault", 3: "MemManage", 4: "BusFault",
+                 5: "UsageFault", 6: "RTOS Assert", 7: "Stack Overflow",
+                 8: "Task Stall", 9: "Unhandled IRQ"}
+
+SCB_CFSR = 0xE000ED28
+SCB_HFSR = 0xE000ED2C
+SCB_DFSR = 0xE000ED30
+SCB_MMFAR = 0xE000ED34
+SCB_BFAR = 0xE000ED38
+RCC_CSR = 0x40023874
+
+UID_BASE = 0x1FFF7A10
+RUN_VALID_ADDR = 0x0805FFF8
+RUN_VERSION_ADDR = 0x0805FFFC
+PARAM_BASE = 0x080E0000
+PARAM_SLOT_OFFSET = 1024
+PARAM_MAGIC = 0x50524D54
+
+MAP_PATH = r"D:\GIT-SPACE\D00\APP\APP\MDK-ARM\APP\APP.map"
+
+# FreeRTOS TCB 字段偏移（实测本工程构建：名称 @+52，见 DAP 工具日志）
+TCB_OFF_PRIO = 44
+TCB_OFF_PXSTACK = 48
+TCB_OFF_NAME = 52
+LIST_ITEM_OFF_NEXT = 4
+LIST_ITEM_OFF_OWNER = 12
+LIST_SIZE = 20
 
 # F407 1MB 扇区映射：s0-s3=16KB，s4=64KB，s5-s11=128KB
 def sector_bounds(addr, size):
@@ -74,6 +102,66 @@ def kill_orphan_openocd():
     if killed:
         time.sleep(1)
     return killed
+
+
+def _parse_map_symbols(map_path):
+    """从 Keil .map 提取符号地址：'pxCurrentTCB  0x20000050  Data  4'。"""
+    syms = {}
+    try:
+        with open(map_path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                m = re.match(r"\s*(\w+)\s+(0x[0-9a-fA-F]{8})\s+(Data|Code)",
+                             ln)
+                if m:
+                    syms[m.group(1)] = int(m.group(2), 16)
+    except OSError:
+        pass
+    return syms
+
+
+def decode_cfsr(v):
+    out = []
+    m = v & 0xFFFF
+    if m & 0x01: out.append("IACCVIOL")
+    if m & 0x02: out.append("DACCVIOL")
+    if m & 0x08: out.append("MSTKERR")
+    if m & 0x10: out.append("MUNSTKERR")
+    if m & 0x80: out.append("MMARVALID")
+    b = (v >> 16) & 0xFF
+    if b & 0x01: out.append("IBUSERR")
+    if b & 0x02: out.append("PRECISERR")
+    if b & 0x04: out.append("IMPRECISERR")
+    if b & 0x08: out.append("UNSTKERR")
+    if b & 0x10: out.append("STKERR")
+    if b & 0x80: out.append("BFARVALID")
+    u = (v >> 24) & 0xFF
+    if u & 0x01: out.append("UNDEFINSTR")
+    if u & 0x02: out.append("INVSTATE")
+    if u & 0x04: out.append("INVPC")
+    if u & 0x08: out.append("NOCP")
+    if u & 0x10: out.append("UNALIGNED")
+    if u & 0x20: out.append("DIVBYZERO")
+    return ", ".join(out) if out else "(无)"
+
+
+def decode_hfsr(v):
+    out = []
+    if v & 0x02: out.append("VECTTBL")
+    if v & 0x40000000: out.append("FORCED")
+    if v & 0x80000000: out.append("DEBUGEVT")
+    return ", ".join(out) if out else "(无)"
+
+
+def decode_reset(csr):
+    reasons = []
+    if csr & (1 << 24): reasons.append("低功耗复位(LPWR)")
+    if csr & (1 << 25): reasons.append("窗口看门狗(WWDG)")
+    if csr & (1 << 26): reasons.append("独立看门狗(IWDG)")
+    if csr & (1 << 27): reasons.append("软件复位(SW)")
+    if csr & (1 << 28): reasons.append("上电复位(POR)")
+    if csr & (1 << 29): reasons.append("外部引脚复位(PIN)")
+    if csr & (1 << 30): reasons.append("欠压复位(BOR)")
+    return ", ".join(reasons) if reasons else "(无标志)"
 
 
 class DapSession:
@@ -182,6 +270,13 @@ class DapSession:
     def close(self):
         with self._lock:
             try:
+                # 先恢复目标运行，避免会话结束后目标停留在 halt 态
+                if self.sock is not None:
+                    try:
+                        self.sock.sendall(b"resume\n")
+                        self._read_until_prompt(2)
+                    except Exception:
+                        pass
                 if self.sock:
                     self.sock.close()
             except OSError:
@@ -260,6 +355,14 @@ class DapSession:
             vals += [int(x, 16) for x in m.group(1).split()]
         return vals
 
+    def read_words_raw(self, addr, count):
+        """目标已 halt 时的原始读（不 halt/resume，供整段扫描保持一致）。"""
+        out = self.cmd("mdw 0x%X %d" % (addr, count))
+        vals = []
+        for m in re.finditer(r"0x[0-9a-fA-F]+:\s+((?:[0-9a-fA-F]{8}\s*)+)", out):
+            vals += [int(x, 16) for x in m.group(1).split()]
+        return vals
+
     def write_u32(self, addr, value):
         self.cmd("halt")
         self.cmd("mww 0x%X 0xAAAA" % IWDG_KR)
@@ -285,6 +388,200 @@ class DapSession:
         for m in re.finditer(r"0x[0-9a-fA-F]+:\s+((?:[0-9a-fA-F]{8}\s*)+)", out):
             bkp = [int(x, 16) for x in m.group(1).split()]
         return bkp
+
+    # ---------------- 设备 / 固件 / 崩溃信息 ----------------
+
+    def device_uid(self):
+        vals = self.read_words(UID_BASE, 3)
+        return vals if len(vals) == 3 else []
+
+    def firmware_info(self):
+        """RUN 区尾魔数/版本 + 参数区最后应用构建号。"""
+        info = {}
+        v = self.read_words(RUN_VALID_ADDR, 2)
+        if len(v) == 2:
+            info["magic"] = v[0]
+            info["version"] = v[1]
+        for slot in (0, 1):
+            base = PARAM_BASE + slot * PARAM_SLOT_OFFSET
+            p = self.read_words(base, 6)
+            if len(p) >= 6 and p[0] == PARAM_MAGIC:
+                info["last_build"] = p[5]
+                info["boot_state"] = p[1]
+                break
+        return info
+
+    def crash_record(self):
+        """从 RTC 备份寄存器读 APP 崩溃记录（'ERR1' 摘要）。"""
+        vals = self.read_words(RTC_BKP0R, 13)
+        if len(vals) < 13:
+            return None
+        if (vals[1] & 0xFF) != (ERR_BKP_MAGIC_VAL & 0xFF):
+            return None
+        name = b""
+        for i in range(10, 13):
+            w = vals[i]
+            name += bytes(((w >> 0) & 0xFF, (w >> 8) & 0xFF,
+                          (w >> 16) & 0xFF, (w >> 24) & 0xFF))
+        task = name.split(b"\x00")[0].decode("ascii", "replace")
+        return {
+            "src": vals[2],
+            "src_name": ERR_SRC_NAMES.get(vals[2], "Unknown(%d)" % vals[2]),
+            "seq": vals[3],
+            "pc": vals[4],
+            "lr": vals[5],
+            "addr": vals[6],
+            "cfsr": vals[7],
+            "hfsr": vals[8],
+            "tick": vals[9],
+            "task": task,
+            "cfsr_text": decode_cfsr(vals[7]),
+            "hfsr_text": decode_hfsr(vals[8]),
+        }
+
+    def fault_regs(self):
+        """实时读 SCB 故障寄存器 + RCC 复位原因。"""
+        vals = self.read_words(SCB_CFSR, 3)          # CFSR/HFSR/DFSR
+        bfar = self.read_words(SCB_BFAR, 2)          # BFAR/MMFAR
+        csr = self.read_words(RCC_CSR, 1)
+        out = {
+            "cfsr": vals[0] if len(vals) > 0 else 0,
+            "hfsr": vals[1] if len(vals) > 1 else 0,
+            "dfsr": vals[2] if len(vals) > 2 else 0,
+            "bfar": bfar[0] if len(bfar) > 0 else 0,
+            "mmfar": bfar[1] if len(bfar) > 1 else 0,
+            "rcc_csr": csr[0] if csr else 0,
+            "cfsr_text": "",
+            "hfsr_text": "",
+            "reset_reason": decode_reset(csr[0] if csr else 0),
+        }
+        out["cfsr_text"] = decode_cfsr(out["cfsr"])
+        out["hfsr_text"] = decode_hfsr(out["hfsr"])
+        return out
+
+    # ---------------- 调试命令 ----------------
+
+    def bp_set(self, addr):
+        self.cmd("bp 0x%X 2 hw" % addr)
+
+    def bp_clear(self, addr):
+        self.cmd("rbp 0x%X" % addr)
+
+    def bp_list(self):
+        out = self.cmd("bp")
+        bps = []
+        for m in re.finditer(r"([\w$]+)\s+at\s+0x([0-9a-fA-F]+)", out):
+            bps.append(int(m.group(2), 16))
+        return bps
+
+    def step(self):
+        self.cmd("halt")
+        self.cmd("mww 0x%X 0xAAAA" % IWDG_KR)
+        self.cmd("step")
+
+    def disasm(self, addr, count=16):
+        out = self.cmd("disassemble 0x%X %d" % (addr, count))
+        return out
+
+    # ---------------- RTOS 任务感知 ----------------
+
+    def rtos_tasks(self, map_path=MAP_PATH):
+        """解析 APP.map 里的 FreeRTOS 符号，遍历任务链表读出任务列表。
+        字段：任务名 / 优先级 / 状态 / 栈已用词数（0xA5 填充扫描）。"""
+        syms = _parse_map_symbols(map_path)
+        need = ("pxCurrentTCB", "pxReadyTasksLists", "pxDelayedTaskList",
+                "pxOverflowDelayedTaskList", "uxTopReadyPriority")
+        if not all(s in syms for s in need):
+            raise DapError("map 缺少 FreeRTOS 符号（固件与 map 不匹配？）")
+        # 等待 APP 真正运行：OpenOCD 连接可能触发复位，PC 短暂在 BOOT
+        for _ in range(20):
+            pc = self._read_pc()
+            if 0x08010000 <= pc <= 0x0805FFFF:
+                break
+            time.sleep(0.3)
+        else:
+            raise DapError("目标未运行 APP（PC=0x%08X）" % pc)
+        self.cmd("halt")
+        self.cmd("mww 0x%X 0xAAAA" % IWDG_KR)
+        tasks = []
+        try:
+            cur = self.read_words_raw(syms["pxCurrentTCB"], 1)
+            cur = cur[0] if cur else 0
+            top = self.read_words_raw(syms["uxTopReadyPriority"], 1)
+            top = top[0] if top else 0
+            seen = set()
+
+            def scan_list(list_base, state, max_items=64):
+                n = self.read_words_raw(list_base, 1)
+                n = n[0] if n else 0
+                if n == 0 or n > max_items:
+                    return
+                node = self.read_words_raw(list_base + 12, 1)  # xListEnd.pxNext
+                node = node[0] if node else 0
+                end = list_base + 8
+                for _ in range(max_items):
+                    if node == 0 or node == end:
+                        break
+                    owner = self.read_words_raw(node + LIST_ITEM_OFF_OWNER, 1)
+                    owner = owner[0] if owner else 0
+                    if owner and owner not in seen:
+                        seen.add(owner)
+                        tasks.append(self._read_tcb(owner, state,
+                                                    owner == cur))
+                    nxt = self.read_words_raw(node + LIST_ITEM_OFF_NEXT, 1)
+                    node = nxt[0] if nxt else 0
+
+            for prio in range(top + 1):
+                scan_list(syms["pxReadyTasksLists"] + prio * LIST_SIZE,
+                          "Ready")
+            dl = self.read_words_raw(syms["pxDelayedTaskList"], 1)
+            if dl:
+                scan_list(dl[0], "Blocked")
+            dl2 = self.read_words_raw(syms["pxOverflowDelayedTaskList"], 1)
+            if dl2:
+                scan_list(dl2[0], "Blocked")
+            tasks.sort(key=lambda t: -t["prio"])
+            return tasks
+        finally:
+            self.cmd("resume")
+
+    def _read_pc(self):
+        out = self.cmd("halt")
+        self.cmd("mww 0x%X 0xAAAA" % IWDG_KR)
+        out = self.cmd("reg pc")
+        self.cmd("resume")
+        m = re.search(r"pc \(/32\): (0x[0-9a-fA-F]+)", out)
+        return int(m.group(1), 16) if m else 0
+
+    def _read_tcb(self, tcb, state, running):
+        words = self.read_words_raw(tcb, 17)   # 前 68 字节覆盖 name/prio/stack
+        name = b"".join(bytes(((w >> 0) & 0xFF, (w >> 8) & 0xFF,
+                               (w >> 16) & 0xFF, (w >> 24) & 0xFF))
+                        for w in words[13:17]) if len(words) >= 17 else b"?"
+        name = name.split(b"\x00")[0].decode("ascii", "replace")
+        prio = words[TCB_OFF_PRIO // 4] if len(words) > TCB_OFF_PRIO // 4 else 0
+        pstack = (words[TCB_OFF_PXSTACK // 4]
+                  if len(words) > TCB_OFF_PXSTACK // 4 else 0)
+        used = 0
+        if pstack:
+            used = self._stack_used_raw(pstack)
+        return {"name": name or "?", "prio": prio, "state": "Running" if
+                running else state, "stack_used": used, "tcb": tcb}
+
+    def _stack_used_raw(self, pstack, max_words=1024):
+        """从栈底向上扫 0xA5 填充，返回已用词数。"""
+        used = 0
+        addr = pstack
+        while used < max_words:
+            w = self.read_words_raw(addr, 4)
+            if len(w) < 4:
+                break
+            for v in w:
+                if v != 0xA5A5A5A5:
+                    return used
+                used += 1
+            addr += 16
+        return used
 
     # ---------------- 烧录（健壮序列） ----------------
 
