@@ -17,7 +17,8 @@ typedef struct {
 } module_desc_t;
 
 /* 注册宏：显式给出名称与优先级 */
-#define MODULE_INIT(name_str, prio, init_func) { (name_str), (prio), (init_func) }
+#define MODULE_INIT(name_str, prio, init_func) \
+    { (name_str), (prio), (module_init_fn)(init_func) }
 
 /* 兼容旧宏：以函数名作为模块名，默认优先级 100 */
 #define REGISTER_MODULE(init_func) MODULE_INIT(#init_func, 100, (init_func))

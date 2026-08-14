@@ -2207,6 +2207,11 @@
               <FilePath>..\SystemServices\cmd_shell.c</FilePath>
             </File>
             <File>
+              <FileName>ext_store.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\SystemServices\ext_store.c</FilePath>
+            </File>
+            <File>
               <FileName>cmd_shell.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\SystemServices\cmd_shell.h</FilePath>

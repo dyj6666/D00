@@ -38,6 +38,7 @@
 #include "bsp_w25q128.h"
 #include "cmd_can.h"
 #include "ota_can_svc.h"
+#include "ext_store.h"
 
 #include <string.h>
 
@@ -49,6 +50,7 @@ MODULE_INIT("CmdCat", 3,  CmdCatalog_Register),
 MODULE_INIT("Power",  1,  BSP_Power_Init),
 MODULE_INIT("CanBsp", 3,  BSP_CAN_Init),
 MODULE_INIT("W25Q",   3,  BSP_W25Q128_Init),
+MODULE_INIT("ExtStore",4,  ExtStore_Init),
     MODULE_INIT("USR",    3,  UsrStore_Init),
     MODULE_INIT("Shell",  4,  Shell_Init),
     MODULE_INIT("CmdCan", 5,  CmdCan_Register),

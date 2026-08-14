@@ -3226,3 +3226,41 @@ auto-stop）全部按设计工作。
   SystemCoreClock（复位后可能未更新）；④DAP halt 诊断期间必须喂狗，
   否则 IWDG 复位会把"BOOT 启动早期寄存器值"误读为运行态；⑤HAL_SPI_Init
   不置位 SPE（F4 HAL 行为），寄存器级传输需自行 `CR1|=SPE`。
+
+### 10.46 外部 Flash 顶级存储服务层 + SRAM3 启用 + OTA 分区极致划分
+
+**交付**：`SystemServices/ext_store.{h,c}` 存储服务层 + 链接脚本启用 SRAM3 64KB +
+外部 Flash 五分区（OTA 下载 2MB / 镜像库 2MB / 文件系统 8MB / 用户 3MB / 元数据 1MB）。
+
+#### 10.46.1 能力与验证
+
+- **SRAM3 启用**：Keil scatter + GCC linker 的 RAM 从 128KB 扩至 192KB
+  （F407ZGT6 实际 192KB SRAM：SRAM1+2 128KB + SRAM3 64KB，此前 64KB 完全闲置），
+  内存余量 9KB → 73KB；map 确认 `RW_IRAM1 Max=0x30000`。
+- **存储服务层**：分区表（4KB 对齐）、整区/范围擦除（64KB 块优先、坏区自动跳过）、
+  分区内边界校验读写、坏区表双份持久（CRC 保护）、掉电安全双份写（WriteSafe：
+  副先主后提交点、CRC 校验、读主取主坏取副）、磨损均衡（双份交替）。
+- **验证数据**：读 1MB @4338KB/s、写 64KB @42.7KB/s、擦 64KB 154ms、
+  读写校验 bad=0；WriteSafe/ReadSafe 双份闭环 rc=0/bad=0；
+  坏区闭环：标记→isbad=1→写入被拒 rc=-5→整区擦除跳过（数据保留）→表持久→badclear 恢复。
+
+#### 10.46.2 踩坑复盘（重点问题）
+
+1. **shellTask 栈溢出（2KB→4KB）**：store bench 的大缓冲（rbuf[512]+pat/chk 等 ~900B）
+   叠加调用链超 shell 栈；修复：shell 栈 1024×4=4KB + bench 缓冲全部静态化。
+   经验：命令层凡 >256B 缓冲一律静态，栈只给控制流。
+2. **NOR 写前必须擦（未擦写 = AND）**：ota_dl 首次写入全 0 区域，写入值与 0x00 AND
+   后读回 0；shell write 命令改为自动预擦（业务层仍自行控制擦写）。
+3. **WriteSafe 双份槽必须 4KB 扇区对齐**：stride=512 时副槽擦除地址未对齐 →
+   BSP 返回 PARAM 被误判 IO 并误标坏区；修复：stride % 4096 强校验。
+4. **双份帧 CRC 覆盖自身**：EXT_SAFE_HEADER=16 与结构头 8B+CRC 4B=12B 不符，
+   CRC 计算含 crc 字段（写入前旧值）→ 读侧恒失败；修复：CRC 只覆盖
+   `offsetof(data)+len`，total=12+len。
+5. **坏区表 CRC 同样覆盖 crc32 字段**：清零后整体计算（读写同规则）修复。
+6. **EraseRange 坏区跳过 bug**：has_bad=true 时旧逻辑仍擦当前扇区（坏区被擦）；
+   重构为"64KB 块无坏整块擦，有坏逐 4KB 扇区、坏区跳过不擦、失败标记"。
+7. **MODULE_INIT 类型警告**：int 返回 init 与 `void(*)(void)` 不兼容，宏加强转一劳永逸。
+
+**经验沉淀**：①NOR 写入前必须擦（未擦 = AND）；②双份/校验类结构的 CRC 必须
+排除自身字段（清零后整体算）；③擦除策略必须"无坏整块擦、有坏逐扇区且跳过"；
+④嵌入式校验/擦除相关参数（stride/偏移）必须按硬件最小单元（扇区）对齐强校验。

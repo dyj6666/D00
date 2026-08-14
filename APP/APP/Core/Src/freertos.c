@@ -71,7 +71,7 @@ osThreadId_t startupTaskHandle;
 osThreadId_t shellTaskHandle;
 const osThreadAttr_t shellTask_attributes = {
   .name = "shellTask",
-  .stack_size = 512 * 4,
+  .stack_size = 1024 * 4,   /* 4KB：命令层大缓冲（read/bench/store）安全 */
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for loggerTXTask */

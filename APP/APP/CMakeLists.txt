@@ -92,6 +92,7 @@ if(CMAKE_CROSSCOMPILING)
     SystemServices/logger.c
     SystemServices/shell.c
     SystemServices/cmd_shell.c
+    SystemServices/ext_store.c
     SystemServices/cmd_can.c
     SystemServices/net_config.c
     SystemServices/usr_store.c

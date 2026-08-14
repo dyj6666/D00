@@ -44,6 +44,7 @@
 #include "bsp_can.h"
 #include "bsp_power.h"
 #include "bsp_w25q128.h"
+#include "ext_store.h"
 #include "can_proto.h"
 #include "pinout.h"
 #include "lwip/ip4_addr.h"
@@ -261,6 +262,7 @@ static void cmd_power(const char *args);
 static void cmd_mpu(const char *args);
 static void cmd_can(const char *args);
 static void cmd_w25q(const char *args);
+static void cmd_store(const char *args);
 static void cmd_ver(const char *args);
 static void cmd_echo(const char *args);
 static void cmd_stream(const char *args);
@@ -619,6 +621,7 @@ static const cmd_entry_t cmd_table[] = {
     {"mpu",          "IMU MPU6050 <info|test|cal>", CMD_TRANSPORT_ALL, cmd_mpu},
     {"can",          "CAN1 <status|reset|loop <on|off|silent>|test <n>|send <id> <hex>>", CMD_TRANSPORT_ALL, cmd_can},
     {"w25q",         "W25Q128 <id|read <addr> <len>|write <addr> <hex>|erase|erase32|erase64 <addr>|erasc|sr|bench>", CMD_TRANSPORT_ALL, cmd_w25q},
+    {"store",        "ExtFlash store <info|probe|erase|badclear <part>|read <part> <off> <len>|write <part> <off> <hex>|ws|rs <part> <slot> <stride>|bench>", CMD_TRANSPORT_ALL, cmd_store},
 #if CRASH_INJECT_ENABLE
     {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", CMD_TRANSPORT_UART, cmd_crash},
 #endif
@@ -1857,18 +1860,18 @@ static void cmd_w25q(const char *args)
     }
 
     if (strcmp(sub, "bench") == 0) {
+        static uint8_t rbuf[512];   /* 静态：避免命令层栈压力 */
+        static uint8_t pat[128];
+        static uint8_t chk[128];
         /* 性能测试区：最后 1MB（0xFF0000），与后续分区规划不冲突 */
         const uint32_t base = 0xFF0000u;
         const uint32_t blk = 64u * 1024u;
-        uint8_t pat[128];
-        uint8_t chk[128];
         for (uint32_t i = 0; i < sizeof(pat); i++) {
             pat[i] = (uint8_t)i;
         }
 
         /* 1) 读吞吐：1MB DMA Fast Read */
         uint32_t t0 = HAL_GetTick();
-        uint8_t rbuf[512];
         int rc = BSP_W25Q_OK;
         for (uint32_t off = 0; off < (1024u * 1024u) && rc == BSP_W25Q_OK;
              off += sizeof(rbuf)) {
@@ -1918,6 +1921,325 @@ static void cmd_w25q(const char *args)
     }
 
     LOG_Printf("unknown w25q sub: %s\r\n", sub);
+}
+
+/* ================== 外部 Flash 存储服务层 ================== */
+static int store_part_parse(const char *s)
+{
+    if (s == NULL || *s == '\0') {
+        return -1;
+    }
+    for (int i = 0; i < EXT_PART_COUNT; i++) {
+        const ext_part_desc_t *p = ExtStore_GetPart((ext_part_id_t)i);
+        if (p != NULL && strcmp(s, p->name) == 0) {
+            return i;
+        }
+    }
+    char *end = NULL;
+    long v = strtol(s, &end, 0);
+    if (end != s && v >= 0 && v < EXT_PART_COUNT) {
+        return (int)v;
+    }
+    return -1;
+}
+
+static void cmd_store(const char *args)
+{
+    char sub[16] = {0};
+    char pname[16] = {0};
+    unsigned long a = 0, b = 0;
+    int n = sscanf(args, "%15s %15s %lx %lx", sub, pname, &a, &b);
+    if (n < 1) {
+        LOG_Printf("Usage: store <info|probe|erase <part>|read <part> <off> <len>|"
+                   "write <part> <off> <hex>|ws|rs <part> <slot> <stride>|bench>\r\n");
+        return;
+    }
+
+    if (strcmp(sub, "info") == 0) {
+        LOG_Printf("ExtFlash partitions:\r\n");
+        for (int i = 0; i < EXT_PART_COUNT; i++) {
+            const ext_part_desc_t *p = ExtStore_GetPart((ext_part_id_t)i);
+            if (p == NULL) {
+                continue;
+            }
+            LOG_Printf("  [%d] %-8s base=0x%06lX size=%luKB flags=0x%lX\r\n",
+                       i, p->name, (unsigned long)p->base,
+                       (unsigned long)(p->size / 1024u),
+                       (unsigned long)p->flags);
+        }
+        return;
+    }
+
+    if (strcmp(sub, "probe") == 0) {
+        LOG_Printf("store probe rc=%d\r\n", ExtStore_Probe());
+        return;
+    }
+
+    if (strcmp(sub, "erase") == 0 && n >= 2) {
+        int id = store_part_parse(pname);
+        if (id < 0) {
+            LOG_Printf("bad part\r\n");
+            return;
+        }
+        uint32_t t0 = HAL_GetTick();
+        int rc = ExtStore_Erase((ext_part_id_t)id);
+        LOG_Printf("erase %s rc=%d in %lu ms\r\n", pname, rc,
+                   (unsigned long)(HAL_GetTick() - t0));
+        return;
+    }
+
+    if (strcmp(sub, "read") == 0 && n >= 4) {
+        int id = store_part_parse(pname);
+        if (id < 0) {
+            LOG_Printf("bad part\r\n");
+            return;
+        }
+        if (b == 0 || b > 1024u) {
+            LOG_Printf("len 1..1024\r\n");
+            return;
+        }
+        uint8_t buf[16];
+        uint32_t off = 0;
+        int rc_all = EXT_STORE_OK;
+        while (off < b && rc_all == EXT_STORE_OK) {
+            uint32_t chunk = (b - off > sizeof(buf)) ? sizeof(buf) : (b - off);
+            rc_all = ExtStore_Read((ext_part_id_t)id, (uint32_t)a + off,
+                                   buf, chunk);
+            if (rc_all != EXT_STORE_OK) {
+                break;
+            }
+            LOG_Printf("%06lX: ", (unsigned long)(a + off));
+            for (uint32_t i = 0; i < chunk; i++) {
+                LOG_Printf("%02X ", (unsigned)buf[i]);
+            }
+            LOG_Printf("\r\n");
+            off += chunk;
+        }
+        LOG_Printf("read rc=%d (%lu bytes)\r\n", rc_all, (unsigned long)off);
+        return;
+    }
+
+    if (strcmp(sub, "write") == 0 && n >= 3) {
+        int id = store_part_parse(pname);
+        if (id < 0) {
+            LOG_Printf("bad part\r\n");
+            return;
+        }
+        const char *p = args;
+        while (*p && *p != ' ') p++;
+        while (*p == ' ') p++;
+        while (*p && *p != ' ') p++;
+        while (*p == ' ') p++;
+        while (*p && *p != ' ') p++;
+        while (*p == ' ') p++;
+        uint8_t buf[64];
+        uint32_t cnt = 0;
+        while (*p && cnt < sizeof(buf)) {
+            unsigned int v = 0;
+            if (sscanf(p, "%2x", &v) != 1) {
+                break;
+            }
+            buf[cnt++] = (uint8_t)v;
+            p += 2;
+            while (*p == ' ') p++;
+        }
+        if (cnt == 0) {
+            LOG_Printf("no hex data\r\n");
+            return;
+        }
+        /* NOR 写前必须擦：shell 交互自动先擦目标扇区（同扇区数据会被清） */
+        uint32_t t0 = HAL_GetTick();
+        int erc = ExtStore_EraseRange((ext_part_id_t)id, (uint32_t)a, cnt);
+        if (erc != EXT_STORE_OK) {
+            LOG_Printf("pre-erase FAIL rc=%d\r\n", erc);
+            return;
+        }
+        int rc = ExtStore_Write((ext_part_id_t)id, (uint32_t)a, buf, cnt);
+        LOG_Printf("write %s @0x%lX %luB rc=%d (erase %lu ms)\r\n", pname,
+                   (unsigned long)a, (unsigned long)cnt, rc,
+                   (unsigned long)(HAL_GetTick() - t0));
+        return;
+    }
+
+    if ((strcmp(sub, "ws") == 0 || strcmp(sub, "rs") == 0) && n >= 4) {
+        int id = store_part_parse(pname);
+        if (id < 0) {
+            LOG_Printf("bad part\r\n");
+            return;
+        }
+        uint32_t slot = (uint32_t)a;
+        uint32_t stride = (uint32_t)b;
+        if (strcmp(sub, "ws") == 0) {
+            const char *p = args;
+            int tok = 0;
+            while (*p) {
+                if (*p == ' ') tok++;
+                p++;
+                if (tok >= 3) {
+                    break;
+                }
+            }
+            while (*p == ' ') p++;
+            uint8_t buf[128];
+            uint32_t cnt = 0;
+            while (*p && cnt < sizeof(buf)) {
+                unsigned int v = 0;
+                if (sscanf(p, "%2x", &v) != 1) {
+                    break;
+                }
+                buf[cnt++] = (uint8_t)v;
+                p += 2;
+                while (*p == ' ') p++;
+            }
+            if (cnt == 0) {
+                LOG_Printf("no hex data\r\n");
+                return;
+            }
+            int rc = ExtStore_WriteSafe((ext_part_id_t)id, slot, stride,
+                                        buf, cnt);
+            LOG_Printf("ws %s slot=%lu stride=%lu %luB rc=%d\r\n",
+                       pname, (unsigned long)slot, (unsigned long)stride,
+                       (unsigned long)cnt, rc);
+        } else {
+            uint8_t buf[128];
+            uint32_t ver = 0;
+            int rc = ExtStore_ReadSafe((ext_part_id_t)id, slot, stride,
+                                       buf, sizeof(buf), &ver);
+            LOG_Printf("rs rc=%d ver=%lu: ", rc, (unsigned long)ver);
+            for (uint32_t i = 0; i < (rc == EXT_STORE_OK ? 16u : 0u); i++) {
+                LOG_Printf("%02X ", (unsigned)buf[i]);
+            }
+            LOG_Printf("\r\n");
+        }
+        return;
+    }
+
+    if (strcmp(sub, "bench") == 0) {
+        static uint8_t rbuf[512];   /* 静态：避免命令层栈压力 */
+        static uint8_t pat[128];
+        static uint8_t chk[128];
+        static uint8_t sf[32];
+        static uint8_t sf2[32];
+        const ext_part_desc_t *user = ExtStore_GetPart(EXT_PART_USER);
+        if (user == NULL) {
+            return;
+        }
+        /* 测试区：USER 区最后 1MB（0xE00000-0xEFFFFF） */
+        const uint32_t base = user->base + user->size - 1024u * 1024u;
+        for (uint32_t i = 0; i < sizeof(pat); i++) {
+            pat[i] = (uint8_t)i;
+        }
+
+        uint32_t t0 = HAL_GetTick();
+        int rc = EXT_STORE_OK;
+        for (uint32_t off = 0; off < (1024u * 1024u) && rc == EXT_STORE_OK;
+             off += sizeof(rbuf)) {
+            rc = ExtStore_Read(EXT_PART_USER, base - user->base + off,
+                               rbuf, sizeof(rbuf));
+        }
+        uint32_t rd_ms = HAL_GetTick() - t0;
+        LOG_Printf("store bench read 1MB: rc=%d %lu ms -> %lu KB/s\r\n",
+                   rc, (unsigned long)rd_ms,
+                   (unsigned long)(rd_ms ? (1024u * 1000u / rd_ms) : 0u));
+
+        t0 = HAL_GetTick();
+        rc = ExtStore_EraseRange(EXT_PART_USER, base - user->base, 64u * 1024u);
+        LOG_Printf("store bench erase 64KB: rc=%d in %lu ms\r\n",
+                   rc, (unsigned long)(HAL_GetTick() - t0));
+
+        t0 = HAL_GetTick();
+        rc = EXT_STORE_OK;
+        for (uint32_t off = 0; off < (64u * 1024u) && rc == EXT_STORE_OK;
+             off += sizeof(pat)) {
+            rc = ExtStore_Write(EXT_PART_USER, base - user->base + off,
+                                pat, sizeof(pat));
+        }
+        uint32_t wr_ms = HAL_GetTick() - t0;
+        LOG_Printf("store bench write 64KB: rc=%d %lu ms -> %lu KB/s\r\n",
+                   rc, (unsigned long)wr_ms,
+                   (unsigned long)(wr_ms ? (64u * 1024u * 1000u / wr_ms) : 0u));
+
+        t0 = HAL_GetTick();
+        int bad = 0;
+        for (uint32_t off = 0; off < (64u * 1024u) && bad == 0;
+             off += sizeof(chk)) {
+            rc = ExtStore_Read(EXT_PART_USER, base - user->base + off,
+                               chk, sizeof(chk));
+            if (rc != EXT_STORE_OK || memcmp(chk, pat, sizeof(chk)) != 0) {
+                bad = 1;
+            }
+        }
+        LOG_Printf("store bench verify 64KB: rc=%d bad=%d in %lu ms\r\n",
+                   rc, bad, (unsigned long)(HAL_GetTick() - t0));
+
+        /* 双份安全写/读校验 */
+        for (uint32_t i = 0; i < sizeof(sf); i++) {
+            sf[i] = (uint8_t)(0xA0u + i);
+        }
+        uint32_t sbase = base - user->base + 128u * 1024u;  /* 测试区中部 */
+        uint32_t sslot = sbase / (2u * 4096u);  /* 逻辑槽号 = 物理偏移/2stride */
+        rc = ExtStore_WriteSafe(EXT_PART_USER, sslot, 4096u, sf, sizeof(sf));
+        LOG_Printf("store bench safe-write: rc=%d\r\n", rc);
+        uint32_t ver = 0;
+        rc = ExtStore_ReadSafe(EXT_PART_USER, sslot, 4096u,
+                               sf2, sizeof(sf2), &ver);
+        int sbad = (rc != EXT_STORE_OK ||
+                    memcmp(sf2, sf, sizeof(sf)) != 0);
+        LOG_Printf("store bench safe-read: rc=%d ver=%lu bad=%d\r\n",
+                   rc, (unsigned long)ver, sbad);
+
+        /* 恢复：擦回测试区 */
+        rc = ExtStore_EraseRange(EXT_PART_USER, base - user->base,
+                                 256u * 1024u);
+        LOG_Printf("store bench restore: rc=%d\r\n", rc);
+        return;
+    }
+
+    if (strcmp(sub, "badclear") == 0) {
+        ExtStore_BadMapClear();
+        return;
+    }
+
+    if (strcmp(sub, "bad") == 0 && n >= 3) {
+        /* 手动标记坏区（测试/演示坏区管理；badclear 恢复） */
+        int id = store_part_parse(pname);
+        if (id < 0) {
+            LOG_Printf("bad part\r\n");
+            return;
+        }
+        ExtStore_MarkBad((ext_part_id_t)id, (uint32_t)a);
+        LOG_Printf("marked bad: %s @0x%lX -> isbad=%d\r\n", pname,
+                   (unsigned long)a,
+                   ExtStore_IsBad((ext_part_id_t)id, (uint32_t)a) ? 1 : 0);
+        return;
+    }
+
+    if (strcmp(sub, "isbad") == 0 && n >= 3) {
+        int id = store_part_parse(pname);
+        if (id < 0) {
+            LOG_Printf("bad part\r\n");
+            return;
+        }
+        LOG_Printf("isbad %s @0x%lX = %d\r\n", pname, (unsigned long)a,
+                   ExtStore_IsBad((ext_part_id_t)id, (uint32_t)a) ? 1 : 0);
+        return;
+    }
+
+    if (strcmp(sub, "badtest") == 0) {
+        /* 坏区表写入路径诊断：标记 + 读回坏区表头 */
+        ExtStore_MarkBad(EXT_PART_USER, 0x220000u);
+        uint8_t hdr[16] = {0u};
+        int rc = ExtStore_Read(EXT_PART_META, 0x2000u, hdr, sizeof(hdr));
+        LOG_Printf("badmapA rc=%d: ", rc);
+        for (uint32_t i = 0; i < 16u; i++) {
+            LOG_Printf("%02X ", (unsigned)hdr[i]);
+        }
+        LOG_Printf("\r\nisbad=%d\r\n",
+                   ExtStore_IsBad(EXT_PART_USER, 0x220000u) ? 1 : 0);
+        return;
+    }
+
+    LOG_Printf("unknown store sub: %s\r\n", sub);
 }
 
 void CmdCatalog_Register(void)
