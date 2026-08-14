@@ -378,8 +378,10 @@ class MainWindow(QMainWindow):
         b = QPushButton("刷新寄存器")
         b.setObjectName("btn_primary")
         b2 = QPushButton("读取设备/固件/崩溃信息")
+        b3 = QPushButton("清除崩溃记录")
         top.addWidget(b)
         top.addWidget(b2)
+        top.addWidget(b3)
         top.addStretch(1)
         lay.addLayout(top)
         split = QHBoxLayout()
@@ -403,6 +405,7 @@ class MainWindow(QMainWindow):
         lay.addLayout(split, 1)
         b.clicked.connect(self._reg_refresh)
         b2.clicked.connect(self._info_refresh)
+        b3.clicked.connect(self._clear_crash)
         return w
 
     def _tab_target(self):
@@ -784,7 +787,7 @@ class MainWindow(QMainWindow):
                                        QTableWidgetItem("0x%08X" % val))
             extra = "BKP0R-3R: " + "  ".join(
                 "0x%08X" % v for v in bkp) if bkp else "BKP: --"
-            self.reg_extra.setText(extra)
+            self.reg_extra.setPlainText(extra)
             self.log.write("S", "寄存器刷新完成 (pc=0x%08X)" %
                            regs.get("pc", 0))
 
@@ -817,6 +820,22 @@ class MainWindow(QMainWindow):
                 lines.append("崩溃: 无有效记录")
             self.reg_extra.setPlainText("\n".join(lines))
             self.log.write("S", "设备/固件/崩溃信息刷新完成")
+
+        self._run_thread(work)
+
+    def _clear_crash(self):
+        """清除 RTC 备份寄存器里的崩溃记录（BKP1R-12R 写 0）。"""
+        def work():
+            self._require()
+            self.session.cmd("reset halt")
+            self.session.cmd("set _apb [mrw 0x40023840]")
+            self.session.cmd("mww 0x40023840 [expr {$_apb | 0x10000000}]")
+            self.session.cmd("set _cr [mrw 0x40007000]")
+            self.session.cmd("mww 0x40007000 [expr {$_cr | 0x100}]")
+            for i in range(1, 13):
+                self.session.cmd("mww 0x%X 0x0" % (dc.RTC_BKP0R + i * 4))
+            self.session.cmd("reset run")
+            self.log.write("S", "崩溃记录已清除（BKP1R-12R）")
 
         self._run_thread(work)
 
