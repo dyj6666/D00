@@ -13,6 +13,7 @@ import queue
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -620,6 +621,36 @@ class MainWindow(QMainWindow):
     def _parse_hex(self, text):
         return int(text.strip(), 16)
 
+    def _make_app_flash_image(self, raw_path):
+        """把原始 APP.bin 补成 320KB 完整 RUN 分区镜像（魔数@0x4FFF8）。
+        BOOT 只认 0x0805FFF8 的魔数；直接刷原始 bin 会导致 APP 无效。
+        与 workflow 的 append_app_magic.py 同逻辑；版本取 version.json。"""
+        raw = open(raw_path, "rb").read()
+        if len(raw) >= 320 * 1024 - 8:
+            raise dc.DapError("APP.bin 过大，超过魔数区偏移")
+        ver = 202
+        try:
+            import json as _json
+            vp = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__)))),
+                "config", "version.json")
+            with open(vp, encoding="utf-8") as f:
+                ver = int(_json.load(f).get("ota_version", 202))
+        except Exception:
+            pass
+        image = bytearray(b"\xFF" * (320 * 1024))
+        image[:len(raw)] = raw
+        struct = __import__("struct")
+        struct.pack_into("<I", image, 320 * 1024 - 8, 0x4F54412E)
+        struct.pack_into("<I", image, 320 * 1024 - 4, ver)
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".bin", prefix="app_flash_", delete=False)
+        tmp.write(bytes(image))
+        tmp.close()
+        self.log.write("I", "已生成完整 RUN 镜像（魔数+版本 v%d，%d 字节）" % (
+            ver, len(image)))
+        return tmp.name
+
     def _run_flash(self):
         path = self.f_file.text().strip()
         if not path or not os.path.exists(path):
@@ -634,6 +665,14 @@ class MainWindow(QMainWindow):
         verify = self.f_verify.isChecked()
         self.btn_flash.setEnabled(False)
         self.flash_status.setText("烧录中...")
+        flash_path = path
+        if addr == 0x08010000 and os.path.getsize(path) < 320 * 1024 - 8:
+            try:
+                flash_path = self._make_app_flash_image(path)
+            except Exception as e:
+                QMessageBox.warning(self, "提示", "生成 RUN 镜像失败: %s" % e)
+                self.btn_flash.setEnabled(True)
+                return
 
         def progress(frac, msg):
             self.bridge.task.emit("progress", (frac, msg))
@@ -641,7 +680,7 @@ class MainWindow(QMainWindow):
         def work():
             self._require()
             self.log.write("S", "开始烧录 %s -> 0x%08X" % (path, addr))
-            self.session.flash_file(path, addr, chunk_kb, verify,
+            self.session.flash_file(flash_path, addr, chunk_kb, verify,
                                     progress=progress,
                                     cancel=self.cancel_evt)
 
@@ -668,8 +707,9 @@ class MainWindow(QMainWindow):
             self.log.write("S", "一键烧录 BOOT -> 0x08000000")
             self.session.flash_file(boot, 0x08000000,
                                     progress=progress, cancel=self.cancel_evt)
-            self.log.write("S", "一键烧录 APP -> 0x08010000")
-            self.session.flash_file(app, 0x08010000,
+            app_img = self._make_app_flash_image(app)
+            self.log.write("S", "一键烧录 APP(完整镜像) -> 0x08010000")
+            self.session.flash_file(app_img, 0x08010000,
                                     progress=progress, cancel=self.cancel_evt)
             self.log.write("S", "BOOT+APP 一键烧录完成")
 
