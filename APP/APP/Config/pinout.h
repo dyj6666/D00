@@ -73,4 +73,10 @@
 #define CAN1_TX_GPIO_Port   GPIOA
 #define CAN1_TX_Pin         GPIO_PIN_12
 
+/* On-board W25Q128 SPI Flash: SPI1 remap PB3/PB4/PB5 + PB14 CS.
+ * NOTE: PB3/PB4 default to JTAG, driver releases them and switches to SW-DP. */
+#define W25Q_CS_GPIO_Port   GPIOB
+#define W25Q_CS_Pin         GPIO_PIN_14
+#define W25Q_SPI            SPI1
+
 #endif

@@ -2493,6 +2493,11 @@
               <FilePath>..\BSP\bsp_eeprom.c</FilePath>
             </File>
             <File>
+              <FileName>bsp_w25q128.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BSP\bsp_w25q128.c</FilePath>
+            </File>
+            <File>
               <FileName>bsp_eeprom.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\BSP\bsp_eeprom.h</FilePath>

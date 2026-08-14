@@ -43,7 +43,9 @@
 #include "i2c.h"
 #include "bsp_can.h"
 #include "bsp_power.h"
+#include "bsp_w25q128.h"
 #include "can_proto.h"
+#include "pinout.h"
 #include "lwip/ip4_addr.h"
 #include "task.h"
 #include <ctype.h>
@@ -258,6 +260,7 @@ static void cmd_beep(const char *args);
 static void cmd_power(const char *args);
 static void cmd_mpu(const char *args);
 static void cmd_can(const char *args);
+static void cmd_w25q(const char *args);
 static void cmd_ver(const char *args);
 static void cmd_echo(const char *args);
 static void cmd_stream(const char *args);
@@ -615,6 +618,7 @@ static const cmd_entry_t cmd_table[] = {
     {"power",        "Power <on|off|info> (STOP tickless)", CMD_TRANSPORT_ALL, cmd_power},
     {"mpu",          "IMU MPU6050 <info|test|cal>", CMD_TRANSPORT_ALL, cmd_mpu},
     {"can",          "CAN1 <status|reset|loop <on|off|silent>|test <n>|send <id> <hex>>", CMD_TRANSPORT_ALL, cmd_can},
+    {"w25q",         "W25Q128 <id|read <addr> <len>|write <addr> <hex>|erase|erase32|erase64 <addr>|erasc|sr|bench>", CMD_TRANSPORT_ALL, cmd_w25q},
 #if CRASH_INJECT_ENABLE
     {"crash",        "Crash injection test <bus|undef|stack|assert|irq>", CMD_TRANSPORT_UART, cmd_crash},
 #endif
@@ -1728,6 +1732,192 @@ static void cmd_eb_stress(const char *args)
                (unsigned long)lost_delta,
                (unsigned long)EventBus_GetPoolFreeCount(),
                (unsigned long)EventBus_GetQueueCount());
+}
+
+/* ================== W25Q128 SPI Flash ================== */
+static void cmd_w25q(const char *args)
+{
+    char sub[16] = {0};
+    unsigned long addr = 0, len = 0;
+    int n = sscanf(args, "%15s %lx %lu", sub, &addr, &len);
+    if (n < 1) {
+        LOG_Printf("Usage: w25q <id|read <addr> <len>|write <addr> <hex>|"
+                   "erase|erase32|erase64 <addr>|erasc|sr|bench>\r\n");
+        return;
+    }
+
+    if (strcmp(sub, "id") == 0 || strcmp(sub, "info") == 0) {
+        bsp_w25q_info_t info;
+        BSP_W25Q128_Info(&info);
+        int rc = BSP_W25Q128_Probe();
+        LOG_Printf("W25Q probe: %d (0=OK)\r\n", rc);
+        LOG_Printf("  JEDEC: %02X %02X %02X  size=%luKB  page=%lu  sector=%lu\r\n",
+                   (unsigned)info.jedec[0], (unsigned)info.jedec[1],
+                   (unsigned)info.jedec[2],
+                   (unsigned long)(info.size / 1024u),
+                   (unsigned long)info.page, (unsigned long)info.sector);
+        return;
+    }
+
+    if (strcmp(sub, "read") == 0 && n >= 3) {
+        if (len == 0 || len > 1024u) {
+            LOG_Printf("len 1..1024\r\n");
+            return;
+        }
+        uint8_t buf[16];
+        uint32_t off = 0;
+        int rc_all = BSP_W25Q_OK;
+        while (off < len && rc_all == BSP_W25Q_OK) {
+            uint32_t chunk = (len - off > sizeof(buf)) ? sizeof(buf) : (len - off);
+            rc_all = BSP_W25Q128_Read((uint32_t)addr + off, buf, chunk);
+            if (rc_all != BSP_W25Q_OK) {
+                break;
+            }
+            LOG_Printf("%08lX: ", (unsigned long)(addr + off));
+            for (uint32_t i = 0; i < chunk; i++) {
+                LOG_Printf("%02X ", (unsigned)buf[i]);
+            }
+            LOG_Printf("\r\n");
+            off += chunk;
+        }
+        LOG_Printf("read rc=%d (%lu bytes)\r\n", rc_all, (unsigned long)off);
+        return;
+    }
+
+    if (strcmp(sub, "write") == 0 && n >= 3) {
+        /* 从 args 中提取命令名与地址后的 hex 字节串 */
+        const char *p = args;
+        while (*p && *p != ' ') p++;
+        while (*p == ' ') p++;
+        while (*p && *p != ' ') p++;
+        while (*p == ' ') p++;
+        uint8_t buf[64];
+        uint32_t cnt = 0;
+        while (*p && cnt < sizeof(buf)) {
+            unsigned int v = 0;
+            if (sscanf(p, "%2x", &v) != 1) {
+                break;
+            }
+            buf[cnt++] = (uint8_t)v;
+            p += 2;
+            while (*p == ' ') p++;
+        }
+        if (cnt == 0) {
+            LOG_Printf("no hex data\r\n");
+            return;
+        }
+        int rc = BSP_W25Q128_Write((uint32_t)addr, buf, cnt);
+        LOG_Printf("write %lu bytes @0x%lX rc=%d\r\n",
+                   (unsigned long)cnt, (unsigned long)addr, rc);
+        return;
+    }
+
+    if (strcmp(sub, "erase") == 0 || strcmp(sub, "erase32") == 0 ||
+        strcmp(sub, "erase64") == 0) {
+        uint32_t t0 = HAL_GetTick();
+        int rc;
+        if (strcmp(sub, "erase32") == 0) {
+            rc = BSP_W25Q128_EraseBlock32((uint32_t)addr);
+        } else if (strcmp(sub, "erase64") == 0) {
+            rc = BSP_W25Q128_EraseBlock64((uint32_t)addr);
+        } else {
+            rc = BSP_W25Q128_EraseSector((uint32_t)addr);
+        }
+        LOG_Printf("%s @0x%lX rc=%d in %lu ms\r\n", sub,
+                   (unsigned long)addr, rc,
+                   (unsigned long)(HAL_GetTick() - t0));
+        return;
+    }
+
+    if (strcmp(sub, "erasc") == 0) {
+        uint32_t t0 = HAL_GetTick();
+        int rc = BSP_W25Q128_EraseChip();
+        LOG_Printf("chip erase rc=%d in %lu ms\r\n", rc,
+                   (unsigned long)(HAL_GetTick() - t0));
+        return;
+    }
+
+    if (strcmp(sub, "sr") == 0) {
+        int sr = BSP_W25Q128_Status();
+        LOG_Printf("SR1=0x%02X (busy=%u wel=%u)\r\n",
+                   (unsigned)(sr & 0xFFu), (unsigned)((sr >> 0) & 1u),
+                   (unsigned)((sr >> 1) & 1u));
+        return;
+    }
+
+    if (strcmp(sub, "dbg") == 0) {
+        /* 简洁诊断：一次 DMA 读 + SPI/DMA 寄存器快照（不改变 Flash 状态） */
+        uint8_t buf[16];
+        int rc = BSP_W25Q128_Read(0u, buf, sizeof(buf));
+        LOG_Printf("read rc=%d\r\n", rc);
+        LOG_Printf("SPI1 CR1=0x%08X SR=0x%02X | DMA2 S0NDTR=%lu LISR=0x%08X\r\n",
+                   (unsigned)SPI1->CR1, (unsigned)(SPI1->SR & 0xFFu),
+                   (unsigned long)DMA2_Stream0->NDTR, (unsigned)DMA2->LISR);
+        return;
+    }
+
+    if (strcmp(sub, "bench") == 0) {
+        /* 性能测试区：最后 1MB（0xFF0000），与后续分区规划不冲突 */
+        const uint32_t base = 0xFF0000u;
+        const uint32_t blk = 64u * 1024u;
+        uint8_t pat[128];
+        uint8_t chk[128];
+        for (uint32_t i = 0; i < sizeof(pat); i++) {
+            pat[i] = (uint8_t)i;
+        }
+
+        /* 1) 读吞吐：1MB DMA Fast Read */
+        uint32_t t0 = HAL_GetTick();
+        uint8_t rbuf[512];
+        int rc = BSP_W25Q_OK;
+        for (uint32_t off = 0; off < (1024u * 1024u) && rc == BSP_W25Q_OK;
+             off += sizeof(rbuf)) {
+            rc = BSP_W25Q128_Read(off, rbuf, sizeof(rbuf));
+        }
+        uint32_t rd_ms = HAL_GetTick() - t0;
+        LOG_Printf("bench read 1MB: rc=%d %lu ms -> %lu KB/s\r\n", rc,
+                   (unsigned long)rd_ms,
+                   (unsigned long)(rd_ms ? (1024u * 1000u / rd_ms) : 0u));
+
+        /* 2) 擦除 64KB 块 */
+        t0 = HAL_GetTick();
+        rc = BSP_W25Q128_EraseBlock64(base);
+        uint32_t er_ms = HAL_GetTick() - t0;
+        LOG_Printf("bench erase 64KB: rc=%d %lu ms\r\n", rc,
+                   (unsigned long)er_ms);
+
+        /* 3) 写 64KB（256 页） */
+        t0 = HAL_GetTick();
+        rc = BSP_W25Q_OK;
+        for (uint32_t off = 0; off < blk && rc == BSP_W25Q_OK; off += sizeof(pat)) {
+            rc = BSP_W25Q128_Write(base + off, pat, sizeof(pat));
+        }
+        uint32_t wr_ms = HAL_GetTick() - t0;
+        LOG_Printf("bench write 64KB: rc=%d %lu ms -> %lu KB/s\r\n", rc,
+                   (unsigned long)wr_ms,
+                   (unsigned long)(wr_ms ? (blk * 1000u / wr_ms) : 0u));
+
+        /* 4) 读回校验 */
+        t0 = HAL_GetTick();
+        int bad = 0;
+        for (uint32_t off = 0; off < blk && bad == 0; off += sizeof(chk)) {
+            rc = BSP_W25Q128_Read(base + off, chk, sizeof(chk));
+            if (rc != BSP_W25Q_OK ||
+                memcmp(chk, pat, sizeof(chk)) != 0) {
+                bad = 1;
+            }
+        }
+        LOG_Printf("bench verify 64KB: rc=%d bad=%d\r\n", rc, bad);
+
+        /* 5) 恢复：擦回测试区 */
+        t0 = HAL_GetTick();
+        rc = BSP_W25Q128_EraseBlock64(base);
+        LOG_Printf("bench restore: rc=%d in %lu ms\r\n", rc,
+                   (unsigned long)(HAL_GetTick() - t0));
+        return;
+    }
+
+    LOG_Printf("unknown w25q sub: %s\r\n", sub);
 }
 
 void CmdCatalog_Register(void)

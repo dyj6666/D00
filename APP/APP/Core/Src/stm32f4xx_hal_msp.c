@@ -20,6 +20,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 /* USER CODE BEGIN Includes */
+#include "pinout.h"
 
 /* USER CODE END Includes */
 
@@ -122,6 +123,42 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef *heth)
     /* ETH 全局中断 */
     HAL_NVIC_SetPriority(ETH_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(ETH_IRQn);
+  }
+}
+
+/**
+  * @brief SPI MSP init: SPI1 clock + on-board W25Q128 pins (PB3/4/5 + CS=PB14).
+  * @note  Called by HAL_SPI_Init; DMA is managed by the bsp_w25q128 driver.
+  *        PB3/PB4 default to JTAG; JTAG release is done in driver Init
+  *        (switch to SW-DP, keep SWD for DAP).
+  */
+void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  if (hspi->Instance == SPI1) {
+    __HAL_RCC_SPI1_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    /* SPI1 remap: PB3=SCK / PB4=MISO / PB5=MOSI (AF5), very high speed */
+    GPIO_InitStruct.Pin = GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF5_SPI1;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    /* Chip select PB14: push-pull output, idle high (flash deselected) */
+    GPIO_InitStruct.Pin = W25Q_CS_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
+    HAL_GPIO_Init(W25Q_CS_GPIO_Port, &GPIO_InitStruct);
+    HAL_GPIO_WritePin(W25Q_CS_GPIO_Port, W25Q_CS_Pin, GPIO_PIN_SET);
+
+    /* SPI1 global IRQ: error handling during DMA transfers */
+    HAL_NVIC_SetPriority(SPI1_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(SPI1_IRQn);
   }
 }
 

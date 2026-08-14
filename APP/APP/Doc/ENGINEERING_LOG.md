@@ -3157,3 +3157,72 @@ auto-stop）全部按设计工作。
   崩溃、系统功能完好。该路径本会话未改动（logger/流缓冲与 10.42 无
   关），结合出现时机（DAP 驱动复位后首次启动）判断为调试器复位时序
   触发的瞬态竞争；已记录，后续若复现按重点问题流程深挖。
+
+### 10.45 外部 Flash 评估 + W25Q128 顶级驱动（重点问题：DMA 读疑难全链路排解）
+
+**背景**：内部 Flash/OTA 空间濒临上限，评估开启板载外部 Flash（16MB W25Q128）。
+
+#### 10.45.1 硬件评估：板载 W25Q128 接线确认
+
+- **现象**：网上普遍误传探索者 F407 的 W25Q128 接 SPI1 的 PA5/PA6/PA7；
+  若按此评估会得出"PA7 与 ETH RMII CRS_DV 硬冲突、外部 Flash 不可用"的错误结论。
+- **排查**：查正点原子官方《探索者开发指南》第三十七章 SPI 实验接线表 +
+  多份原理图解读交叉印证 -> 板载 W25Q128 实际接 **SPI1 的 PB3(SCK)/PB4(MISO)/PB5(MOSI)，
+  片选 PB14（F_CS）**（SPI1 备用复用映射，正点原子设计时特意避开 ETH 引脚）。
+- **验证**：DAP 直连 AHB-AP 操作 GPIO/SPI1 寄存器发 0x9F，读回 JEDEC ID = **EF 40 18**
+  （W25Q128 16MB），硬件接线实锤；`HOST/DapTool/probe_w25q128.py` 留作复测工具。
+- **引脚冲突结论**：PB3/PB4/PB5/PB14 与当前工程 ETH/CAN/LCD(FSMC)/触摸/串口等
+  **全部外设零冲突**；唯一前置是 PB3/PB4 默认 JTAG，配置为 AF5(SPI1) 后自动让位
+  （F407 无 SYSCFG_CFGR，与 F1/F429 不同，无需额外寄存器操作），SW-DP(PA13/14) 不受影响。
+
+#### 10.45.2 驱动实现（性能拉满）
+
+- SPI1 @ **42MHz**（APB2=84MHz，BR=2，W25Q128 上限 104MHz）；
+- 读：Fast Read(0x0B) + **自管理 DMA 双通道**（TX=DMA2_Stream3_CH3 dummy 提供时钟，
+  RX=DMA2_Stream0_CH3），512B 分块循环复用 dummy 缓冲；
+- 写：页编程(0x02) 阻塞满速，跨页自动拆分；擦除：4KB/32KB/64KB/整片，WIP 轮询+超时+喂狗；
+- 线程安全：非阻塞忙锁，长操作期间并发调用立即返回 BUSY；
+- Shell 命令：`w25q id/read/write/erase/erasc/sr/bench/dbg`。
+
+#### 10.45.3 重点问题：DMA 读"传输完成却超时 + 数据全 0"完整排解
+
+- **现象**：`w25q read/bench` 一律 rc=-4（DMA 超时）；阻塞写/擦除/读 ID 全部正常。
+- **影响面**：驱动读通道完全不可用，直接影响后续 OTA 暂存/文件系统等一切读场景。
+- **排查思路**：读路径唯一差异是 DMA，先隔离"硬件/命令/数据面"与"DMA 状态机"，
+  用对照实验逐层二分：阻塞读 vs DMA 读、HAL DMA vs 裸寄存器 DMA、缓冲位置差异。
+- **排查过程**（含被推翻方向，按时间序）：
+  1. 假设 SPI 未使能（SPE=0）-> DAP 读 CR1=0x304（HAL_SPI_Init 不置 SPE）-> 驱动补
+     `CR1|=SPE` -> probe 恢复（EF 40 18）。**已解决一层，DMA 仍失败**。
+  2. 假设 HAL DMA 状态机问题 -> 裸寄存器手动 DMA（dbg 命令）-> 传输完成（NDTR=0）
+     但数据全 0。**推翻"HAL 状态机"假设**，问题在数据面/DMA 配置。
+  3. 假设 Flash 处于 QPI/4BA 等异常模式 -> 0x9F(EF 40 18)/0x05(SR1=00)/0x35(SR2=02)/
+     0xAB(Device ID=17) 全部正常 -> 状态/命令通道 OK；0xFF 复位、0xE9 退 4BA 均无效。
+     **被推翻**：Flash 正常，问题在 DMA 侧。
+  4. DAP 实时快照（驱动超时路径打印 LISR/NDTR/SPI SR）-> **TEIF0=1（DMA 传输错误）**、
+     S0NDTR 差 1~15 字节、SPI BSY=1 -> 定位到"RX DMA 传输错误 + 末字节未收齐"。
+  5. 怀疑时钟被动态门控 -> 快照 RCC：DMA2EN=1/SPI1EN=1，时钟正常。**被推翻**。
+  6. 怀疑栈缓冲问题 -> 静态缓冲成功、栈缓冲失败 -> **实锤缓冲位置相关**。
+  7. 快照 M0AR=**0x1000263C（CCM RAM）** -> **根因**：FreeRTOS heap 位于
+     CCM RAM(0x10000000)，任务栈从 heap 分配；**F407 的 CCM RAM 不连接 DMA 总线，
+     DMA 访问即总线错误 TEIF0**。此前所有"SPI1EN 丢失"的 DAP 读数也是 DAP halt
+     期间 IWDG 复位后 BOOT 启动早期的误读，非真实运行状态。
+  8. 修后仍偶发超时 -> 快照显示传输已全部完成（S0NDTR=0/TCIF0=1）但等待循环超时 ->
+     **DWT 超时按 SystemCoreClock 计算，而该变量实际为 16MHz**（512B 传输 97µs >
+     误算的 37µs）-> 固定 168MHz 计算后全通。
+- **根因（机理）**：①任务栈缓冲位于 CCM RAM，DMA 无法访问 -> TEIF0 中止；
+  ②DWT 超时依赖 SystemCoreClock 未更新导致误判。两个独立问题叠加。
+- **解决方案**：
+  1. 驱动读**无条件先 DMA 入 SRAM 内部缓冲（s_dma_rx，512B 对齐），再 memcpy 到
+     用户缓冲**——无论调用方缓冲在栈/堆/CCM 均安全；性能影响 ~1µs/块可忽略；
+  2. DWT 超时改**固定 168MHz** 计算，不依赖 SystemCoreClock；
+  3. 自管理 DMA 增加"等待残留 EN 清空"与"TX 多 1 dummy 时钟覆盖 RX 末字节"；
+  4. 超时下限 5ms 抗中断抢占抖动；保留超时错误日志便于现场快照。
+- **验证**：`w25q bench` 全绿——读 1MB rc=0 @ **4413 KB/s**（42MHz 极限 84%+），
+  写 64KB rc=0 @ 42.7KB/s（页编程物理极限），擦除 64KB 165ms，
+  **写读校验 bad=0**；`w25q read` 任意长度 rc=0；重启后 Flash 状态无残留异常。
+- **经验沉淀**：①**F407 CCM RAM 不可 DMA**——凡 DMA 目标缓冲必须 SRAM，
+  任务栈/FreeRTOS heap 地址不可直接当 DMA 目标；②SPI 主模式 DMA 全双工
+  **TX 需比 RX 多 1 字节**（覆盖移位寄存器末字节）；③DWT 超时不依赖
+  SystemCoreClock（复位后可能未更新）；④DAP halt 诊断期间必须喂狗，
+  否则 IWDG 复位会把"BOOT 启动早期寄存器值"误读为运行态；⑤HAL_SPI_Init
+  不置位 SPE（F4 HAL 行为），寄存器级传输需自行 `CR1|=SPE`。

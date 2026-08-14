@@ -114,8 +114,8 @@ if(CMAKE_CROSSCOMPILING)
     SystemServices/touch_svc.c
     SystemServices/imu_fusion.c
     SystemServices/imu_svc.c
-    Application/key_app.c
     Application/cmd_catalog.c
+    Application/key_app.c
     Application/led_app.c
     Application/ota_agent.c
     Application/ota_can_svc.c
@@ -136,8 +136,10 @@ if(CMAKE_CROSSCOMPILING)
     BSP/bsp_flash.c
     BSP/bsp_uart.c
     BSP/bsp_can.c
+    BSP/bsp_power.c
     BSP/bsp_i2c.c
     BSP/bsp_eeprom.c
+    BSP/bsp_w25q128.c
     BSP/bsp_watchdog.c
     BSP/bsp_rtc.c
     BSP/bsp_gpio.c
