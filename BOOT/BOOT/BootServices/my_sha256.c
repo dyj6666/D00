@@ -28,13 +28,7 @@ static const uint32_t sha256_k[64] = {
     0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
 };
 
-typedef struct {
-    uint32_t state[8];
-    uint64_t count;
-    uint8_t buf[64];
-} SHA256_CTX;
-
-static void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
+static void sha256_transform(sha256_ctx_t *ctx, const uint8_t data[]) {
     uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
     for (i = 0, j = 0; i < 16; ++i, j += 4)
         m[i] = (data[j] << 24) | (data[j+1] << 16) | (data[j+2] << 8) | (data[j+3]);
@@ -52,7 +46,7 @@ static void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
     ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
 }
 
-static void sha256_init_ctx(SHA256_CTX *ctx) {
+void sha256_init(sha256_ctx_t *ctx) {
     ctx->count = 0;
     ctx->state[0] = 0x6a09e667; ctx->state[1] = 0xbb67ae85;
     ctx->state[2] = 0x3c6ef372; ctx->state[3] = 0xa54ff53a;
@@ -60,7 +54,7 @@ static void sha256_init_ctx(SHA256_CTX *ctx) {
     ctx->state[6] = 0x1f83d9ab; ctx->state[7] = 0x5be0cd19;
 }
 
-static void sha256_update_ctx(SHA256_CTX *ctx, const uint8_t data[], size_t len) {
+void sha256_update(sha256_ctx_t *ctx, const uint8_t data[], size_t len) {
     size_t i = (size_t)(ctx->count & 63);
     const uint8_t *p = data;
     ctx->count += (uint64_t)len;
@@ -73,7 +67,7 @@ static void sha256_update_ctx(SHA256_CTX *ctx, const uint8_t data[], size_t len)
     }
 }
 
-static void sha256_final_ctx(SHA256_CTX *ctx, uint8_t digest[]) {
+void sha256_final(sha256_ctx_t *ctx, uint8_t digest[]) {
     size_t i = (size_t)(ctx->count & 63);
     ctx->buf[i++] = 0x80;
     if (i > 56) {
@@ -102,8 +96,8 @@ static void sha256_final_ctx(SHA256_CTX *ctx, uint8_t digest[]) {
 
 /* 对外接口，保持与原来一致的函数名 */
 void sha256(const uint8_t *data, uint32_t len, uint8_t digest[32]) {
-    SHA256_CTX ctx;
-    sha256_init_ctx(&ctx);
-    sha256_update_ctx(&ctx, data, len);
-    sha256_final_ctx(&ctx, digest);
+    sha256_ctx_t ctx;
+    sha256_init(&ctx);
+    sha256_update(&ctx, data, len);
+    sha256_final(&ctx, digest);
 }

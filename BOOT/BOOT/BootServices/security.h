@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "ota_source.h"
 
 /* 固件头部定义 */
 #pragma pack(1)
@@ -28,16 +29,17 @@ typedef struct {
 #define SEC_ERR_SHA        -4
 #define SEC_ERR_ECDSA      -5
 #define SEC_ERR_ROLLBACK   -6
+#define SEC_ERR_SIZE       -7   /* decrypted firmware exceeds RUN area */
 
 /* 解密函数，由 main.c 调用 */
-bool aes_ctr_decrypt_to_flash(uint32_t src_addr, uint32_t len,
-                              const uint8_t *key, const uint8_t *iv16,
-                              uint32_t dest_addr);
+bool aes_ctr_decrypt_to_flash(const ota_source_t *src, uint32_t data_off,
+                              uint32_t len, const uint8_t *key,
+                              const uint8_t *iv16, uint32_t dest_addr);
 
 /* 固定 AES 密钥（测试用，后续改为 UID 派生） */
 extern const uint8_t AES_KEY[32];
 /* 安全处理入口：返回 0=成功，负值=SEC_ERR_*（具体失败原因） */
-int32_t security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
+int32_t security_verify_and_decrypt(const ota_source_t *src, uint32_t *out_size,
                                     uint32_t current_version,
                                     uint32_t last_build_no);
 /**

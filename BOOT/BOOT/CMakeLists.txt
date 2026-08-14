@@ -29,9 +29,11 @@ if(CMAKE_CROSSCOMPILING)
         BootServices/ymodem.c
         BootServices/ymodem_port.c
         BootServices/flash_if.c
-        BootServices/boot_param.c
-        BootServices/security.c
-        BootServices/aes.c
+    BootServices/boot_param.c
+    BootServices/security.c
+    BootServices/esp_flash.c
+    BootServices/ota_source.c
+    BootServices/aes.c
         BootServices/my_sha256.c
         BootServices/uECC.c
         BootServices/crc32.c

@@ -218,7 +218,7 @@ int OtaHttp_Download(const char *host, uint16_t port, const char *path)
                             ls = (uint16_t)(le + 1u);
                         }
                         if (content_len == 0u ||
-                            content_len > OTA_DOWNLOAD_SAFE) {
+                            content_len > OTA_EXT_DL_SAFE) {
                             LOG_Printf("[OTA-HTTP] bad content-length %lu\r\n",
                                        (unsigned long)content_len);
                             ret = -8;

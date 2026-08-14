@@ -10,6 +10,8 @@
 #include "flash_if.h"
 #include "security.h"
 #include "boot_param.h"
+#include "ota_source.h"
+#include "esp_flash.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -166,6 +168,17 @@ static uint8_t boot_check_app_valid(uint32_t addr)
 
 /* 裸跳板：设置 MSP 后立即跳转，中间无任何栈操作。
  * 不能写成普通 C 调用（编译器尾声可能在切栈后用新栈弹栈 → 越界 HardFault）。 */
+#if defined(__GNUC__)
+__attribute__((naked)) void boot_jump_exec(uint32_t sp, uint32_t pc)
+{
+    __asm volatile (
+        "msr msp, r0\n"
+        "dsb\n"
+        "isb\n"
+        "bx  r1\n"
+    );
+}
+#else
 __asm void boot_jump_exec(uint32_t sp, uint32_t pc)
 {
     msr msp, r0
@@ -173,6 +186,7 @@ __asm void boot_jump_exec(uint32_t sp, uint32_t pc)
     isb
     bx  r1
 }
+#endif
 
 /* 跳转到 APP：清外设/中断、设 VTOR、切栈、跳转。
  * 切栈动作在裸跳板内完成，本函数尾声即使被编译器合并为尾调用，
@@ -283,6 +297,19 @@ static bool boot_apply_download(bool emit_status)
     g_emit_status = emit_status;
     boot_status_send(BOOT_ST_VERIFY, 0);
 
+    /* 读源选择：外部 ota_dl 槽有效包优先（方案A），否则内部 DOWNLOAD（兼容） */
+    ota_source_t src;
+    (void)EspFlash_Init();   /* 探测外部 Flash；失败则下方回退内部源 */
+    bool ext_src = OtaSource_External(&src);
+    if (ext_src) {
+        printf("OTA source: EXTERNAL flash (pkg=%lu B)\r\n",
+               (unsigned long)src.size);
+    } else {
+        OtaSource_Internal(&src, DOWNLOAD_BASE_ADDR, DOWNLOAD_SIZE);
+        printf("OTA source: INTERNAL DOWNLOAD (pkg cap %lu B)\r\n",
+               (unsigned long)DOWNLOAD_SIZE);
+    }
+
     boot_param_t param;
     boot_param_load(&param);   /* 读取 last_build_no 供防重放校验 */
 
@@ -294,7 +321,7 @@ static bool boot_apply_download(bool emit_status)
            (unsigned long)current_version, (unsigned long)param.last_build_no);
 
     uint32_t app_size = 0;
-    int32_t sec = security_verify_and_decrypt(DOWNLOAD_BASE_ADDR, &app_size,
+    int32_t sec = security_verify_and_decrypt(&src, &app_size,
                                               current_version,
                                               param.last_build_no);
     if (sec != 0) {
@@ -350,7 +377,7 @@ static bool boot_apply_download(bool emit_status)
 #endif
 
     ota_header_t hdr;
-    memcpy(&hdr, (void *)DOWNLOAD_BASE_ADDR, sizeof(hdr));
+    src.read(0u, &hdr, sizeof(hdr));
     uint8_t iv16[16];
     memcpy(iv16, hdr.aes_iv, 12);
     memset(iv16 + 12, 0, 4);
@@ -358,7 +385,7 @@ static bool boot_apply_download(bool emit_status)
     uint8_t aes_key[32];
     derive_aes_key(aes_key);        /* 设备 UID 派生 AES 密钥 */
 
-    if (!aes_ctr_decrypt_to_flash(DOWNLOAD_BASE_ADDR + sizeof(ota_header_t),
+    if (!aes_ctr_decrypt_to_flash(&src, sizeof(ota_header_t),
                                   app_size, aes_key, iv16, APP_BASE_ADDR)) {
         printf("APP write failed! System halted.\r\n");
         while (1) { IWDG->KR = 0xAAAA; }
@@ -415,6 +442,11 @@ static bool boot_apply_download(bool emit_status)
         uint32_t zero = 0;
         flash_write(BOOT_SESSION_BASE + si * BOOT_SESSION_STRIDE,
                     (uint8_t *)&zero, sizeof(zero));
+    }
+    /* 外部下载槽清理：升级成功后擦除槽 0（防重放，外部源时） */
+    if (ext_src) {
+        (void)EspFlash_EraseSector(ESP_OTA_BASE);
+        printf("External OTA slot cleared\r\n");
     }
 
     BKP_WRITE(0, BOOT_FLAG_NONE);

@@ -1,5 +1,5 @@
 ﻿/* ================================================================
- * ota_agent —— 运行时 OTA：下载到 DOWNLOAD 区 + 启动确认
+ * ota_agent —— 运行时 OTA：下载到外部 Flash ota_dl 槽 + 启动确认
  *
  * 架构位置：APP 应用层；供 data_link / cmd_shell / OtaTcp / OtaHttp 调用
  * 核心流程：BEGIN -> DATA(240B/块) -> END -> 复位进 BOOT -> 启动确认成功
@@ -21,6 +21,7 @@
 #include "semphr.h"
 #include "buzzer_app.h"
 #include "bsp_flash.h"
+#include "ext_store.h"
 #include "data_link.h"
 #include "protocol.h"
 
@@ -222,7 +223,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
         Buzzer_OtaFail();
         return 1;   /* 已在接收中 */
     }
-    if (size == 0 || size > OTA_DOWNLOAD_SAFE) {
+    if (size == 0 || size > OTA_EXT_DL_SAFE) {
         LOG_Printf("OTA: bad size %lu\r\n", (unsigned long)size);
         ota_mutex_give();
         Buzzer_OtaFail();
@@ -259,7 +260,7 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
     }
 
     LOG_Printf("OTA: erasing download area...\r\n");
-    if (!BSP_Flash_EraseRange(OTA_DOWNLOAD_ADDR, OTA_DOWNLOAD_SIZE)) {
+    if (ExtStore_EraseRange(EXT_PART_OTA_DL, 0u, size) != EXT_STORE_OK) {
         LOG_Printf("OTA: download erase FAILED\r\n");
         ota_mutex_give();
         Buzzer_OtaFail();
@@ -291,17 +292,18 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
         return 1;
     }
     if (len > OTA_CHUNK_MAX || offset != ota_received ||
-        offset + len > ota_total || offset + len > OTA_DOWNLOAD_SAFE) {
+        offset + len > ota_total || offset + len > OTA_EXT_DL_SAFE) {
         LOG_Printf("OTA: bad chunk off=%lu len=%u\r\n",
                    (unsigned long)offset, (unsigned)len);
         ota_mutex_give();
         return 2;
     }
-    if (!BSP_Flash_Write(OTA_DOWNLOAD_ADDR + offset, data, len)) {
-        uint32_t probe = *(volatile uint32_t *)(OTA_DOWNLOAD_ADDR + offset);
+    if (ExtStore_Write(EXT_PART_OTA_DL, offset, data, len) != EXT_STORE_OK) {
+        uint32_t probe = 0u;
+        (void)ExtStore_Read(EXT_PART_OTA_DL, offset, &probe, sizeof(probe));
         LOG_Printf("OTA: flash write FAILED at %lu probe=0x%08X SR=0x%08X\r\n",
                    (unsigned long)offset, (unsigned)probe,
-                   (unsigned)BSP_Flash_GetStatusSR());
+                   (unsigned)0u);
         ota_state = OTA_ST_IDLE;
         ota_mutex_give();
         Buzzer_OtaFail();

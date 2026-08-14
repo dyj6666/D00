@@ -440,6 +440,16 @@
               <FilePath>..\BootServices\security.c</FilePath>
             </File>
             <File>
+              <FileName>esp_flash.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BootServices\esp_flash.c</FilePath>
+            </File>
+            <File>
+              <FileName>ota_source.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BootServices\ota_source.c</FilePath>
+            </File>
+            <File>
               <FileName>my_sha256.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BootServices\my_sha256.c</FilePath>

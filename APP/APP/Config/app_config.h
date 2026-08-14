@@ -17,6 +17,10 @@
 #define OTA_DOWNLOAD_SIZE       (256 * 1024)
 #define OTA_DOWNLOAD_SAFE       (OTA_DOWNLOAD_SIZE - 1024) /* 全量可用（会话槽已迁 PARAM） */
 
+/* 外部 Flash OTA 下载（方案A：下载区外移；固件上限 = RUN 区 320KB） */
+#define OTA_EXT_DL_SIZE         (512 * 1024)    /* 外部 ota_dl 槽容量 */
+#define OTA_EXT_DL_SAFE         (OTA_EXT_DL_SIZE - 1024)
+
 /* 断点续传会话槽区：PARAM 扇区空余（0x080E2000，避开参数槽 +0/+1024）。
  * 32KB = 1024 槽 × 32B，覆盖 ≤245KB 固件；与 BOOT/boot_config.h 严格一致。 */
 #define OTA_SESSION_BASE        0x080E2000UL

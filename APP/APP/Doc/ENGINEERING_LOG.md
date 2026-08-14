@@ -3264,3 +3264,52 @@ auto-stop）全部按设计工作。
 **经验沉淀**：①NOR 写入前必须擦（未擦 = AND）；②双份/校验类结构的 CRC 必须
 排除自身字段（清零后整体算）；③擦除策略必须"无坏整块擦、有坏逐扇区且跳过"；
 ④嵌入式校验/擦除相关参数（stride/偏移）必须按硬件最小单元（扇区）对齐强校验。
+
+### 10.47 OTA 下载区外移方案A：外部 Flash 承载下载，固件上限 255KB→320KB
+
+**背景**：内部 DOWNLOAD 256KB 是固件大小瓶颈（加密包 255KB），利用外部 ota_dl
+2MB 槽消除下载瓶颈，上限提升至 RUN 区 320KB。
+
+#### 10.47.1 架构（分层清晰，读源抽象）
+
+- **BOOT BootServices/esp_flash.{c,h}**：SPI1(PB3/4/5)+PB14 CS，42MHz 阻塞
+  读/写/擦（无 OS、无 logger，独立精简），升级后清外部槽防重放；
+- **BOOT BootServices/ota_source.{c,h}**：固件包读源抽象
+  （内部 DOWNLOAD 内存直读 / 外部 SPI 读），security/boot_app 只依赖抽象；
+- **BOOT security.c**：校验/哈希/解密全部改为源读取；SHA256 暴露流式
+  init/update/final（外部大包哈希）；**新增 body_len ≤ APP_SIZE 安全边界**
+  （防写穿 RUN，原代码缺失）；
+- **BOOT boot_app.c**：升级时外部槽有效包优先（OtaSource_External），
+  否则回退内部 DOWNLOAD（YMODEM 兼容）；升级成功擦外部槽 0；
+- **APP ota_agent/ota_http**：下载目标切外部 ota_dl 槽（ExtStore），
+  包上限 OTA_EXT_DL_SAFE=511KB（解密后 ≤320KB 由 BOOT 兜底）。
+
+#### 10.47.2 踩坑复盘（重点问题）
+
+1. **BOOT esp_flash spi_xfer 顺序写反（根因级）**：
+   先等 TXE 又等 RXNE 才写 DR——RXNE 在未写 DR 时永不置位 → 首个字节超时 →
+   EspFlash_Init 探测失败 → 外部源不可用 → 回退内部 DOWNLOAD（无包）→ 升级失败。
+   排解：DAP 复位态手动执行同等寄存器序列读 ID 成功（EF 40 18），证明硬件 OK，
+   反查代码定位传输顺序错误；修复为"等 TXE→写 DR→等 RXNE→读 DR"。
+2. **BOOT GCC 构建 `__asm void` 语法不兼容**：ARMCC 裸汇编函数在 GCC 下报错；
+   加 `#if defined(__GNUC__)` 用 `__attribute__((naked))` + 内联汇编双实现。
+3. **BKP 手动触发需解锁备份域**：DAP 直写 RTC_BKP0R 被 DBP 写保护吞掉；
+   必须先 RCC_APB1ENR|=PWREN + PWR_CR|=DBP 再写。
+4. **观察口不确定性**：BOOT printf 在 USART2（未接）、状态帧在 USART1（COM13 已拔），
+   远程难直接抓 BOOT 日志——用"升级失败→参数归一+BKP 清+回退 APP"的间接证据
+   + DAP 复位态硬件验证定位问题。
+
+#### 10.47.3 验证（完全无瑕疵）
+
+- **正常固件（v207, 252KB）外部源 OTA**：下载→BOOT 外部搬移→启动→外部槽清，全绿；
+- **超大固件（v206, 293,652B > 255KB 旧上限）**：临时 40KB RO 填充，
+  OTA 成功启动（证明上限突破），随后移除填充回归；
+- **兼容回退**：旧 APP（v204 写内部 DOWNLOAD）推送 → 新 BOOT 回退内部源成功（v205）；
+- **安全边界**：security 新增 body_len ≤ APP_SIZE 拒绝（防外部包写穿 RUN）；
+- **双构建**：APP/BOOT Keil 0 错 0 警告 + GCC 通过；BOOT 34.4KB/64KB；
+- **存储层回归**：store bench 读/写/擦/安全双份全绿。
+
+**经验沉淀**：①SPI 逐字节传输顺序固定"等TXE→写DR→等RXNE→读DR"，
+  先等 RXNE 是经典笔误；②外部大包哈希必须流式 SHA256（RAM 放不下整包）；
+  ③解密写入前必须有"解密后大小 ≤ 运行区"的硬边界校验；
+  ④DAP 写 BKP 前必须解锁备份域（PWREN+DBP）。

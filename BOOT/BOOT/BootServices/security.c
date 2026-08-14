@@ -11,6 +11,7 @@
 #include <string.h>
 #include "security.h"
 #include "flash_if.h"
+#include "boot_config.h"
 #include "stm32f4xx_hal.h"
 #include "aes.h"
 #include "my_sha256.h"          // 你之前的软件 SHA256
@@ -64,8 +65,21 @@ const struct uECC_Curve_t *uECC_secp256r1(void);
 /**
  * @brief  软件 SHA256（从 Flash 地址直接计算）
  */
-static bool sw_sha256(uint32_t start_addr, uint32_t len, uint8_t digest[32]) {
-    sha256((const uint8_t *)start_addr, len, digest);
+/* Streaming SHA256: feed from unified read source (supports external flash) */
+static bool sw_sha256_stream(const ota_source_t *src, uint32_t off,
+                             uint32_t len, uint8_t digest[32])
+{
+    sha256_ctx_t ctx;
+    uint8_t buf[256];
+    sha256_init(&ctx);
+    while (len > 0u) {
+        uint32_t chunk = (len > (uint32_t)sizeof(buf)) ? (uint32_t)sizeof(buf) : len;
+        src->read(off, buf, chunk);
+        sha256_update(&ctx, buf, chunk);
+        off += chunk;
+        len -= chunk;
+    }
+    sha256_final(&ctx, digest);
     return true;
 }
 
@@ -77,9 +91,9 @@ static bool sw_sha256(uint32_t start_addr, uint32_t len, uint8_t digest[32]) {
  * @param  iv16      16 字节 IV（已补零）
  * @param  dest_addr 目标地址（APP 区）
  */
-bool aes_ctr_decrypt_to_flash(uint32_t src_addr, uint32_t len,
-                                     const uint8_t *key, const uint8_t *iv16,
-                                     uint32_t dest_addr) {
+bool aes_ctr_decrypt_to_flash(const ota_source_t *src, uint32_t data_off,
+                              uint32_t len, const uint8_t *key,
+                              const uint8_t *iv16, uint32_t dest_addr) {
     struct AES_ctx ctx;
     AES_init_ctx_iv(&ctx, key, iv16);
 
@@ -91,9 +105,8 @@ bool aes_ctr_decrypt_to_flash(uint32_t src_addr, uint32_t len,
         if (chunk > sizeof(buf)) chunk = sizeof(buf);
 
         // 读取密文
-        for (uint32_t i = 0; i < chunk; i++) {
-            buf[i] = *((volatile uint8_t *)(src_addr + offset + i));
-        }
+        /* Read ciphertext from unified source */
+        src->read(data_off + offset, buf, chunk);
 
         // 解密
         AES_CTR_xcrypt_buffer(&ctx, buf, chunk);
@@ -122,11 +135,11 @@ static bool ecdsa_verify(const uint8_t *pubkey, const uint8_t *hash, const uint8
  * @retval 0     验证通过，*out_size 为原始固件大小
  *         负值  具体失败原因（SEC_ERR_*）
  */
-int32_t security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
+int32_t security_verify_and_decrypt(const ota_source_t *src, uint32_t *out_size,
                                     uint32_t current_version,
                                     uint32_t last_build_no) {
     ota_header_t header;
-    memcpy(&header, (void *)download_addr, sizeof(header));
+    src->read(0u, &header, sizeof(header));
     if (header.magic != 0x4F5441FE) {
         printf("[SEC] Magic mismatch!\r\n");
         return SEC_ERR_MAGIC;
@@ -148,13 +161,22 @@ int32_t security_verify_and_decrypt(uint32_t download_addr, uint32_t *out_size,
 
     uint32_t body_len = header.firmware_size;
     uint32_t total_len = sizeof(header) + body_len;
+
+    /* Safety: decrypted firmware must fit RUN area (prevents overflow) */
+    if (body_len == 0u || body_len > APP_SIZE) {
+        printf("[SEC] Firmware size invalid: %lu (RUN=%lu)\r\n",
+               (unsigned long)body_len, (unsigned long)APP_SIZE);
+        return SEC_ERR_SIZE;
+    }
+
     uint8_t hash[32];
-    if (!sw_sha256(download_addr, total_len, hash)) {
+    if (!sw_sha256_stream(src, 0u, total_len, hash)) {
         printf("[SEC] SHA256 failed!\r\n");
         return SEC_ERR_SHA;
     }
 
-    uint8_t *sig = (uint8_t *)(download_addr + total_len);
+    uint8_t sig[OTA_SIGN_SIZE];
+    src->read(total_len, sig, sizeof(sig));
     if (!ecdsa_verify(ECDSA_PUB_KEY, hash, sig) &&
         !ecdsa_verify(ECDSA_PUB_KEY_LEGACY, hash, sig)) {
         printf("[SEC] ECDSA verify failed!\r\n");
