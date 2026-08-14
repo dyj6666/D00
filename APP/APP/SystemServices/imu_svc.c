@@ -124,10 +124,13 @@ static void imu_task(void *arg)
     uint32_t last_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     uint8_t warned = 0;
 
-    if (BSP_MPU6050_Init() != 0) {
-        LOG_Printf("[IMU] MPU6050 init FAIL (check wiring/0x68)\r\n");
+    /* 初始化失败不自暴自弃：驱动已带总线释放，周期重试自愈
+     * （覆盖上电时序未稳 / I2C 从机钳位等瞬态） */
+    while (BSP_MPU6050_Init() != 0) {
         s_state.fault_count++;
-        for (;;) vTaskDelay(pdMS_TO_TICKS(1000));
+        LOG_Printf("[IMU] MPU6050 init FAIL (faults=%lu), retry in 2s...\r\n",
+                   (unsigned long)s_state.fault_count);
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
     LOG_Printf("[IMU] MPU6050 ready (WHO_AM_I=0x68, I2C1 400kHz)\r\n");
 

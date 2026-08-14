@@ -21,4 +21,8 @@ void BSP_I2C2_Init(void);
 int  BSP_I2C2_Lock(uint32_t timeout_ms);
 void BSP_I2C2_Unlock(void);
 
+/* I2C1 slave-clamp release: generate >=9 SCL pulses to free a slave
+ * holding SDA low (bus recovery). Call after I2C failure paths. */
+void BSP_I2C1_BusRelease(void);
+
 #endif

@@ -77,8 +77,7 @@ static uint8_t reg_op(uint8_t reg, uint8_t *data, uint16_t len, uint8_t is_write
         }
         if (ok) {
             /* IT 启动失败/超时：回退阻塞模式 + 总线自恢复重试一次 */
-            HAL_I2C_DeInit(&hi2c1);
-            HAL_I2C_Init(&hi2c1);
+            BSP_I2C1_BusRelease();   /* 释放从机钳位（9 时钟）并恢复 I2C1 */
             if (is_write) {
                 st = HAL_I2C_Mem_Write(&hi2c1, s_addr, reg, I2C_MEMADD_SIZE_8BIT,
                                        data, len, I2C_TIMEOUT);
@@ -123,8 +122,12 @@ uint8_t BSP_MPU6050_Init(void)
 
     s_addr = MPU6050_ADDR;
     if (BSP_MPU6050_Check()) {
+        BSP_I2C1_BusRelease();   /* 首轮失败：释放从机钳位再试 */
         s_addr = MPU6050_ADDR_ALT;
-        if (BSP_MPU6050_Check()) return 1;
+        if (BSP_MPU6050_Check()) {
+            BSP_I2C1_BusRelease();
+            if (BSP_MPU6050_Check()) return 1;
+        }
     }
 
     /* 复位器件 */

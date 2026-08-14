@@ -47,8 +47,9 @@
  * TX 需多发 1 个 dummy 时钟（覆盖 RX 末字节），故 dummy 留 8B 余量 */
 #define W25_DMA_CHUNK          512u
 #define W25_DMA_DUMMY          (W25_DMA_CHUNK + 8u)
-/* SPI 字节级等待超时（µs），42MHz 下 1 字节 ~0.24µs，余量充足 */
-#define W25_SPI_BYTE_TMO_US    200u
+/* SPI 字节级等待超时（µs）：正常传输 1 字节 ~0.24µs；
+ * 系统负载（I2C/ETH 中断）下放宽到 5ms，避免写入误判超时 */
+#define W25_SPI_BYTE_TMO_US    5000u
 
 /* ---------------- 驱动状态 ---------------- */
 static SPI_HandleTypeDef s_hspi;                 /* SPI1 句柄 */
