@@ -17,12 +17,12 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "cmsis_os2.h"
 #include "logger.h"
 
 #include <stdio.h>
 
-#define GUI_TASK_PRIO   56u         /* 渲染低于 OTA(60)/ETH(65) 之上？见 module 体系 */
-#define GUI_TASK_STACK  (4u * 1024u)
+#define GUI_TASK_STACK  (4u * 1024u)   /* osThreadNew stack_size 单位：字节（4KB，峰值实测 1.5KB） */
 #define GUI_PERIOD_MS   10u
 
 /* 外部 SRAM 布局（方案B，见 lv_port_disp.c）：LVGL 堆 0x68080000 起 */
@@ -54,9 +54,10 @@ static void gui_build(void)
 {
     uint32_t ver = *(volatile uint32_t *)OTA_APP_VERSION_ADDR;
 
+    /* 最小渲染测试：纯色背景 + 单 label（避开按钮/滑块/主题渐变） */
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x0E1420), 0);
-
+    lv_obj_t *t = lv_label_create(scr);
     /* 标题 */
     lv_obj_t *title = lv_label_create(scr);
     lv_label_set_text(title, "D00  GUI");
@@ -146,6 +147,7 @@ static void gui_refresh(void)
 static void gui_task(void *arg)
 {
     (void)arg;
+    LOG_Printf("[GUI] task enter\r\n");
     uint32_t last = 0;
     for (;;) {
         lv_timer_handler();
@@ -169,8 +171,14 @@ void GuiApp_Init(void)
     LvPort_Init();      /* 显示 + 触摸端口 */
     gui_build();        /* 骨架界面 */
 
-    xTaskCreate(gui_task, "GuiApp", GUI_TASK_STACK, NULL,
-                GUI_TASK_PRIO, NULL);
-    LOG_Printf("[GUI] task started (prio=%u, stack=%u)\r\n",
-               (unsigned)GUI_TASK_PRIO, (unsigned)GUI_TASK_STACK);
+    osThreadAttr_t attr = {
+        .name       = "GuiApp",
+        .stack_size = GUI_TASK_STACK,
+        .priority   = osPriorityNormal,
+    };
+    osThreadId_t h = osThreadNew(gui_task, NULL, &attr);
+    LOG_Printf("[GUI] task %s (stack=%u, heap=%u)\r\n",
+               (h != NULL) ? "started" : "FAILED",
+               (unsigned)GUI_TASK_STACK,
+               (unsigned)xPortGetFreeHeapSize());
 }

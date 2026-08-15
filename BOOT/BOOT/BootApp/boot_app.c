@@ -155,7 +155,10 @@ static uint8_t boot_check_app_valid(uint32_t addr)
         return 0;
     }
     uint32_t sp = *(volatile uint32_t *)addr;
-    if (sp < 0x20000000 || sp > 0x20020000) {
+    /* F407 有效栈：SRAM 128KB（0x20000000~0x2001FFFF）或 CCM 64KB
+     * （0x10000000~0x1000FFFF，主栈可放 CCM）。0x20020000+ 无映射。 */
+    if (!((sp >= 0x20000000u && sp <= 0x20020000u) ||
+          (sp >= 0x10000000u && sp <= 0x10010000u))) {
         return 0;
     }
     uint32_t pc = *(volatile uint32_t *)(addr + 4);
@@ -402,7 +405,8 @@ static bool boot_apply_download(bool emit_status)
     uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
     /* 栈顶边界：0x20020000 是 RAM 末端+1（越界），必须拒绝——
      * BOOT 跳转尾声会从新栈顶弹栈，越界 SP 会触发精确总线错误。 */
-    if (sp < 0x20000000 || sp >= 0x20020000 ||
+    if (!((sp >= 0x20000000u && sp < 0x20020000u) ||
+          (sp >= 0x10000000u && sp < 0x10010000u)) ||
         pc < APP_BASE_ADDR || pc > APP_BASE_ADDR + APP_SIZE) {
         printf("APP vector invalid! SP=0x%08X PC=0x%08X\r\n", sp, pc);
         return false;

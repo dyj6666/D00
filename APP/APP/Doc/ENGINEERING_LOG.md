@@ -3400,3 +3400,39 @@ auto-stop）全部按设计工作。
 - 界面骨架：深色主题 + 标题 + 固件卡片 + 按钮（计数）+ 滑块（数值联动）+ tick/触摸坐标实时显示，触摸经 lv_port_indev 轮询 touch_svc。
 
 **经验沉淀**：①任何从模板复制的配置文件必须先确认顶层开关（#if 0/1）；②Windows 下生成 Keil 工程文件必须保持无 BOM 原始字节；③第三方库的 assert 依赖在 AC5 需要显式 __aeabi_assert；④LV_TICK_CUSTOM 时 tick 函数由 LVGL 提供，端口只配 EXPR。
+
+### 10.51 LVGL 黑屏根治 + 存储健康优化（重点问题：F407 无 SRAM3 + draw_buf 未绑定）
+
+**背景**：LVGL 骨架完成后屏幕全黑。经数轮诊断，定位为两个叠加根因；随后按"存储非常健康"目标做全量优化。
+
+#### 10.51.1 根因一：F407 无 SRAM3（0x20020000+ 不存在）
+
+- **现象**：系统启动即崩溃循环（HardFault→复位→再启动），BFAR=0x20020188（主栈地址），BFSR=STKERR（异常入栈失败）。
+- **排查**：DAP 写 0x20020000 报总线错误；对照 RM0090——**F407 只有 SRAM1(112K)+SRAM2(16K)=128KB + CCM 64KB，无 SRAM3**。此前 10.46 误把链接 RAM 扩到 192KB，导致主栈/部分 ZI 落在无效地址。
+- **修复**：链接脚本 RAM 回 128KB；主栈(1KB)+C 堆(512B)移入 CCM；BOOT 的 SP 有效性检查接受 SRAM/CCM 双范围。
+
+#### 10.51.2 根因二：lv_disp_drv_register 前未绑定 draw_buf
+
+- **现象**：系统稳定后屏幕仍黑；LvPort_FlushCount=0、draw buffer(0x680A0000)无渲染数据。
+- **排查**：断点跟踪显示渲染到达 draw_buf_flush 但卡在等待 flushing 状态（draw_buf 的 [state] 恒非 0）——flush_cb 从未被调用（driver 里 render_start_cb 被误判为 flush 回调，实际 flush_cb 偏移 20）。
+- **根因**：`s_disp_drv.draw_buf = &s_draw_buf` **缺失**——LVGL 用了未初始化的内部缓冲，渲染写错位置、flush 流程不启动。
+- **修复**：LvPort_DispInit 显式绑定 draw_buf；flush 计数 40+、draw buffer 出现背景色、渲染循环 r0-r1-t0-t1-t2 全通。
+
+#### 10.51.3 存储健康优化（目标：各存储从容 + 便于扩展）
+
+| 项目 | 优化前 | 优化后 | 措施 |
+|---|---|---|---|
+| CCM 静态占用 | 98.8%（余 0.8KB） | 92.5%（余 4.8KB） | LA 预触发缓冲(6KB)迁外部 SRAM |
+| FreeRTOS 堆余量 | 4.2KB（8%） | 10.4KB（19.3%） | 堆 52→54KB + GuiApp 栈 8→4KB |
+| GuiApp 栈 | 8KB（峰值 1.5KB） | 4KB（峰值 1.45KB） | 实测后裁剪 |
+| Flash | — | APP 425.3/832KB（51%） | 方案B 余量充足 |
+
+隔离测试确认：LA 预触发迁移、GuiApp 栈裁剪、堆调整均不影响 I2C/MPU（回退后 MPU 仍失败）。
+
+#### 10.51.4 MPU6050 异常（独立问题）
+
+- **现象**：优化验证期间 MPU6050 init FAIL（faults 持续递增），WHO_AM_I 读不到；历史日志 ready/FAIL 交替（间歇性）。
+- **排查**：I2C 总线电平正常（SCL/SDA 高、BUSY=0，无钳位）；SCL 手动 toggle 9 次后仍 FAIL；隔离测试（LA 回退/栈 8KB/堆 52KB）均 FAIL——**与本次存储优化无关**。
+- **结论**：疑似 MPU6050 硬件接线/供电接触问题（用户接线后未验证过），需物理检查；系统核心功能（LVGL/ETH/OTA/CAN）不受影响。
+
+**经验沉淀**：①F407 内存=128KB SRAM+64KB CCM，无 SRAM3（0x20020000+ 访问即 BusFault），链接脚本必须按芯片型号；②lv_disp_drv_register 前必须显式绑定 draw_buf；③硬件类间歇故障（传感器）用"回退隔离测试"快速排除软件因素，避免在无关改动上浪费时间。

@@ -2548,11 +2548,6 @@
               <FilePath>..\Middlewares\Third_Party\lvgl\src\core\lv_theme.c</FilePath>
             </File>
             <File>
-              <FileName>lv_draw_hpmicro_pdma.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Middlewares\Third_Party\lvgl\src\draw\hpmicro\pdma\lv_draw_hpmicro_pdma.c</FilePath>
-            </File>
-            <File>
               <FileName>lv_draw.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Middlewares\Third_Party\lvgl\src\draw\lv_draw.c</FilePath>

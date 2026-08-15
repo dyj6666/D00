@@ -18,7 +18,6 @@
 #include "../core/lv_refr.h"
 #include "../core/lv_theme.h"
 #include "../draw/sw/lv_draw_sw.h"
-#include "../draw/hpmicro/pdma/lv_draw_hpmicro_pdma.h"
 
 #if LV_USE_THEME_DEFAULT
     #include "../extra/themes/default/lv_theme_default.h"

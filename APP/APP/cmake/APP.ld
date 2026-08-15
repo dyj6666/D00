@@ -2,8 +2,8 @@
  * D00 APP 链接脚本（GCC / CMake 构建）
  * 布局与 MDK-ARM/APP/APP.sct 严格一致（方案B）：
  *   FLASH   0x08010000  LENGTH 0x000D0000 (832KB, RUN 区，含原 BACKUP+DOWNLOAD)
- *   RAM     0x20000000  LENGTH 0x00030000 (192KB 主 SRAM：SRAM1+2 + SRAM3)
- *   CCMRAM  0x10000000  LENGTH 0x00010000 (64KB, .ccmram UNINIT)
+ *   RAM     0x20000000  LENGTH 0x00020000 (128KB 主 SRAM：SRAM1+2；F407 无 SRAM3)
+ *   CCMRAM  0x10000000  LENGTH 0x00010000 (64KB, .ccmram UNINIT + 主栈)
  * 注意：0x080DFFF8 magic / 0x080DFFFC version 由 OTA 流程写入，
  *       链接器不得占用（LENGTH 已限制在 0xD0000 内）。
  * ================================================================ */
@@ -12,7 +12,7 @@ ENTRY(Reset_Handler)
 MEMORY
 {
   FLASH  (rx)   : ORIGIN = 0x08010000, LENGTH = 0x000D0000
-  RAM    (xrw)  : ORIGIN = 0x20000000, LENGTH = 0x00030000
+  RAM    (xrw)  : ORIGIN = 0x20000000, LENGTH = 0x00020000
   CCMRAM (xrw)  : ORIGIN = 0x10000000, LENGTH = 0x00010000
 }
 

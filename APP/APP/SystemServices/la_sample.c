@@ -27,9 +27,13 @@ void LA_RegisterVariables(void)
 }
 
 /* --------------------- 时间戳模式（EXTI）相关 --------------------- */
-/* 预触发环形缓冲：CPU-only，放 CCM（主 SRAM 让给 DMA/ETH） */
-static LA_SamplePoint pre_trigger_buf[PRE_TRIGGER_DEPTH]
-    __attribute__((section(".ccmram"), zero_init));
+/* 预触发环形缓冲：原放 CCM（6KB，CCM 占用 98.8% 紧张）。优化后移至
+ * 外部 SRAM 空闲区（0x680A9A00，LVGL 绘制缓冲之后，344KB 空闲）。
+ * LA 为调试工具，时间戳模式为事件触发写入（非连续流），FSMC 写外部
+ * SRAM 的延迟可接受；CCM 腾出 6KB 供 FreeRTOS 堆扩展。
+ * （MPU 异常隔离测试确认与本迁移无关。） */
+#define PRE_TRIGGER_BUF_ADDR  0x680A9A00u
+static LA_SamplePoint *pre_trigger_buf = (LA_SamplePoint *)PRE_TRIGGER_BUF_ADDR;
 static volatile uint32_t ts_overflow = 0;
 static volatile LA_SampleMode current_mode = LA_MODE_IDLE;
 static volatile uint32_t pre_trigger_idx = 0;
