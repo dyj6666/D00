@@ -19,20 +19,36 @@ class VLinkClient:
             self.transport.rx_queue.get_nowait()
 
         self.transport.send(Command.LIST_VARS)
-        # print("Sent LIST_VARS")
+        # 固件 var_list.c 支持多帧分片：payload[0]=总包数，payload[1]=包序号。
+        # 必须收齐所有分片再合并，否则变量表超一帧即静默丢变量。
+        packets = {}          # packet_index -> 本包解析出的条目
+        total_packets = 0     # 固件声明的总包数（0 表示尚未得知）
         deadline = time.time() + 1.0
         while time.time() < deadline:
             frame = self.transport.get_frame(timeout=0.01)
             if frame is None:
                 continue
             cmd, payload = frame
-            # print(f"Received cmd=0x{cmd:02X}, len={len(payload)}")
-            if cmd == Command.LIST_VARS:
-                vars = self._parse_variable_list(payload)
-                # print(f"Parsed {len(vars)} variables")
-                return vars
-        print("Timeout")
-        return []
+            if cmd != Command.LIST_VARS:
+                continue
+            if len(payload) < 2:
+                continue
+            total = payload[0]
+            index = payload[1]
+            if total_packets == 0:
+                total_packets = total if total > 0 else 1
+            packets[index] = self._parse_variable_list(payload)
+            if len(packets) >= total_packets:
+                break
+        # 按分片序号合并（容忍丢片：保留已收部分，仅提示）
+        vars_list = []
+        for idx in sorted(packets):
+            vars_list.extend(packets[idx])
+        if len(packets) > 1 and len(packets) < total_packets:
+            print(f"WARN: received {len(packets)}/{total_packets} variable fragments")
+        if not packets:
+            print("Timeout")
+        return vars_list
 
     def _parse_variable_list(self, payload: bytes) -> list[VariableInfo]:
         # print(f"Parsing variable list, payload: {payload.hex()}")

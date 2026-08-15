@@ -5,6 +5,7 @@ import struct
 from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
 from ecdsa import SigningKey, NIST256p
+from ecdsa.util import sigencode_string
 
 def derive_aes_key_from_uid(uid_hex: str) -> bytes:
     """根据设备UID派生32字节AES密钥。
@@ -65,7 +66,9 @@ def encrypt_and_sign(input_bin: str, output_bin: str, private_key_hex: str,
     h = SHA256.new(header + encrypted)
     digest = h.digest()
     sk = SigningKey.from_string(bytes.fromhex(private_key_hex), curve=NIST256p)
-    signature = sk.sign_digest(digest)
+    # 显式 64B 裸 r||s（设备 OTA_SIGN_SIZE=64，uECC 格式），
+    # 不依赖 ecdsa 版本默认值，避免旧版 DER 编码导致验签失败
+    signature = sk.sign_digest(digest, sigencode=sigencode_string)
 
     with open(output_bin, 'wb') as f:
         f.write(header + encrypted + signature)

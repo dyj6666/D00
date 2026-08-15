@@ -39,9 +39,6 @@ class ShellPort:
     def la_stop_dma(self) -> str:
         return self.command("la_dma_stop", wait_s=1.0)
 
-    def la_set_buffer(self, src: str) -> str:
-        return self.command(f"la_dma_buf {src}")
-
     def la_set_trigger(self, trig_args: str) -> str:
         return self.command(f"la_trig {trig_args}")
 

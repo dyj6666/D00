@@ -38,11 +38,11 @@ python HOST\DapTool\dap_gui.py
 
 ## 关键细节：RUN 区直烧必须带魔数
 
-BOOT 只在 0x0805FFF8 处校验 APP 有效性魔数（0x4F54412E）。直接烧录
+BOOT 只在 0x080DFFF8 处校验 APP 有效性魔数（0x4F54412E）。直接烧录
 原始 APP.bin 到 0x08010000 时魔数会落在错误偏移，BOOT 会判定 APP
 无效。因此：
 - "烧录"页目标地址选 RUN(0x08010000) 时，会自动把 APP.bin 补成
-  320KB 完整分区镜像（魔数@0x04FFF8、版本@0x04FFFC，版本取自
+  832KB 完整分区镜像（魔数@0x0CFFF8、版本@0x0CFFFC，版本取自
   config/version.json）再烧录；
 - "BOOT+APP 一键"内部同样自动处理，刷完即为可启动固件。
 

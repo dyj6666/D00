@@ -27,9 +27,10 @@ class CaptureSession:
 
     def configure(self, rate: int, buffer_src: str = "sram",
                   trig_args: Optional[str] = None) -> str:
+        # 注：固件已删除 IRAM 缓冲（统一外部 SRAM 32KB 环形），
+        # 不再下发 la_dma_buf 切换命令（固件命令表无此命令）。
         with self._lock:
-            log = self.ctrl.la_set_buffer(buffer_src)
-            log += self.ctrl.la_start_dma(rate)
+            log = self.ctrl.la_start_dma(rate)
             if trig_args:
                 log += self.ctrl.la_set_trigger(trig_args)
         return log
@@ -41,7 +42,6 @@ class CaptureSession:
                 nchannels: int = 4) -> TraceData:
         """开始采样 → 等待 duration_s → 停止 → 下载最新缓冲"""
         with self._lock:
-            self.ctrl.la_set_buffer(buffer_src)
             self.ctrl.la_start_dma(rate)
             if trig_args:
                 self.ctrl.la_set_trigger(trig_args)
@@ -52,7 +52,8 @@ class CaptureSession:
             if "samples" not in stop_log:
                 raise CaptureError(f"la_dma_stop 异常: {stop_log}")
 
-            buf_size = 32768 if buffer_src == "sram" else 8192
+            # 固件统一外部 SRAM 32KB 环形缓冲（无 iram 模式）
+            buf_size = 32768
             total = count or buf_size
             if total > buf_size:
                 total = buf_size

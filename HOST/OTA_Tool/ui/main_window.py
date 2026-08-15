@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
+from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QDragEnterEvent, QDropEvent
@@ -23,6 +25,22 @@ from core.version_lib import load_lib
 from utils.config import Config
 
 VERSION = "v3.0.0"
+
+
+def _default_version() -> int:
+    """版本默认值单一事实源：仓库根 config/version.json 的 ota_version。
+
+    避免 GUI 手填版本与 BOOT 防回滚判定脱节（评估 P1-版本多源修复）。
+    """
+    try:
+        root = Path(__file__).resolve().parents[3]
+        data = json.loads((root / "config" / "version.json").read_text(encoding="utf-8"))
+        v = int(data.get("ota_version", 0))
+        if v > 0:
+            return v
+    except Exception:
+        pass
+    return 1
 
 
 def _detect_ctl_port() -> str:
@@ -323,7 +341,7 @@ class MainWindow(QMainWindow):
         lbl_ver.setMinimumWidth(120)
         self.spin_version = QSpinBox()
         self.spin_version.setRange(0, 99999)
-        self.spin_version.setValue(1)
+        self.spin_version.setValue(_default_version())
         self.spin_version.setMinimumWidth(92)
         form.addRow(lbl_ver, self.spin_version)
 
@@ -519,7 +537,10 @@ class MainWindow(QMainWindow):
 
     def _load_config(self):
         self.edit_file.setText(self.config.get("last_file", ""))
-        self.spin_version.setValue(int(self.config.get("last_version", 1)))
+        # 单一事实源优先：取 config/version.json 与上次手填值的较大者，
+        # 防止手填过旧版本被 BOOT 防回滚拒绝。
+        self.spin_version.setValue(
+            max(_default_version(), int(self.config.get("last_version", 0))))
         self.edit_uid.setText(self.config.get("last_uid", ""))
         self.edit_tcp_ip.setText(self.config.get("last_tcp_ip", "192.168.10.10"))
         self.spin_tcp_port.setValue(int(self.config.get("last_tcp_port", 9020)))

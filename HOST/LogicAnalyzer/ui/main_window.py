@@ -142,10 +142,11 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow("通道数", self.channels_combo)
 
         self.buffer_combo = QtWidgets.QComboBox()
-        self.buffer_combo.addItems(["sram", "iram"])
-        # 默认 IRAM：本板 PB1~PB3/PB5~PB7 与外部 SRAM 总线相连，
-        # SRAM 缓冲模式会采到总线写地址的计数序列（非真实信号）
-        self.buffer_combo.setCurrentIndex(1)
+        # 固件已统一外部 SRAM 32KB 环形缓冲（iram 缓冲随 LA 瘦身移除），
+        # 故只保留 sram 选项；本板 PB1~PB3/PB5~PB7 与外部 SRAM 总线相连，
+        # 采样时避免把总线信号接入这些引脚。
+        self.buffer_combo.addItems(["sram"])
+        self.buffer_combo.setCurrentIndex(0)
         form.addRow("缓冲", self.buffer_combo)
 
         self.duration_spin = QtWidgets.QDoubleSpinBox()
