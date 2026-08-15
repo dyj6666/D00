@@ -6,6 +6,9 @@
 #include "bsp_lcd.h"
 #include "LCD/lcd.h"
 #include "logger.h"
+#include "mem_map.h"
+
+#include <string.h>
 
 /* ================================================================
  * 板载 TFTLCD BSP 实现：封装官方多 IC 驱动（BSP/LCD/）为统一接口

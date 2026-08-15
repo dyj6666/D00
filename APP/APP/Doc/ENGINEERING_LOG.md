@@ -3594,3 +3594,32 @@ DataLink_SendPacket 丢帧返回 -2；logger TX 2000ms 超时自愈；sysmon CPU
 **遗留疑点（记录待查）**：参数区 last_error 字段曾出现 0x080E0004（=槽基址+4），
 CRC 验证合法内容应为 0——疑与 DMA 死锁状态下 OTA 参数写交互有关，后续 OTA
 流程观察。
+
+### 10.56 DMA 直写 LCD 终审：M2M 不启动的 DAP 证据链（2026-08-15，重点问题）
+**背景**：用户质疑"DMA 直写确定不能用吗"。此前 9161/9163 两次 DMA flush 失败
+被初步归因"FSMC 总线死锁"，本轮用 DAP 寄存器级实验给出确定性结论。
+
+**DAP 证据链（零烧录，debug 单会话）**：
+1. 首读 0x40026440 见活跃 CR=0x0801051F（CH4/EN=1/NDTR=256/M0AR=rx_dma_buf/
+   PAR=USART1_DR）——疑似 Stream4 被占用；
+2. 查 CMSIS 宏：DMA2_Stream2_BASE=+0x40、Stream4_BASE=+0x70（流间隔 0x18）
+   ——**0x40026440 是 Stream2（USART1_RX 正常使用中），真 Stream4 在
+   0x40026470**，此前所有 DAP 诊断地址全部错位（读的是 Stream2）；
+3. 单会话 mww 配置 Stream4 M2M（PAR/M0AR/NDTR/FCR/CR 全写成功、mdw 回读
+   全对）→ resume 200ms → halt：**CR 保持 0x06020441（EN 置位）、NDTR=8
+   未减、dst 全 0、无错误标志——运行态 M2M 完全不启动**；
+4. Stream1 同配置对照：同样不启动；
+5. 对照：外设请求驱动的 DMA（USART1_RX Stream2、W25Q Stream0/3）均正常。
+**注意坑**：dap_debug 单命令会话结束（shutdown 断连）目标被复位，跨会话
+写内存/寄存器后读回全 0 是假象——必须用 debug 单会话内 resume/sleep/halt
+取证；且 halt 状态下 DMA 不运行，必须 resume 后观察。
+
+**根因**：DMA2 的 M2M（内存到内存）传输在本板完全不启动（EN 保持、NDTR
+不减、无标志），外设请求 DMA 正常。9161/9163 的"FSMC 死锁"重新定性：
+实为 M2M 从不启动 + disp_wait 忙等 EN 永不清（并非 FSMC 总线互锁）。
+**结论**：DMA 直写 LCD 不可用（DAP 寄存器级确证）；CPU 同步 flush 为唯一
+路径，性能上限 = 面板写带宽（逐行窗口 ~18MPix/s / 无窗口 23MPix/s）。
+
+**经验沉淀**：①DAP 寄存器基址必须查 CMSIS 宏核对（0x18 流间隔的布局教训）；
+②跨会话断连复位、halt 冻结 DMA 两个取证陷阱；③"打印-烧录"循环的替代：
+debug 会话 mww/mdw + resume/sleep/halt 可在零烧录下完成外设行为取证。
