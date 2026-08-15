@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # D00 embedded automation - shared config + helpers (ASCII only)
 # Set $env:D00_REPO_ROOT to override the detected repo root.
 # ============================================================
@@ -61,7 +61,8 @@ $script:LogDir      = Join-Path $WorkflowDir "logs"
 $script:ReportPath  = Join-Path $WorkflowDir "last_report.json"
 
 $script:VerifyExpect = @("Modules initialized", "ETH  : app ready", "OTA  : Agent ready")
-$script:VerifyFail   = @("HardFault", "UsageFault", "assert", "FATAL")
+$script:VerifyFail   = @("HardFault", "UsageFault", "assert", "FATAL",
+                         "SELF-TEST FAILED", "SPOT CHECK FAIL", "LCD] WritePixels OOB")
 
 function Write-Step {
     param([string]$Msg)
@@ -190,11 +191,15 @@ function Test-KeilLog {
 }
 
 function Start-Com9Logger {
-    param([string]$OutFile, [int]$Seconds, [string]$Cmd = "")
+    param([string]$OutFile, [int]$Seconds, [string]$Cmd = "", [double]$CmdDelay = 0.0)
     Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
     $args = @($script:Com9Logger, $OutFile, "$Seconds")
     $args += @("--port", (Get-DebugPort))
-    if ($Cmd) { $args += @("--cmd", $Cmd) }
+    if ($Cmd) {
+        # Start-Process 数组参数对含空格元素不加引号，命令本身需显式包裹
+        $args += @("--cmd", ('"' + $Cmd + '"'))
+        if ($CmdDelay -gt 0) { $args += @("--cmd-delay", "$CmdDelay") }
+    }
     Start-Process -FilePath $script:Python -ArgumentList $args `
         -WindowStyle Hidden -PassThru
 }

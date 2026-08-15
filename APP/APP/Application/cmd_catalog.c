@@ -1380,7 +1380,11 @@ static void cmd_lcd(const char *args)
         BSP_LCD_SelfTest();
         return;
     }
-    LOG_Printf("Usage: lcd <info|bl <0|1>|selftest>\r\n");
+    if (strcmp(args, "dirtest") == 0) {
+        BSP_LCD_DirTest();
+        return;
+    }
+    LOG_Printf("Usage: lcd <info|bl <0|1>|selftest|dirtest>\r\n");
 }
 
 static void cmd_gui(const char *args)

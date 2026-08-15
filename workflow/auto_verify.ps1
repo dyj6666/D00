@@ -1,4 +1,4 @@
-﻿param(
+param(
     [int]$Seconds = 25,
     [switch]$NoReset,
     [switch]$SerialReset,
@@ -15,8 +15,12 @@ $resetMethod = "SWD"
 if ($SerialReset) { $resetMethod = "Serial" }
 if ($NoReset) { $resetMethod = "none" }
 Write-Step ("Capture " + $script:DebugPort + " for " + $Seconds + "s, reset via " + $resetMethod)
+# 抓日志期间顺带执行 LCD 读回自检（复位后延迟 5s 发送，防花屏回归的
+# 流水线守门：自检失败关键字已纳入 VerifyFail）。
+$verifyCmd = $(if ($SerialReset) { "reset" } else { "lcd selftest" })
+$verifyCmdDelay = $(if ($SerialReset) { 0.0 } else { 5.0 })
 $logger = Start-Com9Logger -OutFile $script:BootLog -Seconds $Seconds `
-    -Cmd $(if ($SerialReset) { "reset" } else { "" })
+    -Cmd $verifyCmd -CmdDelay $verifyCmdDelay
 if (-not $NoReset -and -not $SerialReset) {
     Start-Sleep -Seconds 2
     try {

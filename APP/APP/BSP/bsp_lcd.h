@@ -7,6 +7,7 @@
 #define BSP_LCD_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* ================================================================
  * 板载 2.8 寸 TFTLCD BSP 层（统一接口）
@@ -104,5 +105,17 @@ void BSP_LCD_Bench(void);
 
 /* 读回自检：写已知图案 → 读回抽样点对比 → 输出错位诊断（花屏定位用） */
 void BSP_LCD_SelfTest(void);
+
+/* 上电快速自检（~几 ms）：3 行不同色窗口写读回 + 单点校验。
+ * 在 BSP_LCD_Init 尾部自动执行；失败返回 false 并计数（供 sysmon/日志）。 */
+bool BSP_LCD_QuickSelfTest(void);
+
+/* flush 读回抽检统计（防花屏运行时守护）：读回错误次数/抽检次数 */
+uint32_t BSP_LCD_GetSpotCheckFails(void);
+uint32_t BSP_LCD_GetSpotCheckCount(void);
+
+/* 扫描方向诊断：遍历 8 种 MADCTL 方向，报告哪些方向多行窗口连续写
+ * 正确（寻找 ST7789 行递增异常的方向规避方案）。结束恢复原方向。 */
+void BSP_LCD_DirTest(void);
 
 #endif

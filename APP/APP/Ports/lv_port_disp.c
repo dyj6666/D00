@@ -27,6 +27,12 @@
 #define DISP_BUF_ROWS  12u
 #define DISP_BUF_SIZE  (DISP_HOR_RES * DISP_BUF_ROWS)
 
+/* 编译期预算断言：双缓冲字节数（RGB565=2B/px）不得超主 SRAM 剩余预算
+ * （当前实测剩余 ~13KB）。任何扩大缓冲的改动在此显式暴露。 */
+#if (DISP_BUF_SIZE * 2u * 2u) > (13u * 1024u)
+#error "LVGL draw buffer exceeds main SRAM budget (13KB); shrink DISP_BUF_ROWS"
+#endif
+
 static lv_color_t s_disp_buf1[DISP_BUF_SIZE] __attribute__((aligned(4)));
 static lv_color_t s_disp_buf2[DISP_BUF_SIZE] __attribute__((aligned(4)));
 

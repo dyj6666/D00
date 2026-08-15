@@ -859,12 +859,22 @@ void lcd_clear(uint16_t color)
 void lcd_fill(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint32_t color)
 {
     /* 逐行"单行多列窗口"填充：ST7789 单点窗口只收 1 像素、
-     * 多行窗口 RAMWR 行递增异常，单行窗口连续写为实测唯一正确路径。 */
+     * 多行窗口 RAMWR 行递增异常（dirtest 8 方向全 FAIL，硬件级限制），
+     * 单行窗口连续写为唯一正确路径。后续行仅增量更新 PASET。 */
     uint16_t xlen = (uint16_t)(ex - sx + 1);
     uint16_t ylen = (uint16_t)(ey - sy + 1);
     volatile uint16_t *ram = &LCD->LCD_RAM;
     for (uint16_t row = 0; row < ylen; row++) {
-        lcd_set_window(sx, (uint16_t)(sy + row), xlen, 1);
+        uint16_t yy = (uint16_t)(sy + row);
+        if (row == 0u) {
+            lcd_set_window(sx, yy, xlen, 1);
+        } else {
+            lcd_wr_regno(lcddev.setycmd);
+            lcd_wr_data(yy >> 8);
+            lcd_wr_data(yy & 0xFF);
+            lcd_wr_data(yy >> 8);
+            lcd_wr_data(yy & 0xFF);
+        }
         lcd_write_ram_prepare();
         uint32_t n = xlen;
         while (n--) {
@@ -1254,7 +1264,7 @@ void lcd_bench(void)
     t1 = DWT->CYCCNT;
     uint32_t us = (t1 - t0) / 168u;
     uint32_t us1 = us / 10u;
-    LOG_Printf("  clear   : %lu us/屏 (%lu.%02lu MPix/s)\r\n",
+    LOG_Printf("  clear   : %lu us/scr (%lu.%02lu MPix/s)\r\n",
                (unsigned long)us1,
                (unsigned long)(total_px / us1),
                (unsigned long)((total_px * 100u / us1) % 100u));
@@ -1267,7 +1277,7 @@ void lcd_bench(void)
     t1 = DWT->CYCCNT;
     us = (t1 - t0) / 168u;
     uint32_t us2 = us / 200u;
-    LOG_Printf("  fill    : %lu us/次 (5000px, %lu.%02lu MPix/s)\r\n",
+    LOG_Printf("  fill    : %lu us/op (5000px, %lu.%02lu MPix/s)\r\n",
                (unsigned long)us2,
                (unsigned long)(5000u / (us2 > 0 ? us2 : 1)),
                (unsigned long)((5000u * 100u / (us2 > 0 ? us2 : 1)) % 100u));
@@ -1282,7 +1292,7 @@ void lcd_bench(void)
     t1 = DWT->CYCCNT;
     us = (t1 - t0) / 168u;
     uint32_t us3 = us / 2000u;
-    LOG_Printf("  char16  : %lu us/字 (%lu 字/s)\r\n",
+    LOG_Printf("  char16  : %lu us/ch (%lu ch/s)\r\n",
                (unsigned long)us3,
                (unsigned long)(1000000u / (us3 > 0 ? us3 : 1)));
 
@@ -1295,7 +1305,7 @@ void lcd_bench(void)
     t1 = DWT->CYCCNT;
     us = (t1 - t0) / 168u;
     uint32_t us4 = us / 200u;
-    LOG_Printf("  string  : %lu us/串 (%lu 串/s)\r\n",
+    LOG_Printf("  string  : %lu us/str (%lu str/s)\r\n",
                (unsigned long)us4,
                (unsigned long)(1000000u / (us4 > 0 ? us4 : 1)));
 

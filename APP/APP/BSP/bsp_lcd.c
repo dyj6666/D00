@@ -18,6 +18,15 @@ uint16_t BSP_LCD_Init(void)
     lcd_display_dir(BSP_LCD_ORIENT_PORTRAIT);
     LCD_BL(1);
     lcd_clear(BSP_LCD_COLOR_BLACK);
+    /* 上电快速自检：写读链路验证（防花屏守护层 1），失败重初始化一次 */
+    if (!BSP_LCD_QuickSelfTest()) {
+        LOG_Printf("[LCD] quick self-test failed, re-init...\r\n");
+        lcd_init();
+        lcd_display_dir(BSP_LCD_ORIENT_PORTRAIT);
+        LCD_BL(1);
+        lcd_clear(BSP_LCD_COLOR_BLACK);
+        (void)BSP_LCD_QuickSelfTest();
+    }
     return lcddev.id;
 }
 
@@ -83,6 +92,93 @@ uint32_t BSP_LCD_GetRamAddr(void)
     return (uint32_t)&LCD->LCD_RAM;
 }
 
+/* ---------------- 防花屏守护层 ----------------
+ * 三层保护（上电自检 / flush 运行时抽检 / 完整自检命令），任何一层
+ * 检测到 GRAM 写读不一致即计数+日志，杜绝花屏"静默"上线。 */
+static uint32_t s_spot_fails;
+static uint32_t s_spot_checks;
+
+uint32_t BSP_LCD_GetSpotCheckFails(void) { return s_spot_fails; }
+uint32_t BSP_LCD_GetSpotCheckCount(void) { return s_spot_checks; }
+
+/* 上电快速自检：3 行不同色 + 3 单点，写读回全对才算通过 */
+bool BSP_LCD_QuickSelfTest(void)
+{
+    uint16_t W = BSP_LCD_GetWidth();
+    uint16_t H = BSP_LCD_GetHeight();
+    bool ok = true;
+
+    /* 3 行不同色（用屏幕中部），验证单行窗口写路径 */
+    const uint16_t colors[3] = {0xF800, 0x07E0, 0x001F};
+    for (int r = 0; r < 3; r++) {
+        uint16_t row[64];
+        for (int i = 0; i < 64; i++) row[i] = colors[r];
+        BSP_LCD_WritePixels((uint16_t)(W / 2 - 32), (uint16_t)(H / 2 - 2 + r), 64, 1, row);
+        const uint16_t cols[3] = {0u, 32u, 63u};   /* 窗口内三列（63 为末列） */
+        for (int c = 0; c < 3; c++) {
+            uint16_t rv = lcd_read_point_rgb565((uint16_t)(W / 2 - 32 + cols[c]),
+                                                (uint16_t)(H / 2 - 2 + r));
+            if (rv != colors[r]) {
+                ok = false;
+                s_spot_fails++;
+            }
+        }
+    }
+    /* 3 单点（四角+中心），验证任意坐标写读 */
+    const uint16_t px[3] = {2, (uint16_t)(W - 3), (uint16_t)(W / 2)};
+    const uint16_t py[3] = {2, (uint16_t)(H - 3), (uint16_t)(H / 2)};
+    const uint16_t pv[3] = {0x1234, 0xABCD, 0x55AA};
+    for (int i = 0; i < 3; i++) {
+        lcd_set_cursor(px[i], py[i]);
+        lcd_write_ram_prepare();
+        LCD->LCD_RAM = pv[i];
+        if (lcd_read_point_rgb565(px[i], py[i]) != pv[i]) {
+            ok = false;
+            s_spot_fails++;
+        }
+    }
+    if (!ok) {
+        LOG_Printf("[LCD] SELF-TEST FAILED! (%lu fails)\r\n",
+                   (unsigned long)s_spot_fails);
+    }
+    return ok;
+}
+
+/* 扫描方向诊断：遍历 8 种 MADCTL 方向测多行窗口连续写（读写同坐标对称测试） */
+void BSP_LCD_DirTest(void)
+{
+    static const uint16_t colors[3] = {0xF800, 0x07E0, 0x001F};
+    uint8_t saved = DFT_SCAN_DIR;
+    for (uint8_t d = 0; d < 8; d++) {
+        lcd_scan_dir(d);
+        lcd_clear(BLACK);
+        /* 多行窗口 (30,40,50,3)：连续写 150 像素（每行 50） */
+        lcd_set_window(30, 40, 50, 3);
+        lcd_write_ram_prepare();
+        volatile uint16_t *ram = &LCD->LCD_RAM;
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 50; c++) {
+                *ram = colors[r];
+            }
+        }
+        bool ok = true;
+        for (int r = 0; r < 3; r++) {
+            for (int c = 0; c < 3; c++) {
+                uint16_t rv = lcd_read_point_rgb565((uint16_t)(30 + c * 25),
+                                                    (uint16_t)(40 + r));
+                if (rv != colors[r]) {
+                    ok = false;
+                }
+            }
+        }
+        LOG_Printf("[LCD] dir=%u multirow-write: %s\r\n", (unsigned)d,
+                   ok ? "OK" : "FAIL");
+    }
+    lcd_scan_dir(saved);   /* 恢复原方向 */
+    lcd_clear(BLACK);
+    LOG_Printf("[LCD] dirtest done (dir restored=%u)\r\n", (unsigned)saved);
+}
+
 /* 批量写入矩形像素（逐行"单行多列窗口"写：
  * ST7789 实测：单点窗口只收 1 像素（超窗丢弃）；多行窗口 RAMWR
  * 行递增异常（第二行起错位）。唯一正确路径 = 每行设 (x, y+row, w, 1)
@@ -90,14 +186,49 @@ uint32_t BSP_LCD_GetRamAddr(void)
 void BSP_LCD_WritePixels(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                          const uint16_t *buf)
 {
+    if (w == 0u || h == 0u || buf == NULL) {
+        return;
+    }
+    /* 边界防御：越界写直接拒绝（防窗口参数错误导致乱写 GRAM） */
+    if ((uint32_t)x + w > BSP_LCD_GetWidth() ||
+        (uint32_t)y + h > BSP_LCD_GetHeight()) {
+        s_spot_fails++;
+        LOG_Printf("[LCD] WritePixels OOB! (%u,%u,%u,%u)\r\n", x, y, w, h);
+        return;
+    }
     for (uint16_t row = 0; row < h; row++) {
-        lcd_set_window(x, (uint16_t)(y + row), w, 1);
+        if (row == 0u) {
+            /* 首行：完整窗口（CASET+PASET） */
+            lcd_set_window(x, y, w, 1);
+        } else {
+            /* 后续行：仅增量更新 PASET 起点=终点（CASET 列区间保持），
+             * 每次省 6 次 FSMC 寄存器写；ST7789 多行窗口硬件不可用
+             * （dirtest 实测 8 方向全 FAIL），逐行是唯一正确路径。 */
+            uint16_t yy = (uint16_t)(y + row);
+            lcd_wr_regno(lcddev.setycmd);
+            lcd_wr_data(yy >> 8);
+            lcd_wr_data(yy & 0xFF);
+            lcd_wr_data(yy >> 8);
+            lcd_wr_data(yy & 0xFF);
+        }
         lcd_write_ram_prepare();
         volatile uint16_t *ram = &LCD->LCD_RAM;
         const uint16_t *p = buf + (uint32_t)row * w;
         uint32_t n = w;
         while (n--) {
             *ram = *p++;
+        }
+    }
+    /* 运行时抽检（防花屏守护）：每 128 次调用读回 1 点对比，
+     * 平均开销 <0.1%；连续错误说明写路径被破坏（如误改连续写） */
+    if (((++s_spot_checks) & 0x7Fu) == 0u) {
+        uint16_t rv = lcd_read_point_rgb565(x, (uint16_t)(y + h - 1));
+        uint16_t exp = buf[(uint32_t)(h - 1) * w];
+        if (rv != exp) {
+            s_spot_fails++;
+            LOG_Printf("[LCD] SPOT CHECK FAIL: (%u,%u) w=0x%04X r=0x%04X (fails=%lu)\r\n",
+                       x, (unsigned)(y + h - 1), exp, rv,
+                       (unsigned long)s_spot_fails);
         }
     }
 }
@@ -179,11 +310,14 @@ void BSP_LCD_SelfTest(void)
             BSP_LCD_WritePixels(x0, y, n, 1, grad);
         }
     }
-    /* 读回 5 点：预期 (0,0)=0x0000 (W-1,0)=0xF800 (0,H-1)=0x0000 (W-1,H-1)=0xF800 (W/2,H/2)=0x7800 */
+    /* 读回 5 点：预期 = (x&31)<<11（渐变编码），非固定值 */
     uint16_t p[5];
     uint16_t xs[5] = {0, (uint16_t)(W - 1), 0, (uint16_t)(W - 1), (uint16_t)(W / 2)};
     uint16_t ys[5] = {0, 0, (uint16_t)(H - 1), (uint16_t)(H - 1), (uint16_t)(H / 2)};
-    uint16_t ex[5] = {0x0000, 0xF800, 0x0000, 0xF800, 0x7800};
+    uint16_t ex[5];
+    for (int i = 0; i < 5; i++) {
+        ex[i] = (uint16_t)((xs[i] & 0x1Fu) << 11);
+    }
     for (int i = 0; i < 5; i++) {
         p[i] = lcd_read_point_rgb565(xs[i], ys[i]);
         LOG_Printf("  pt(%u,%u)=0x%04X exp=0x%04X %s\r\n",

@@ -7,6 +7,7 @@
 
 import argparse
 import sys
+import threading
 import time
 
 import serial
@@ -32,16 +33,28 @@ parser = argparse.ArgumentParser()
 parser.add_argument("out", nargs="?", default=r"D:\GIT-SPACE\D00\APP\APP\_com9_boot.txt")
 parser.add_argument("seconds", nargs="?", type=int, default=20)
 parser.add_argument("--cmd", default=None, help="打开串口后立即发送的命令（如 reset）")
+parser.add_argument("--cmd-delay", type=float, default=0.0,
+                    help="命令延迟发送秒数（如复位后 5s 待板子启动再发 lcd selftest）")
 parser.add_argument("--port", default=None, help="调试串口（默认自动探测）")
 parser.add_argument("--baud", type=int, default=115200)
 args = parser.parse_args()
 
 port = args.port or auto_debug_port()
 ser = serial.Serial(port, args.baud, timeout=0.2)
+
+
+def delayed_cmd():
+    """延时发送命令（与日志读取并行：复位后板子启动日志不被吞）"""
+    time.sleep(max(0.3, args.cmd_delay))
+    try:
+        ser.reset_input_buffer()
+        ser.write((args.cmd + "\r").encode())
+    except Exception:
+        pass
+
+
 if args.cmd:
-    time.sleep(0.3)
-    ser.reset_input_buffer()
-    ser.write((args.cmd + "\r").encode())
+    threading.Thread(target=delayed_cmd, daemon=True).start()
 end = time.time() + args.seconds
 with open(args.out, "w", encoding="utf-8", errors="replace") as f:
     while time.time() < end:
