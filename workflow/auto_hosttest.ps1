@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$SkipBoot,
     [switch]$SkipApp,
     [switch]$Robustness

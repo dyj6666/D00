@@ -1,4 +1,4 @@
-param(
+﻿param(
     [int]$Seconds = 25,
     [switch]$NoReset,
     [switch]$SerialReset,

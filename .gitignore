@@ -81,6 +81,13 @@ HOST/OTA_Tool/config.json
 HOST/OTA_Tool/version_lib.json
 HOST/OTA_Tool/local_keys.json
 
+# VLink_Debugger 本地状态（窗口几何/订阅配置，不入库）
+HOST/VLink_Debugger/config.json
+
+# OTA_Tool 本地 GUI 探测残留
+HOST/OTA_Tool/_gui_probe.txt
+HOST/OTA_Tool/_gui_probe.txt.out
+
 # 本地工具链（OpenOCD 等，不入库）
 tools/
 

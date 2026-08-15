@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("selfcheck","build","quick","flash","verify","ota","hosttest","full")] [string]$Mode = "full",
     [switch]$SkipBuild,
     [switch]$SkipFlash,
@@ -43,8 +43,14 @@ function Run-Stage {
     Write-Host ("========== STAGE: " + $Name + " ==========")
     $t0 = Get-Date
     $scriptFile = Join-Path $PSScriptRoot $ScriptName
-    & $scriptFile @StageArgs
-    $code = $LASTEXITCODE
+    # 独立子进程执行：ExitCode 是阶段脚本 exit 的精确值，不受
+    # $?/$LASTEXITCODE 被内部原生进程（python 抓串口、OpenOCD 复位、
+    # 空 catch 块）污染的干扰。PS5.1 数组 splatting 与参数数组拼接
+    # 的坑已由 workflow ps1 统一 UTF-8 BOM 修复。
+    $argList = @("-ExecutionPolicy", "Bypass", "-File", $scriptFile) + $StageArgs
+    $p = Start-Process -FilePath "powershell" -ArgumentList $argList `
+        -Wait -PassThru -NoNewWindow
+    $code = $p.ExitCode
     $sec = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
     $report.stages[$Name] = $(if ($code -eq 0) { "OK" } else { "FAIL(" + $code + ")" })
     $report.stages[$Name + "_sec"] = $sec
@@ -69,10 +75,10 @@ if ($doVerify) {
     if ($c -ne 0) { [void]$failed.Add("verify") }
 }
 if ($doOta) {
-    $args = @()
-    if ($Version -gt 0) { $args += @("-Version", "$Version") }
-    if ($BuildNo -gt 0) { $args += @("-BuildNo", "$BuildNo") }
-    $c = Run-Stage "ota" "auto_ota.ps1" $args
+    $otaArgs = @()
+    if ($Version -gt 0) { $otaArgs += @("-Version", "$Version") }
+    if ($BuildNo -gt 0) { $otaArgs += @("-BuildNo", "$BuildNo") }
+    $c = Run-Stage "ota" "auto_ota.ps1" $otaArgs
     if ($c -ne 0) { [void]$failed.Add("ota") }
 }
 if ($doHost) {

@@ -1,4 +1,4 @@
-# ================================================================
+﻿# ================================================================
 # flash_dap - robust CMSIS-DAP flasher (fixes DAP freeze/red LED)
 #
 # Background: KEIL DAP freezes (HID timeout 0x3E5, red LED) after

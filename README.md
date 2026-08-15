@@ -86,7 +86,7 @@ python d00term.py com9            # 或 start_term.bat 双击启动；tcp 192.16
 ## 三工程联动契约
 
 ```
-BOOT(0x08000000, 64KB) ──跳转──▶ APP(0x08010000, 320KB) ──HOSTLINK(921600)──▶ HOST
+BOOT(0x08000000, 64KB) ──跳转──▶ APP(0x08010000, 832KB) ──HOSTLINK(921600)──▶ HOST
         │                        │
         └──OTA 升级：APP 写 RTC_BKP_DR1=0x5A5A → 复位 → BOOT 进升级模式
             → YMODEM 收包 → 验签解密 → 写 APP 区 → 写魔数/版本 → 复位跳转
@@ -96,8 +96,8 @@ BOOT(0x08000000, 64KB) ──跳转──▶ APP(0x08010000, 320KB) ──HOSTLI
 
 | 约定 | 值 |
 | --- | --- |
-| APP 有效性魔数 | `0x4F54412E` @ `0x0805FFF8` |
-| APP 版本号 | @ `0x0805FFFC` |
+| APP 有效性魔数 | `0x4F54412E` @ `0x080DFFF8` |
+| APP 版本号 | @ `0x080DFFFC` |
 | 升级请求标志 | `RTC_BKP_DR1 == 0x5A5A` |
 | OTA 包头魔数 | `0x4F5441FE` |
 | 跳转目标 | `0x08010000` |

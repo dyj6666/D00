@@ -1,4 +1,4 @@
-param([switch]$TestHw)
+﻿param([switch]$TestHw)
 . "$PSScriptRoot\common.ps1"
 $ErrorActionPreference = "Continue"
 
@@ -155,8 +155,8 @@ Report ($LASTEXITCODE -eq 0) "workflow versioned in git"
 $readmePath = Join-Path $script:RepoRoot "README.md"
 if (Test-Path -LiteralPath $readmePath) {
     $readmeTxt = Get-Content -LiteralPath $readmePath -Raw
-    Report ($readmeTxt -match "0x0805FFF8" -and $readmeTxt -match "320KB") `
-        "README conventions" "0x0805FFF8 / APP 320KB"
+    Report ($readmeTxt -match "0x080DFFF8" -and $readmeTxt -match "832KB") `
+        "README conventions" "0x080DFFF8 / APP 832KB"
 }
 
 if (Test-Path -LiteralPath (Join-Path $script:RepoRoot ".git")) {

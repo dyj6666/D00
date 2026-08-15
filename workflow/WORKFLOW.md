@@ -131,7 +131,7 @@ HOST 测试、发布固件崩溃后门扫描、工作流文件版本化检查。
 （`workflow\common.ps1` 启动时自动读取，缺省回退内置值）。
 `OTA_Tool` 的 `version_lib.json` 仅作本地登记（已 gitignore，不入库）。发版前必须：
 
-1. 更新 `config\version.json`（写入 `0x0805FFFC` 的数值）；
+1. 更新 `config\version.json`（写入 `0x080DFFFC` 的数值）；
 2. 同步固件版本常量与 `OTA_Tool/version_lib.json` 登记；
 3. 用 `-Version -BuildNo` 显式覆盖也可以。
 
@@ -146,7 +146,7 @@ HOST 测试、发布固件崩溃后门扫描、工作流文件版本化检查。
 - **verify 报 MISSING**：确认调试串口（默认 COM5，可用 `D00_DEBUG_PORT` 覆盖）是调试串口、波特率 115200；或调整 `VerifyExpect`。
 - **flash 失败**：确认 SWD 线/供电/目标未占用；重试前先跑 `self_check.ps1 -TestHw`。
 - **OTA 拒绝降级**：`-Version` 必须大于等于板上当前版本。
-- **README 魔数地址过时**：以 `boot_config.h`（0x0805FFF8）和 `app_config.h`（0x0805FFFC）为准。
+- **README 魔数地址过时**：以 `boot_config.h`（0x080DFFF8）和 `app_config.h`（0x080DFFFC）为准。
 
 ## 八、可继续扩展
 

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [ValidateSet("APP","BOOT","ALL")] [string]$Project = "ALL",
     [ValidateSet("Keil","GCC")] [string]$Toolchain = "Keil",
     [switch]$Clean

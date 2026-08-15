@@ -53,26 +53,33 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build-app-host --output-on-failure
 
+  architecture-layering:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 分层守门（禁 HAL/Application 头越层）
+        run: python APP/APP/Script/check_layering.py .
+
   host-python-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-
-  architecture-layering:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: 分层守门（禁 HAL/Application 头越层）
-        run: python APP/APP/Script/check_layering.py .
         with:
           python-version: "3.11"
       - name: Install deps
-        run: pip install numpy pyserial PyQt5
+        run: pip install numpy pyserial PyQt5 ecdsa
       - name: VLink protocol tests
         run: python HOST/VLink_Debugger/tests/test_protocol.py
+      - name: VLink client fragment tests
+        run: python HOST/VLink_Debugger/tests/test_client.py
       - name: LogicAnalyzer decoder tests
         run: python HOST/LogicAnalyzer/tests/test_decoders.py
+      - name: OTA_Tool tests
+        run: python HOST/OTA_Tool/tests/test_cryptor.py
       - name: EthLab smoke tests
         run: python HOST/EthLab/tests/smoke_test.py
 

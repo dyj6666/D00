@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # D00 embedded automation - shared config + helpers (ASCII only)
 # Set $env:D00_REPO_ROOT to override the detected repo root.
 # ============================================================
@@ -41,7 +41,7 @@ $script:HostPort  = if ($env:D00_HOST_PORT)  { $env:D00_HOST_PORT  } else { "" }
 $script:BootLog   = Join-Path $AppRoot "_auto_boot.txt"
 $script:OtaLog    = Join-Path $AppRoot "_auto_ota.txt"
 
-# Version written next to the APP validity magic (0x0805FFFC).
+# Version written next to the APP validity magic (0x080DFFFC, scheme B).
 # Defaults live in config/version.json (single source of truth) and
 # override these fallback values; keep both consistent before release.
 $script:OtaVersion = 213
