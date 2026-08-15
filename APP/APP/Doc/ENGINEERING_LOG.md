@@ -3442,3 +3442,56 @@ auto-stop）全部按设计工作。
 - **结论**：软件侧已全部修复并验证；MPU6050 模块未响应（无 ACK），需物理检查：VCC=3.3V 供电、SCL→PB6/SDA→PB7 线序、模块 AD0 地址（默认 0x68）。系统核心功能（LVGL/ETH/OTA/CAN）不受影响。
 
 **经验沉淀**：①F407 内存=128KB SRAM+64KB CCM，无 SRAM3（0x20020000+ 访问即 BusFault），链接脚本必须按芯片型号；②lv_disp_drv_register 前必须显式绑定 draw_buf；③硬件类间歇故障（传感器）用"回退隔离测试"快速排除软件因素，避免在无关改动上浪费时间。
+
+### 10.52 死代码清理：移除旧自绘显示层（lcd_app/lcd_ui/lcd_test）
+
+**背景**：LVGL 作为唯一显示层稳定运行后，旧的 lcd_app（自绘页面应用）/ lcd_ui（渲染任务框架）/ lcd_test（LCD 测试）三件套成为死代码（LVGL_GUI_MASTER 下仅接口空转），并产生 2 个编译警告。
+
+**清理内容**：
+- 删除 `lcd_app.c/h`、`lcd_ui.c/h`、`lcd_test.c/h`（6 文件）；
+- `touch_svc.c` 校准：移除 LcdUI_EnterTest/RunTest/ExitTest 依赖，直接调用 cal_draw_cb（BSP 层绘制十字）；
+- `cmd_catalog.c`：移除 lcd 测试/页面/方向/老化/压力命令及依赖函数，`lcd` 命令精简为 `info|bl`（LVGL master 提示）；`touch test` 改提示；
+- 保留 BSP/LCD 底层驱动（lcd.c/lcd_ex.c/bsp_lcd.c）——LVGL flush 与触摸校准仍依赖；
+- 保留 Ports 层（lv_port_disp/indev）与 gui_app。
+
+**验证**：
+- Keil 0 Error / 0 Warning；GCC 交叉构建通过；
+- ROM 425.31KB → 420.12KB（-5.2KB），RAM 布局不变（SRAM 115.1KB / CCM 59.2KB）；
+- 实机：32 模块初始化、LVGL 显示、MPU ready、CAN/OTA 通道正常、`lcd info` 命令输出 "LVGL GUI master"。
+
+**经验**：显示架构换代时，旧层应先"停用保编译"过渡，稳定后彻底删除（含命令/依赖），避免死代码长期驻留。
+
+### 10.53 DAP 硬件调试工作流（dap_debug.py）建设
+
+**背景**：排查 BUG 长期依赖"加串口打印 → 重新烧录 → 看日志"，单轮迭代慢且
+无法观察寄存器/外设实时状态。目标：用 CMSIS-DAP 直接读内核与外设寄存器、
+下断点定位，做到不反复烧录的硬件级排查。
+
+**交付**：`workflow\dap_debug.py`（OpenOCD 短会话封装）：
+- 寄存器/内存/外设寄存器读写（GPIO/RCC/I2C/USART/SPI/FSMC/TIM/CAN/RTC/
+  IWDG/SCB/EXTI/DMA/SYSTICK 映射表）；
+- Keil map 符号双向解析（`sym`、PC 自动符号化、栈回溯符号化）；
+- `fault` 故障解码：CFSR/HFSR/BFAR/MMFAR + MSP/PSP 异常栈帧 + 崩溃点符号；
+- `bp --wait` 断点探测（运行等待命中，自动清理恢复）；
+- `debug` 交互式持久会话（halt/step/断点跨命令保持，等同 Keil 在线调试）。
+
+**排查过程（重点）**：
+1. **现象**：开发期实测 `halt` 后 30s 超时挂起，再次连接发现 PC=0x08000238
+   （BOOT 区），怀疑整板被复位。
+2. **方向一（被推翻）**：怀疑 OpenOCD 断连后目标残留挂起——实测 `resume`
+   报 `not halted`，说明探针断连时目标**自动恢复运行**，排除残留挂起。
+3. **方向二（成立）**：怀疑看门狗复位。查 `app_config.h`：
+   `APP_DEBUG_MODE=0`（发布构建）→ IWDG 开启，`BSP_Watchdog_Refresh` 每
+   任务周期喂狗；halt 期间 CPU 停走无法喂狗，超时即复位。
+4. **验证**：halt 挂起 4s 后 PC 仍停在 APP 区（无复位）→ 写入
+   `DBGMCU_CR=0x1F`（halt 时冻结 IWDG/WWDG/TIM）后长挂不再复位。
+5. **附带修复**：①OpenOCD `mdw` 输出无 `0x` 前缀，`parse_mem` 正则修正；
+   ②Keil map 符号地址带 Thumb 位（bit0=1），断点需偶地址，装载时统一屏蔽，
+   顺带修正 PC→符号偏移量；③Windows 控制台 GBK 无法打印 UTF-8，强制
+   stdout/stderr 重配置为 UTF-8；④telnet IAC 协商字节/NUL 清理。
+
+**经验沉淀**：①发布构建调试必须先冻结 IWDG（DBGMCU_CR），否则断点超过
+看门狗周期即整板复位，且复位会让排查方向误入 BOOT 流程；②CMSIS-DAP 断开
+即恢复运行，单次会话天然安全，持续挂起必须用持久会话；③DAP 单连接，严禁
+并行会话（实测互斥超时）；④硬件级证据（寄存器值+符号）比打印日志更接近
+根因，应作为排查第一动作。
