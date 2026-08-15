@@ -71,11 +71,14 @@ static bool spi_xfer(const uint8_t *tx, uint8_t *rx, uint32_t len)
 }
 
 /* ---------------- 状态/等待忙 ---------------- */
-static bool esp_wait_busy(uint32_t timeout_guard)
+/* 毫秒级超时：W25Q128 64KB 块擦标称 max 2s，取 5s 裕量；
+ * 不再用迭代计数（次数与时钟频率耦合，最坏情况可能误判失败）。 */
+static bool esp_wait_busy(uint32_t timeout_ms)
 {
     uint8_t cmd = ESP_CMD_READ_STATUS;
     uint8_t sr = 0u;
-    while (timeout_guard-- > 0u) {
+    uint32_t t0 = HAL_GetTick();
+    while ((HAL_GetTick() - t0) < timeout_ms) {
         cs_low();
         if (!spi_xfer(&cmd, NULL, 1u) || !spi_xfer(NULL, &sr, 1u)) {
             cs_high();
@@ -191,7 +194,7 @@ bool EspFlash_Write(uint32_t off, const void *data, uint32_t len)
         bool ok = spi_xfer(hdr, NULL, sizeof(hdr)) &&
                   spi_xfer(p, NULL, chunk);
         cs_high();
-        if (!ok || !esp_wait_busy(1000000u)) {
+        if (!ok || !esp_wait_busy(5000u)) {
             return false;
         }
         off += chunk;
@@ -217,7 +220,7 @@ bool EspFlash_EraseSector(uint32_t off)
     cs_low();
     bool ok = spi_xfer(hdr, NULL, sizeof(hdr));
     cs_high();
-    return ok && esp_wait_busy(1000000u);
+    return ok && esp_wait_busy(5000u);
 }
 
 /* ---------------- 64KB 块擦除（大区域备份/清槽提速） ---------------- */
@@ -236,7 +239,7 @@ bool EspFlash_EraseBlock64(uint32_t off)
     cs_low();
     bool ok = spi_xfer(hdr, NULL, sizeof(hdr));
     cs_high();
-    return ok && esp_wait_busy(1000000u);
+    return ok && esp_wait_busy(5000u);
 }
 
 /* ---------------- 64KB 块粒度区域擦除（逐块喂狗） ---------------- */

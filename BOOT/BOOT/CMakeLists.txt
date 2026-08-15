@@ -111,9 +111,12 @@ else()
     # 主机单元测试（纯逻辑服务层）
     # ============================================================
     add_executable(host_tests
+        tests/test_main.c
         tests/test_services.c
+        tests/test_ymodem.c
         BootServices/crc32.c
         BootServices/fifo.c
+        BootServices/ymodem.c
     )
 
     target_include_directories(host_tests PRIVATE

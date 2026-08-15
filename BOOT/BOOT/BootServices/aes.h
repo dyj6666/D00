@@ -24,9 +24,11 @@
 #endif
 
 
-#define AES128 1
+/* BOOT 安全要求 AES-256：密钥长度写死，不再依赖构建系统传宏——
+ * 若构建漏传 AES256=1，本头显式定义，杜绝静默降级 AES-128。 */
+#define AES128 0
 //#define AES192 1
-//#define AES256 1
+#define AES256 1
 
 #define AES_BLOCKLEN 16 // Block length in bytes - AES is 128b block only
 

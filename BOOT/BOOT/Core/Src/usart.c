@@ -234,18 +234,5 @@ PUTCHAR_PROTOTYPE
     return ch;
 }
 
-/**
- * @brief  Ymodem发送一个字节（阻塞）
- */
-int ymodem_send_char(uint8_t ch) {
-    return HAL_UART_Transmit(&huart1, &ch, 1, 100) == HAL_OK ? 0 : -1;
-}
-
-/**
- * @brief  Ymodem接收一个字节（带超时，返回0成功，-1超时）
- */
-int ymodem_recv_byte(uint8_t *ch, uint32_t timeout_ms) {
-    return HAL_UART_Receive(&huart1, ch, 1, timeout_ms) == HAL_OK ? 0 : -1;
-}
 /* USER CODE END 1 */
 

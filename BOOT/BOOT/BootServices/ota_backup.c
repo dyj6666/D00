@@ -24,7 +24,9 @@ static bool s_ready;                 /* OtaBackup_Init 探测结果 */
 static uint8_t s_chunk[BKUP_CHUNK];  /* 单块搬运缓冲（BOOT 无 OS，静态可重入） */
 static uint8_t s_cmp[BKUP_CHUNK];    /* 读回校验缓冲（避免大栈） */
 
-/* ---------------- 通用 CRC32（IEEE 多项式，与 boot_param 一致） ---------------- */
+/* ---------------- 通用 CRC32（IEEE 多项式，与 boot_param 一致） ----------------
+ * 兼容性警告：无 final-xor 位算法，与 crc32.c（查表+final xor）语义不同；
+ * 备份槽已有持久化头部依赖本实现，禁止替换（会令存量备份全部失效）。 */
 static uint32_t bkup_crc32(const uint8_t *data, uint32_t len)
 {
     uint32_t crc = 0xFFFFFFFFu;

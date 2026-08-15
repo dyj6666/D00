@@ -3,14 +3,10 @@ STM32F407ZGT6 内部 Flash 总量 1 MB (0x08000000 ~ 0x080FFFFF)
 扇区划分：
   Sector 0~3  : 各 16 KB
   Sector 4    : 64 KB
-  Sector 5    : 128 KB
-  Sector 6    : 128 KB
-  Sector 7    : 128 KB
-  Sector 8    : 128 KB
-  Sector 9~11 : 各 128 KB
+  Sector 5~11 : 各 128 KB
 
 OTA 分区布局（当前权威版本，与 BOOT/Config/boot_config.h、APP/APP.sct、
-APP/Core/Startup/STM32F407ZGTx_APP.ld 严格一致）：
+APP/Core/Startup/STM32F407ZGTx_APP.ld 严格一致）——方案B：
 ---------------------------------------------------------------------------
 0x08000000 ┌──────────────────────┐
            │                      │
@@ -19,50 +15,37 @@ APP/Core/Startup/STM32F407ZGTx_APP.ld 严格一致）：
            │                      │
 0x08010000 ├──────────────────────┤
            │                      │
-           │      RUN 区 (APP)    │  320 KB (Sector 4~6)
-           │  (用户可执行固件)     │
+           │      RUN 区 (APP)    │  832 KB (Sector 4~10)
+           │  (用户可执行固件)     │   含原 BACKUP + DOWNLOAD 区
            │                      │
            │  ... 固件代码与数据 ... │
            │                      │
            │  (RUN 区末尾 8 字节)  │
-0x0805FFF8 ├──────────────────────┤  ← APP_VALID_ADDR (魔数位置)  0x0805FFF8
+0x080DFFF8 ├──────────────────────┤  ← APP_VALID_ADDR (魔数位置)  0x080DFFF8
            │ APP 有效性魔数 (4B)   │     Magic = 0x4F54412E
-0x0805FFFC ├──────────────────────┤  ← APP_VERSION_ADDR (版本号) 0x0805FFFC
-           │ 固件版本号 (4B)       │     例如: 1
-0x08060000 ├──────────────────────┤
-           │                      │
-           │    BACKUP 区         │  256 KB (Sector 7~8)
-           │  (上一版固件回滚源)   │
-           │                      │
-           │  (BACKUP 末尾 8 字节) │
-0x0807FFF8 ├──────────────────────┤  ← BACKUP_VALID_ADDR (独立有效性)
-           │ 有效魔数 + 版本号 (8B)│     Magic = 0x4F54412E
-0x080A0000 ├──────────────────────┤
-           │                      │
-           │   DOWNLOAD 区        │  256 KB (Sector 9~10)
-           │  (临时存放加密包)     │
-           │  (固件包 ≤ 232 KB)   │
-0x080DE000 ├──────────────────────┤  24 KB 会话槽区（768 槽 × 32B）
-           │ 断点续传会话槽区     │  覆盖 ≤184 KB 固件
+0x080DFFFC ├──────────────────────┤  ← APP_VERSION_ADDR (版本号) 0x080DFFFC
+           │ 固件版本号 (4B)       │     例如: 213
 0x080E0000 ├──────────────────────┤
            │   PARAM 区           │  128 KB (Sector 11)
            │ (启动标志/回滚计数)   │  双份冗余：slot0 @0x080E0000 /
            │                      │             slot1 @0x080E0400
+           │  0x080E1000 起 4KB   │  APP 网络配置 NVM 日志（32B×128 追加写）
+           │  0x080E2000 起 32KB  │  OTA 断点续传会话槽（1024 槽 × 32B）
 0x08100000 └──────────────────────┘
+
+外部 Flash（W25Q128，16MB）OTA 分区（见 BOOT/BootServices/esp_flash.h）：
+  0x000000  ota_dl    下载暂存区，2MB（单槽 1MB）
+  0x200000  img_lib   回滚源备份区（头 4KB 元数据 + 832KB RUN 全量备份）
 
 重要变量地址宏定义:
   APP_BASE_ADDR       = 0x08010000
-  APP_SIZE            = 320 KB
+  APP_SIZE            = 832 KB
   APP_VALID_OFFSET    = APP_SIZE - 8
-  APP_VALID_ADDR      = 0x0805FFF8    (魔数)
+  APP_VALID_ADDR      = 0x080DFFF8    (魔数)
   APP_VALID_MAGIC     = 0x4F54412E
-  APP_VERSION_ADDR    = 0x0805FFFC    (版本号，紧接魔数之后)
-  BACKUP_BASE_ADDR    = 0x08060000
-  BACKUP_SIZE         = 256 KB
-  BACKUP_VALID_ADDR   = 0x0807FFF8    (BACKUP 独立有效魔数)
-  DOWNLOAD_BASE_ADDR  = 0x080A0000
-  DOWNLOAD_SIZE       = 256 KB
+  APP_VERSION_ADDR    = 0x080DFFFC    (版本号，紧接魔数之后)
   PARAM_BASE_ADDR     = 0x080E0000
+  BOOT_SESSION_BASE   = 0x080E2000    (断点续传会话槽，1024 槽 × 32B)
 
 备份寄存器 (VBAT 掉电保持):
   RTC_BKP_DR1 : 升级请求标志

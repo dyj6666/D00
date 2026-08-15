@@ -12,22 +12,12 @@
 #include <stddef.h>
 
 /* 参数扇区擦除：HAL 实现（设置 VoltageRange），与 APP 侧一致。
+ * 扇区号映射复用 flash_if 的唯一实现（禁止私抄映射链）。
  * 注意：不在 BOOT 启动早期调用（早期擦除参数扇区实测会 Flash BSY 卡死），
  * 统一在进入升级模式后（延迟执行）或 param 分支使用。 */
 static bool hal_erase_sector(uint32_t addr)
 {
-    uint32_t sector = FLASH_SECTOR_0;
-    if (addr >= 0x08004000u) sector = FLASH_SECTOR_1;
-    if (addr >= 0x08008000u) sector = FLASH_SECTOR_2;
-    if (addr >= 0x0800C000u) sector = FLASH_SECTOR_3;
-    if (addr >= 0x08010000u) sector = FLASH_SECTOR_4;
-    if (addr >= 0x08020000u) sector = FLASH_SECTOR_5;
-    if (addr >= 0x08040000u) sector = FLASH_SECTOR_6;
-    if (addr >= 0x08060000u) sector = FLASH_SECTOR_7;
-    if (addr >= 0x08080000u) sector = FLASH_SECTOR_8;
-    if (addr >= 0x080A0000u) sector = FLASH_SECTOR_9;
-    if (addr >= 0x080C0000u) sector = FLASH_SECTOR_10;
-    if (addr >= 0x080E0000u) sector = FLASH_SECTOR_11;
+    uint32_t sector = flash_get_sector(addr);
 
     HAL_FLASH_Unlock();
     __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_PGSERR | FLASH_FLAG_PGPERR |
@@ -49,7 +39,10 @@ uint32_t boot_param_crc(const boot_param_t *p)
 {
     /* CRC-32 (IEEE)：只计算 crc32 字段之前的数据字段。
      * 若把 crc32 字段自身纳入计算，save 基于旧值算 CRC、写入新值后
-     * load 再用新值重算必然不等，参数区永远校验失败（PENDING 不持久化）。 */
+     * load 再用新值重算必然不等，参数区永远校验失败（PENDING 不持久化）。
+     * 兼容性警告：此处为"无 final-xor 的位算法"，与 crc32.c 查表实现
+     * （含 final xor）差一次 0xFFFFFFFF 异或。参数区已有持久化数据依赖
+     * 本实现，禁止改为查表接口（会令存量参数区全部失效、防重放退化）。 */
     const uint8_t *data = (const uint8_t *)p;
     uint32_t crc = 0xFFFFFFFFu;
     for (uint32_t i = 0; i < offsetof(boot_param_t, crc32); i++) {

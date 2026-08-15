@@ -148,6 +148,17 @@ static void boot_log_init(void)
     /* CubeMX 已初始化 USART2，fputc 重定向在 usart.c 实现 */
 }
 
+/* 校验 RUN 向量表（单一事实源，跳转前 / 升级写入后共用）：
+ * SP 必须在 SRAM/CCM 内部（严格 < 末端+1，杜绝越界一格）；
+ * PC 必须在 RUN 区间内 [APP_BASE, APP_BASE+APP_SIZE)。 */
+static bool boot_vector_valid(uint32_t sp, uint32_t pc)
+{
+    bool sp_ok = (sp >= 0x20000000u && sp < 0x20020000u) ||
+                 (sp >= 0x10000000u && sp < 0x10010000u);
+    bool pc_ok = (pc >= APP_BASE_ADDR) && (pc < APP_BASE_ADDR + APP_SIZE);
+    return sp_ok && pc_ok;
+}
+
 /* 检查 RUN 固件有效性：魔数 @ RUN 尾部；SP/PC 以 RUN 链接地址为准 */
 static uint8_t boot_check_app_valid(uint32_t addr)
 {
@@ -157,12 +168,7 @@ static uint8_t boot_check_app_valid(uint32_t addr)
     uint32_t sp = *(volatile uint32_t *)addr;
     /* F407 有效栈：SRAM 128KB（0x20000000~0x2001FFFF）或 CCM 64KB
      * （0x10000000~0x1000FFFF，主栈可放 CCM）。0x20020000+ 无映射。 */
-    if (!((sp >= 0x20000000u && sp <= 0x20020000u) ||
-          (sp >= 0x10000000u && sp <= 0x10010000u))) {
-        return 0;
-    }
-    uint32_t pc = *(volatile uint32_t *)(addr + 4);
-    if (pc < APP_BASE_ADDR || pc > APP_BASE_ADDR + APP_SIZE) {
+    if (!boot_vector_valid(sp, *(volatile uint32_t *)(addr + 4))) {
         return 0;
     }
     return 1;
@@ -245,18 +251,32 @@ static bool ymodem_ext_write(uint32_t off, const uint8_t *data, uint32_t len)
     if (off + len > ESP_OTA_DL_SIZE) {
         return false;
     }
-    uint32_t sector = off / ESP_SECTOR_SIZE;
-    /* 进入新的 4KB 扇区先擦除（NOR 页写不可覆盖旧数据） */
-    if (sector != s_ymodem_erased_sector) {
-        if (!EspFlash_EraseSector(ESP_OTA_BASE + sector * ESP_SECTOR_SIZE)) {
-            printf("[YMODEM] ext erase failed @sector %lu\r\n",
-                   (unsigned long)sector);
+    /* 按 4KB 扇区边界切分：单次写可能跨越扇区，而 NOR 页编程前必须
+     * 已擦除目标扇区（0->1 位不可写）。不再依赖"帧长整除扇区大小"
+     * 的隐式不变量，任何写入形态都安全。 */
+    while (len > 0) {
+        uint32_t sector = off / ESP_SECTOR_SIZE;
+        uint32_t seg_len = len;
+        if (sector != (off + len - 1) / ESP_SECTOR_SIZE) {
+            seg_len = (sector + 1) * ESP_SECTOR_SIZE - off;   /* 本扇区剩余 */
+        }
+        if (sector != s_ymodem_erased_sector) {
+            if (!EspFlash_EraseSector(ESP_OTA_BASE + sector * ESP_SECTOR_SIZE)) {
+                printf("[YMODEM] ext erase failed @sector %lu\r\n",
+                       (unsigned long)sector);
+                return false;
+            }
+            s_ymodem_erased_sector = sector;
+        }
+        IWDG->KR = 0xAAAA;
+        if (!EspFlash_Write(ESP_OTA_BASE + off, data, seg_len)) {
             return false;
         }
-        s_ymodem_erased_sector = sector;
+        off  += seg_len;
+        data += seg_len;
+        len  -= seg_len;
     }
-    IWDG->KR = 0xAAAA;
-    return EspFlash_Write(ESP_OTA_BASE + off, data, len);
+    return true;
 }
 
 /* 从外部备份槽恢复 RUN（方案B：回滚源外移 img_lib 分区），成功返回 true */
@@ -294,6 +314,26 @@ static void boot_rollback(void)
     }
     printf("Rollback failed, entering upgrade mode.\r\n");
     boot_enter_upgrade_mode();
+}
+
+/* 升级流程 Flash 级失败的统一出口：归一参数 + 清升级标志 + 复位。
+ * 不再永久 halt：复位后由启动状态机自愈——
+ *   RUN 已被破坏 → "魔数无效 → 外部备份自动修复"；
+ *   RUN 未动（如备份失败）→ 正常跳 APP，升级中止。
+ * 参数归一可避免复位后再次进入升级模式造成擦写失败循环。 */
+static void boot_abort_apply(const char *why, uint32_t err_code)
+{
+    boot_param_t p;
+    boot_param_load(&p);
+    p.boot_state = BOOT_STATE_NORMAL;
+    p.last_error = err_code;
+    (void)boot_param_save(&p);
+    BKP_WRITE(0, BOOT_FLAG_NONE);
+    printf("[BOOT] %s -> param normalized + reset (self-heal)\r\n", why);
+    boot_status_send(BOOT_ST_FAIL, 0xEE);
+    IWDG->KR = 0xAAAA;
+    HAL_Delay(50);
+    NVIC_SystemReset();
 }
 
 /* Apply the firmware package already staged in external ota_dl slot:
@@ -343,8 +383,8 @@ static bool boot_apply_download(bool emit_status)
         printf("Backing up current APP to external flash...\r\n");
         boot_status_send(BOOT_ST_BACKUP, 0);
         if (!OtaBackup_Save()) {
-            printf("BACKUP failed! System halted.\r\n");
-            while (1) { IWDG->KR = 0xAAAA; }
+            /* RUN 尚未被破坏：中止升级、归一参数复位回 APP 即可 */
+            boot_abort_apply("BACKUP failed", 0x1002);
         }
         boot_buzzer_stage(BOOT_ST_BACKUP);   /* 备份完成：一声短音 */
     }
@@ -361,8 +401,8 @@ static bool boot_apply_download(bool emit_status)
     printf("Erasing APP area...\r\n");
     boot_status_send(BOOT_ST_ERASE, 0);
     if (!flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1)) {
-        printf("APP erase failed! System halted.\r\n");
-        while (1) { IWDG->KR = 0xAAAA; }
+        /* RUN 已破坏：复位后走"魔数无效 → 外部备份自动修复"自愈路径 */
+        boot_abort_apply("APP erase failed", 0x1003);
     }
     boot_buzzer_stage(BOOT_ST_ERASE);   /* 擦除完成：一声短音 */
 #if POWERLOSS_TEST_STAGE == 2
@@ -386,8 +426,8 @@ static bool boot_apply_download(bool emit_status)
 
     if (!aes_ctr_decrypt_to_flash(&src, sizeof(ota_header_t),
                                   app_size, aes_key, iv16, APP_BASE_ADDR)) {
-        printf("APP write failed! System halted.\r\n");
-        while (1) { IWDG->KR = 0xAAAA; }
+        /* RUN 已损坏：复位后由外部备份自动修复 */
+        boot_abort_apply("APP write failed", 0x1004);
     }
     boot_status_send(BOOT_ST_WRITE, 0);
     boot_buzzer_stage(BOOT_ST_WRITE);   /* 写入完成：一声短音 */
@@ -403,13 +443,10 @@ static bool boot_apply_download(bool emit_status)
 
     uint32_t sp = *(volatile uint32_t *)APP_BASE_ADDR;
     uint32_t pc = *(volatile uint32_t *)(APP_BASE_ADDR + 4);
-    /* 栈顶边界：0x20020000 是 RAM 末端+1（越界），必须拒绝——
-     * BOOT 跳转尾声会从新栈顶弹栈，越界 SP 会触发精确总线错误。 */
-    if (!((sp >= 0x20000000u && sp < 0x20020000u) ||
-          (sp >= 0x10000000u && sp < 0x10010000u)) ||
-        pc < APP_BASE_ADDR || pc > APP_BASE_ADDR + APP_SIZE) {
+    /* 与 boot_check_app_valid 共用同一向量校验，边界严格一致 */
+    if (!boot_vector_valid(sp, pc)) {
         printf("APP vector invalid! SP=0x%08X PC=0x%08X\r\n", sp, pc);
-        return false;
+        boot_abort_apply("APP vector invalid", 0x1005);
     }
 
     printf("Security verification passed. Writing magic and version...\r\n");
@@ -419,12 +456,17 @@ static bool boot_apply_download(bool emit_status)
     flash_write(APP_VERSION_ADDR, (uint8_t *)&hdr.version, sizeof(hdr.version));
 
     /* 置"待确认"参数：新固件首次启动计数，供回滚状态机使用；
-     * 同时记录构建号，构成防重放闭环。 */
+     * 同时记录构建号，构成防重放闭环。保存失败 = 回滚保护/防重放
+     * 静默丢失，必须重试并显式处置（不能无声继续）。 */
     param.boot_state = BOOT_STATE_PENDING;
     param.boot_count = 1;
     param.last_error = 0;
     param.last_build_no = hdr.build_no;
-    boot_param_save(&param);
+    if (!boot_param_save(&param) && !boot_param_save(&param)) {
+        printf("[BOOT] PENDING param save FAILED (retried)! Halting.\r\n");
+        boot_status_send(BOOT_ST_FAIL, 0xEF);
+        while (1) { IWDG->KR = 0xAAAA; }   /* 宁停勿损：无 PENDING 保护不可上线 */
+    }
     boot_buzzer_stage(BOOT_ST_COMMIT);  /* 提交完成：长音，即将重启切换 */
 #if POWERLOSS_TEST_STAGE == 4
     boot_param_t plt; boot_param_load(&plt);
@@ -594,7 +636,11 @@ void BootApp_Run(void)
             return;
         }
         param.boot_count++;
-        boot_param_save(&param);
+        if (!boot_param_save(&param) && !boot_param_save(&param)) {
+            /* 计数持久化失败：回滚阈值判定会延后，但不阻塞启动。
+             * 显式告警而非静默继续。 */
+            printf("[BOOT] WARN: PENDING count save failed\r\n");
+        }
         if (boot_check_app_valid(APP_BASE_ADDR)) {
             printf("[BOOT] Pending boot #%lu, jumping to APP...\r\n",
                    param.boot_count);
@@ -606,7 +652,10 @@ void BootApp_Run(void)
         return;
     }
 
-    /* 4) 恢复模式：回滚超限，等待上位机强制重刷 */
+    /* 4) 恢复模式：回滚超限。设计意图是等待上位机强制重刷；
+     * 但当前实现进升级模式后若无有效包仍会归一 NORMAL 跳 APP 跑旧固件
+     * （见 boot_enter_upgrade_mode 兜底），RECOVERY 不阻塞运行——
+     * 属有意妥协（宁可用旧固件也不砖机），升级通道随时可恢复。 */
     if (param.boot_state == BOOT_STATE_RECOVERY) {
         printf("Recovery mode (rollbacks exceeded). Waiting for firmware...\r\n");
         boot_enter_upgrade_mode();

@@ -14,7 +14,7 @@
 - **验证**：Keil 全量重编译 0 Error / 0 Warning，BOOT.bin 正常生成。
 
 ### 1.2 直烧 APP 魔数机制说明（与 APP 联动）
-- BOOT 通过 `0x0805FFF8` 的 `0x4F54412E` 判断 APP 有效；
+- BOOT 通过 `0x080DFFF8` 的 `0x4F54412E` 判断 APP 有效（方案B，RUN 区 832KB 尾部）；
 - OTA 流程由 BOOT 在验证通过后写入魔数与版本；
 - 直接烧录 APP 时须先用 `APP/Script/append_app_magic.py` 生成带魔数的完整镜像，
   否则 BOOT 会进入升级模式（详见 APP 日志 8.2）。
@@ -23,12 +23,13 @@
 
 | 项 | 值 |
 | --- | --- |
-| BOOT 区 | 64 KB @ `0x08000000` |
-| APP 区（RUN） | 320 KB @ `0x08010000`（末尾 8B = 魔数 + 版本） |
-| BACKUP 区 | 256 KB @ `0x08060000`（回滚源，尾部 8B 独立有效性） |
-| Download 区 | 256 KB @ `0x080A0000`（尾部 24KB 会话槽区，固件包 ≤232KB） |
-| APP 有效性魔数 | `0x4F54412E` @ `0x0805FFF8` |
-| APP 版本号 | @ `0x0805FFFC` |
+| BOOT 区 | 64 KB @ `0x08000000`（扇区 0-3） |
+| APP 区（RUN） | 832 KB @ `0x08010000`（扇区 4-10，方案B：含原 BACKUP+DOWNLOAD，末尾 8B = 魔数 + 版本） |
+| 回滚源 | 外部 Flash img_lib（`0x200000`，升级前备份当前 RUN，PENDING 回滚） |
+| 下载暂存 | 外部 Flash ota_dl（`0x000000`，2MB，单槽 1MB） |
+| PARAM 区 | 128 KB @ `0x080E0000`（扇区 11，双份冗余；`0x080E2000` 起为断点续传会话槽区） |
+| APP 有效性魔数 | `0x4F54412E` @ `0x080DFFF8` |
+| APP 版本号 | @ `0x080DFFFC` |
 | 升级请求标志 | `RTC_BKP_DR1 == 0x5A5A` |
 | OTA 包头魔数 | `0x4F5441FE` |
 | 跳转目标 | `0x08010000`，跳转前清外设/中断并设 VTOR |

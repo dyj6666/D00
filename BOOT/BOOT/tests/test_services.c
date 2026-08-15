@@ -61,7 +61,7 @@ static void test_fifo_wrap_and_full(void)
     CHECK(b == (uint8_t)(FIFO_SIZE / 2), "环绕后读值正确");
 }
 
-int main(void)
+int services_test_main(void)
 {
     printf("== BOOT 服务层主机测试 ==\n");
     test_crc32_known_vector();

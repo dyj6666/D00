@@ -26,7 +26,11 @@
 
 IWDG_HandleTypeDef hiwdg;
 
-/* IWDG init function */
+/* IWDG init function
+ * 注意：此函数当前未被调用（main.c 中 MX_IWDG_Init 已注释）。
+ * 生效配置在 BootApp/boot_app.c boot_watchdog_start()：
+ * IWDG_PRESCALER_128（250Hz）+ 4095 ≈ 16.4s 硬窗口。
+ * 若恢复调用本函数，必须同步为 128 分频，否则窗口翻倍且与注释不符。 */
 void MX_IWDG_Init(void)
 {
 

@@ -51,6 +51,7 @@ typedef struct {
     uint32_t        timer_start;
     bool            is_end_frame;
     uint16_t        total_packets;
+    ymodem_status_t err_code;           /* 错误细分原因（透传给调用方） */
 } ymodem_fsm_t;
 
 /*---------------------------------------------------------------------------
@@ -68,7 +69,7 @@ static void send_byte(uint8_t b);
 static int32_t read_byte_timeout(uint32_t ms);
 static void send_ack(void);
 static void send_nak(void);
-static void cancel_transfer(void);
+static void cancel_transfer(ymodem_status_t err_code);
 
 static void state_init(void);
 static void state_wait_file_info(void);
@@ -90,6 +91,7 @@ ymodem_status_t ymodem_receive(ymodem_ctx_t *ctx, uint32_t flash_addr) {
     fsm.flash_addr  = flash_addr;
     fsm.state       = STATE_INIT;
     fsm.is_end_frame = false;
+    fsm.err_code    = YMODEM_ERR_TIMEOUT;   /* 防御：任何未细分路径的兜底原因 */
 
     ctx->received_size = 0;
     ctx->packet_seq    = 1;
@@ -113,8 +115,9 @@ ymodem_status_t ymodem_receive(ymodem_ctx_t *ctx, uint32_t flash_addr) {
         return YMODEM_OK;
     }
 
-    printf("[Ymodem] Transfer failed, state: %d\r\n", fsm.state);
-    return YMODEM_ERR_TIMEOUT;
+    printf("[Ymodem] Transfer failed, state: %d, reason: %d\r\n",
+           fsm.state, (int)fsm.err_code);
+    return fsm.err_code;   /* 细分错误码透传，不再一律 TIMEOUT */
 }
 
 /*---------------------------------------------------------------------------
@@ -132,6 +135,7 @@ static void fsm_dispatch(void) {
             break;
         default:
             printf("[Ymodem] ERROR: Illegal state %d\r\n", fsm.state);
+            fsm.err_code = YMODEM_ERR_INTERNAL;
             fsm.state = STATE_ERROR;
             break;
     }
@@ -169,11 +173,12 @@ static void send_nak(void) {
     send_byte(YMODEM_NAK);
 }
 
-static void cancel_transfer(void) {
-    printf("[Ymodem] -> CAN (cancel transfer)\r\n");
+static void cancel_transfer(ymodem_status_t err_code) {
+    printf("[Ymodem] -> CAN (cancel transfer, reason %d)\r\n", (int)err_code);
     for (int i = 0; i < 5; i++) {
         send_byte(YMODEM_CAN);
     }
+    fsm.err_code = err_code;
     fsm.state = STATE_ERROR;
 }
 
@@ -197,7 +202,7 @@ static void state_wait_file_info(void) {
         if (is_timeout(FILE_INFO_TIMEOUT)) {
             if (++fsm.retry > YMODEM_MAX_RETRY) {
                 printf("[Ymodem] ERROR: File info timeout, cancelling\r\n");
-                cancel_transfer();
+                cancel_transfer(YMODEM_ERR_TIMEOUT);
             } else {
                 printf("[Ymodem] File info timeout, resending 'C' (retry %d)\r\n", fsm.retry);
                 fsm.state = STATE_INIT;
@@ -231,7 +236,7 @@ static void state_data_phase(void) {
         if (is_timeout(DATA_TIMEOUT)) {
             if (++fsm.retry > YMODEM_MAX_RETRY) {
                 printf("[Ymodem] ERROR: Data phase timeout, cancelling\r\n");
-                cancel_transfer();
+                cancel_transfer(YMODEM_ERR_TIMEOUT);
             } else {
                 printf("[Ymodem] Data phase timeout, sending NAK (retry %d)\r\n", fsm.retry);
                 send_nak();
@@ -286,7 +291,9 @@ static void state_rx_frame(void) {
     uint8_t  seq_comp = fsm.buf[2];
     uint16_t data_len = (fsm.frame_type == YMODEM_STX) ? YMODEM_PACKET_SIZE : YMODEM_FILE_INFO_SIZE;
     uint8_t *data     = fsm.buf + 3;
-    uint32_t rcv_crc  = *((uint32_t *)(data + data_len));
+    /* memcpy 读取帧尾 CRC：消除非对齐/字节序依赖（帧内为小端，Cortex-M 原生） */
+    uint32_t rcv_crc  = 0;
+    memcpy(&rcv_crc, data + data_len, sizeof(rcv_crc));
     uint32_t calc_crc = calc_frame_crc(data, data_len);
 
     printf("[Ymodem] Frame received: type=%c, seq=%d, data_len=%d, calcCRC=0x%08X, recvCRC=0x%08X\r\n",
@@ -318,7 +325,7 @@ static void state_rx_frame(void) {
             printf("[Ymodem] Parsing file info...\r\n");
             if (parse_file_info(data, fsm.ctx) != 0) {
                 printf("[Ymodem] File info parse failed, cancelling\r\n");
-                cancel_transfer();
+                cancel_transfer(YMODEM_ERR_FILE);
                 return;
             }
         printf("[Ymodem] File: %s, Size: %lu, Expected CRC: 0x%08X\r\n",
@@ -327,7 +334,7 @@ static void state_rx_frame(void) {
             printf("[Ymodem] File too large for Download area (%lu > %lu), rejecting\r\n",
                    (unsigned long)fsm.ctx->file_size,
                    (unsigned long)(fsm.ctx->flash_end - fsm.flash_addr));
-            cancel_transfer();
+            cancel_transfer(YMODEM_ERR_FILE);
             return;
         }
         fsm.total_packets = (fsm.ctx->file_size + YMODEM_PACKET_SIZE - 1) / YMODEM_PACKET_SIZE;
@@ -351,7 +358,7 @@ static void state_rx_frame(void) {
             /* 下载区越界保护：任何情况下不得写穿 Download 区 */
             if (fsm.ctx->write_addr + valid_len > fsm.ctx->flash_end) {
                 printf("[Ymodem] Overflow: write past Download area end, cancelling\r\n");
-                cancel_transfer();
+                cancel_transfer(YMODEM_ERR_FLASH);
                 return;
             }
 
@@ -362,7 +369,7 @@ static void state_rx_frame(void) {
                 !fsm.ctx->write_fn(fsm.ctx->write_addr, data, valid_len)) {
                 printf("[Ymodem] Write failed at offset 0x%08X\r\n",
                        (unsigned)fsm.ctx->write_addr);
-                cancel_transfer();
+                cancel_transfer(YMODEM_ERR_FLASH);
                 return;
             }
             fsm.ctx->write_addr += valid_len;
@@ -391,7 +398,7 @@ static void state_eot_phase(void) {
     if (ch < 0) {
         if (is_timeout(EOT_TIMEOUT)) {
             printf("[Ymodem] EOT phase timeout, cancelling\r\n");
-            cancel_transfer();
+            cancel_transfer(YMODEM_ERR_TIMEOUT);
         }
         return;
     }

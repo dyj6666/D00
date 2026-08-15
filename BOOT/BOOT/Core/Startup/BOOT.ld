@@ -2,7 +2,7 @@
  *
  * 分区布局（与 boot_config.h、BOOT.sct 一致）：
  *   BOOT 0x08000000 ~ 0x0800FFFF（64 KB）
- *   APP  0x08010000 起（256 KB）
+ *   APP  0x08010000 起（832 KB，方案B 扇区 4-10）
  * 主 SRAM 128 KB：0x20000000 ~ 0x2001FFFF。
  */
 ENTRY(Reset_Handler)

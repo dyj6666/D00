@@ -10,7 +10,7 @@ static void ram_feed_dog(void) {
 /*----------------------------------------------------------------------------
  * Sector mapping (STM32F40x 1MB flash)
  *----------------------------------------------------------------------------*/
-static uint32_t flash_get_sector(uint32_t addr) {
+uint32_t flash_get_sector(uint32_t addr) {
     if (addr < 0x08004000) return FLASH_SECTOR_0;
     if (addr < 0x08008000) return FLASH_SECTOR_1;
     if (addr < 0x0800C000) return FLASH_SECTOR_2;
@@ -60,9 +60,12 @@ bool flash_erase(uint32_t start_addr, uint32_t end_addr) {
         while (FLASH->SR & FLASH_SR_BSY) {
             ram_feed_dog();   /* 此函数必须在 RAM 中 */
             if (++guard > 30000000u) {   /* ~0.18s @168MHz */
-                printf("[ERASE] BSY stuck! SR=0x%08X CR=0x%08X\r\n",
+                printf("[ERASE] BSY stuck! SR=0x%08X CR=0x%08X -> FAIL\r\n",
                        (unsigned)FLASH->SR, (unsigned)FLASH->CR);
-                break;
+                /* 显式失败：绝不让"未真正擦除的扇区"被当作成功继续写 */
+                FLASH->CR &= ~FLASH_CR_SER;
+                FLASH->CR |= FLASH_CR_LOCK;
+                return false;
             }
         }
 
@@ -177,12 +180,30 @@ bool flash_copy_raw(uint32_t dest, uint32_t src, uint32_t len) {
             word = *(volatile uint32_t *)(src + i);
         }
 
-        /* Program the word */
-        while (FLASH->SR & FLASH_SR_BSY);
+        /* Program the word（BSY 轮询带超时，防硬件异常永久卡死） */
+        uint32_t bsy_guard = 0;
+        while (FLASH->SR & FLASH_SR_BSY) {
+            if (++bsy_guard > 30000000u) {
+                FLASH->CR &= ~FLASH_CR_PG;
+                FLASH->CR |= FLASH_CR_LOCK;
+                __enable_irq();
+                printf("[COPY] BSY stuck before write @0x%08X\r\n", (unsigned)(dest + i));
+                return false;
+            }
+        }
         FLASH->SR = (FLASH_SR_PGSERR | FLASH_SR_PGPERR | FLASH_SR_PGAERR | FLASH_SR_WRPERR);
         FLASH->CR |= FLASH_CR_PG;
         *(volatile uint32_t *)(dest + i) = word;
-        while (FLASH->SR & FLASH_SR_BSY);
+        bsy_guard = 0;
+        while (FLASH->SR & FLASH_SR_BSY) {
+            if (++bsy_guard > 30000000u) {
+                FLASH->CR &= ~FLASH_CR_PG;
+                FLASH->CR |= FLASH_CR_LOCK;
+                __enable_irq();
+                printf("[COPY] BSY stuck after write @0x%08X\r\n", (unsigned)(dest + i));
+                return false;
+            }
+        }
 
         if (FLASH->SR & (FLASH_SR_PGSERR | FLASH_SR_PGPERR | FLASH_SR_PGAERR | FLASH_SR_WRPERR)) {
             uint32_t fail_addr = dest + i;
