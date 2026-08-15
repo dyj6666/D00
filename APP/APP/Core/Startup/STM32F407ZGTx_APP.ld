@@ -2,9 +2,8 @@
  *
  * 分区布局（与 BOOT/boot_config.h、APP.sct 严格一致）：
  *   BOOT     0x08000000 ~ 0x0800FFFF  (64 KB)
- *   APP/RUN  0x08010000 ~ 0x0805FFFF  (320 KB，末尾 8 字节为魔数+版本)
- *   BACKUP   0x08060000 ~ 0x0809FFFF  (256 KB)
- *   DOWNLOAD 0x080A0000 ~ 0x080DFFFF  (256 KB)
+ *   APP/RUN  0x08010000 ~ 0x080DFFFF  (832 KB，方案B：含原 BACKUP+DOWNLOAD，
+ *              末尾 8 字节为魔数+版本)
  *   PARAM    0x080E0000 ~ 0x080FFFFF  (128 KB)
  * 主 SRAM 128 KB：0x20000000 ~ 0x2001FFFF。
  */
@@ -20,7 +19,7 @@ _estack = ORIGIN(RAM) + LENGTH(RAM) - 0x400;
 
 MEMORY
 {
-  FLASH (rx)      : ORIGIN = 0x08010000, LENGTH = 0x50000   /* 320 KB */
+  FLASH (rx)      : ORIGIN = 0x08010000, LENGTH = 0xD0000   /* 832 KB */
   RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 0x30000   /* 192 KB (SRAM1+2+3) */
   MEMORY_B1 (rx)  : ORIGIN = 0x60000000, LENGTH = 0K
   CCMRAM (rw)     : ORIGIN = 0x10000000, LENGTH = 64K

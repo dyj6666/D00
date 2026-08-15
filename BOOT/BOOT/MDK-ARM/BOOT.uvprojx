@@ -450,6 +450,11 @@
               <FilePath>..\BootServices\ota_source.c</FilePath>
             </File>
             <File>
+              <FileName>ota_backup.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\BootServices\ota_backup.c</FilePath>
+            </File>
+            <File>
               <FileName>my_sha256.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\BootServices\my_sha256.c</FilePath>

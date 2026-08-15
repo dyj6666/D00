@@ -16,6 +16,7 @@
 #define ESP_CMD_READ          0x03u
 #define ESP_CMD_PAGE_PROGRAM  0x02u
 #define ESP_CMD_SECTOR_ERASE  0x20u
+#define ESP_CMD_BLOCK_ERASE   0xD8u
 #define ESP_CMD_WRITE_ENABLE  0x06u
 #define ESP_CMD_READ_STATUS   0x05u
 #define ESP_CMD_JEDEC_ID      0x9Fu
@@ -219,6 +220,41 @@ bool EspFlash_EraseSector(uint32_t off)
     return ok && esp_wait_busy(1000000u);
 }
 
+/* ---------------- 64KB 块擦除（大区域备份/清槽提速） ---------------- */
+bool EspFlash_EraseBlock64(uint32_t off)
+{
+    if (!s_ready || (off & (ESP_BLOCK64_SIZE - 1u)) != 0u) {
+        return false;
+    }
+    if (!esp_write_enable()) {
+        return false;
+    }
+    uint8_t hdr[4] = {
+        ESP_CMD_BLOCK_ERASE,
+        (uint8_t)(off >> 16), (uint8_t)(off >> 8), (uint8_t)off,
+    };
+    cs_low();
+    bool ok = spi_xfer(hdr, NULL, sizeof(hdr));
+    cs_high();
+    return ok && esp_wait_busy(1000000u);
+}
+
+/* ---------------- 64KB 块粒度区域擦除（逐块喂狗） ---------------- */
+bool EspFlash_EraseRange64(uint32_t off, uint32_t len)
+{
+    if (!s_ready || len == 0u ||
+        (off & (ESP_BLOCK64_SIZE - 1u)) != 0u ||
+        (len & (ESP_BLOCK64_SIZE - 1u)) != 0u) {
+        return false;
+    }
+    for (uint32_t done = 0u; done < len; done += ESP_BLOCK64_SIZE) {
+        if (!EspFlash_EraseBlock64(off + done)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* ---------------- 探测外部槽 0 有效包 ---------------- */
 bool EspFlash_HasPackage(uint32_t *out_total_size)
 {
@@ -237,7 +273,8 @@ bool EspFlash_HasPackage(uint32_t *out_total_size)
     }
     uint32_t fw_size = 0u;
     memcpy(&fw_size, hdr + 8, 4);   /* ota_header_t.firmware_size 偏移 8 */
-    if (fw_size == 0u || fw_size > (512u * 1024u)) {
+    if (fw_size == 0u ||
+        fw_size + OTA_HEADER_SIZE + OTA_SIGN_SIZE > ESP_OTA_DL_SIZE) {
         return false;
     }
     if (out_total_size != NULL) {

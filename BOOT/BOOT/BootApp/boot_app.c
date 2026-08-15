@@ -12,6 +12,7 @@
 #include "boot_param.h"
 #include "ota_source.h"
 #include "esp_flash.h"
+#include "ota_backup.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -147,12 +148,10 @@ static void boot_log_init(void)
     /* CubeMX 已初始化 USART2，fputc 重定向在 usart.c 实现 */
 }
 
-/* 检查固件有效性：魔数偏移按所在区（RUN/BACKUP）取；SP/PC 以 RUN 链接地址为准 */
+/* 检查 RUN 固件有效性：魔数 @ RUN 尾部；SP/PC 以 RUN 链接地址为准 */
 static uint8_t boot_check_app_valid(uint32_t addr)
 {
-    uint32_t valid_off = (addr == BACKUP_BASE_ADDR) ? BACKUP_VALID_OFFSET
-                                                    : APP_VALID_OFFSET;
-    if (*(volatile uint32_t *)(addr + valid_off) != APP_VALID_MAGIC) {
+    if (*(volatile uint32_t *)(addr + APP_VALID_OFFSET) != APP_VALID_MAGIC) {
         return 0;
     }
     uint32_t sp = *(volatile uint32_t *)addr;
@@ -235,29 +234,36 @@ static void boot_jump_to_app(uint32_t addr)
 
 static void boot_enter_upgrade_mode(void);
 
-/* 用 BACKUP 区恢复 RUN（回滚/自动修复），成功返回 true */
-static bool boot_restore_backup(void)
+/* ---------------- YMODEM 兜底写目标：外部 ota_dl 槽（按需擦扇区） ---------------- */
+static uint32_t s_ymodem_erased_sector = 0xFFFFFFFFu;
+
+static bool ymodem_ext_write(uint32_t off, const uint8_t *data, uint32_t len)
 {
-    uint32_t magic = *(volatile uint32_t *)(BACKUP_BASE_ADDR + BACKUP_VALID_OFFSET);
-    uint32_t sp = *(volatile uint32_t *)BACKUP_BASE_ADDR;
-    uint32_t pc = *(volatile uint32_t *)(BACKUP_BASE_ADDR + 4);
-    if (!boot_check_app_valid(BACKUP_BASE_ADDR)) {
-        printf("[RB] BACKUP invalid: magic=0x%08X sp=0x%08X pc=0x%08X\r\n",
-               (unsigned)magic, (unsigned)sp, (unsigned)pc);
+    if (off + len > ESP_OTA_DL_SIZE) {
         return false;
     }
-    printf("[RB] BACKUP valid, restoring RUN...\r\n");
-    bool e = flash_erase(APP_BASE_ADDR, APP_BASE_ADDR + APP_SIZE - 1);
-    bool c = flash_copy_raw(APP_BASE_ADDR, BACKUP_BASE_ADDR, BACKUP_SIZE);
-    if (e && c) {
-        /* RUN 尾部有效性由 BACKUP 尾 8 字节补齐（魔数 + 版本） */
-        uint32_t mg  = *(volatile uint32_t *)BACKUP_VALID_ADDR;
-        uint32_t ver = *(volatile uint32_t *)BACKUP_VERSION_ADDR;
-        flash_write(APP_VALID_ADDR, (uint8_t *)&mg, sizeof(mg));
-        flash_write(APP_VERSION_ADDR, (uint8_t *)&ver, sizeof(ver));
+    uint32_t sector = off / ESP_SECTOR_SIZE;
+    /* 进入新的 4KB 扇区先擦除（NOR 页写不可覆盖旧数据） */
+    if (sector != s_ymodem_erased_sector) {
+        if (!EspFlash_EraseSector(ESP_OTA_BASE + sector * ESP_SECTOR_SIZE)) {
+            printf("[YMODEM] ext erase failed @sector %lu\r\n",
+                   (unsigned long)sector);
+            return false;
+        }
+        s_ymodem_erased_sector = sector;
     }
-    printf("[RB] erase=%d copy=%d\r\n", (int)e, (int)c);
-    return e && c;
+    IWDG->KR = 0xAAAA;
+    return EspFlash_Write(ESP_OTA_BASE + off, data, len);
+}
+
+/* 从外部备份槽恢复 RUN（方案B：回滚源外移 img_lib 分区），成功返回 true */
+static bool boot_restore_backup(void)
+{
+    if (!OtaBackup_IsValid()) {
+        printf("[RB] External backup invalid\r\n");
+        return false;
+    }
+    return OtaBackup_Restore();
 }
 
 /* 回滚：BACKUP -> RUN，更新回滚计数，超限进入 RECOVERY */
@@ -287,8 +293,8 @@ static void boot_rollback(void)
     boot_enter_upgrade_mode();
 }
 
-/* Apply the firmware package already staged in DOWNLOAD area:
- * verify -> backup RUN -> erase -> decrypt -> magic/version -> PENDING -> reboot.
+/* Apply the firmware package already staged in external ota_dl slot:
+ * verify -> backup RUN(ext) -> erase -> decrypt -> magic/version -> PENDING -> reboot.
  * Shared by runtime-OTA (pre-downloaded) and YMODEM receive paths.
  * Returns true on success (never returns, reboots); false on validation failure.
  * Flash-level failures halt (same safety semantics as before). */
@@ -297,18 +303,15 @@ static bool boot_apply_download(bool emit_status)
     g_emit_status = emit_status;
     boot_status_send(BOOT_ST_VERIFY, 0);
 
-    /* 读源选择：外部 ota_dl 槽有效包优先（方案A），否则内部 DOWNLOAD（兼容） */
+    /* 读源：外部 ota_dl 槽为唯一来源（方案B，内部 DOWNLOAD 已取消） */
     ota_source_t src;
-    (void)EspFlash_Init();   /* 探测外部 Flash；失败则下方回退内部源 */
-    bool ext_src = OtaSource_External(&src);
-    if (ext_src) {
-        printf("OTA source: EXTERNAL flash (pkg=%lu B)\r\n",
-               (unsigned long)src.size);
-    } else {
-        OtaSource_Internal(&src, DOWNLOAD_BASE_ADDR, DOWNLOAD_SIZE);
-        printf("OTA source: INTERNAL DOWNLOAD (pkg cap %lu B)\r\n",
-               (unsigned long)DOWNLOAD_SIZE);
+    bool ext_src = OtaBackup_Init() && OtaSource_External(&src);
+    if (!ext_src) {
+        printf("OTA source: no valid external package\r\n");
+        return false;
     }
+    printf("OTA source: EXTERNAL flash (pkg=%lu B)\r\n",
+           (unsigned long)src.size);
 
     boot_param_t param;
     boot_param_load(&param);   /* 读取 last_build_no 供防重放校验 */
@@ -332,21 +335,14 @@ static bool boot_apply_download(bool emit_status)
     }
     boot_buzzer_stage(BOOT_ST_VERIFY);   /* 校验通过：一声短音 */
 
-    /* 升级前备份当前 RUN 到 BACKUP（若当前固件有效） */
+    /* 升级前备份当前 RUN 到外部 img_lib 槽（方案B；若当前固件有效） */
     if (boot_check_app_valid(APP_BASE_ADDR)) {
-        printf("Backing up current APP to BACKUP area...\r\n");
+        printf("Backing up current APP to external flash...\r\n");
         boot_status_send(BOOT_ST_BACKUP, 0);
-        if (!flash_erase(BACKUP_BASE_ADDR,
-                         BACKUP_BASE_ADDR + BACKUP_SIZE - 1) ||
-            !flash_copy_raw(BACKUP_BASE_ADDR, APP_BASE_ADDR, BACKUP_SIZE)) {
+        if (!OtaBackup_Save()) {
             printf("BACKUP failed! System halted.\r\n");
             while (1) { IWDG->KR = 0xAAAA; }
         }
-        /* BACKUP 尾部补写有效性：RUN 尾 8 字节（魔数+版本）→ BACKUP 尾 8 字节 */
-        uint32_t mg  = *(volatile uint32_t *)APP_VALID_ADDR;
-        uint32_t ver = *(volatile uint32_t *)APP_VERSION_ADDR;
-        flash_write(BACKUP_VALID_ADDR, (uint8_t *)&mg, sizeof(mg));
-        flash_write(BACKUP_VERSION_ADDR, (uint8_t *)&ver, sizeof(ver));
         boot_buzzer_stage(BOOT_ST_BACKUP);   /* 备份完成：一声短音 */
     }
 #if POWERLOSS_TEST_STAGE == 1
@@ -443,11 +439,11 @@ static bool boot_apply_download(bool emit_status)
         flash_write(BOOT_SESSION_BASE + si * BOOT_SESSION_STRIDE,
                     (uint8_t *)&zero, sizeof(zero));
     }
-    /* 外部下载槽清理：升级成功后擦除槽 0（防重放，外部源时） */
-    if (ext_src) {
-        (void)EspFlash_EraseSector(ESP_OTA_BASE);
-        printf("External OTA slot cleared\r\n");
-    }
+    /* 外部下载槽清理：升级成功后整体擦除（防重放）。外部备份槽保留至
+     * 新固件启动确认（APP ota_confirm_startup 擦备份头）——PENDING 回滚
+     * 期间必须持有旧固件快照，若此处清除将导致新固件崩溃时无源可回。 */
+    (void)EspFlash_EraseRange64(ESP_OTA_BASE, ESP_OTA_DL_SIZE);
+    printf("External OTA slot cleared (backup retained until confirm)\r\n");
 
     BKP_WRITE(0, BOOT_FLAG_NONE);
     printf("Update successful! Rebooting to new APP...\r\n");
@@ -472,14 +468,11 @@ static void boot_enter_upgrade_mode(void)
              uid[0], uid[1], uid[2]);
     HAL_UART_Transmit(&huart1, (uint8_t *)uid_str, strlen(uid_str), 1000);
 
-    /* Runtime OTA: if the APP already staged a package in DOWNLOAD via HOSTLINK,
-     * apply it directly (business-uninterrupted upgrade). Fall back to YMODEM only
-     * when no valid pre-downloaded package exists. */
-    ota_header_t probe;
-    memcpy(&probe, (void *)DOWNLOAD_BASE_ADDR, sizeof(probe));
-    if (probe.magic == 0x4F5441FE &&
-        probe.firmware_size > 0 &&
-        probe.firmware_size <= DOWNLOAD_SIZE - sizeof(ota_header_t) - OTA_SIGN_SIZE) {
+    /* Runtime OTA: if the APP already staged a package in external ota_dl slot
+     * (via HOSTLINK/TCP/HTTP/CAN), apply it directly (business-uninterrupted
+     * upgrade). Fall back to YMODEM only when no valid package exists. */
+    ota_source_t src;
+    if (OtaBackup_Init() && OtaSource_External(&src)) {
         printf("Pre-downloaded package found, applying directly...\r\n");
         if (boot_apply_download(true)) {
             return;
@@ -506,17 +499,14 @@ static void boot_enter_upgrade_mode(void)
         return;   /* 不会到达 */
     }
 
-    /* 下载区只擦除一次：避免重试循环中反复擦 flash，阻塞 SWD 调试连接 */
-    printf("Erasing Download area...\r\n");
-    if (!flash_erase(DOWNLOAD_BASE_ADDR, DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE - 1)) {
-        printf("Download erase failed! System halted.\r\n");
-        while (1) { IWDG->KR = 0xAAAA; }
-    }
-
+    /* YMODEM 兜底：收包写入外部 ota_dl 槽（回调按需擦 4KB 扇区） */
+    printf("YMODEM target: external ota_dl slot\r\n");
+    s_ymodem_erased_sector = 0xFFFFFFFFu;
     while (1) {
         ymodem_ctx_t ctx;
-        ctx.flash_end = DOWNLOAD_BASE_ADDR + DOWNLOAD_SIZE;
-        ymodem_status_t status = ymodem_receive(&ctx, DOWNLOAD_BASE_ADDR);
+        ctx.flash_end = ESP_OTA_DL_SIZE;
+        ctx.write_fn  = ymodem_ext_write;
+        ymodem_status_t status = ymodem_receive(&ctx, 0u);
         if (status != YMODEM_OK) {
             printf("OTA receive failed, status: %d. Retrying...\r\n", status);
             IWDG->KR = 0xAAAA;
@@ -559,6 +549,11 @@ void BootApp_Run(void)
 
     boot_param_t param;
     boot_param_load(&param);
+    /* 统一初始化外部 Flash（方案B：备份/回滚/下载源均在外设）。
+     * 必须早于 PENDING 回滚分支——否则 s_ready=false，OtaBackup_IsValid
+     * 恒为 false，新固件启动失败时回滚源被误判为"无备份"而进入死循环。
+     * （实测：回滚路径遗漏初始化 → 参数归一 NORMAL + 死循环固件反复重启） */
+    (void)OtaBackup_Init();
     printf("[BOOT] State : %s (tries=%lu rollbacks=%lu crc=0x%08X)\r\n",
            (param.boot_state == BOOT_STATE_NORMAL) ? "NORMAL" :
            (param.boot_state == BOOT_STATE_UPGRADE) ? "UPGRADE" :
@@ -614,14 +609,14 @@ void BootApp_Run(void)
         return;
     }
 
-    /* 5) 正常模式：RUN 有效则跳转；无效则 BACKUP 自动修复；再无则升级 */
+    /* 5) 正常模式：RUN 有效则跳转；无效则外部备份自动修复；再无则升级 */
     if (boot_check_app_valid(APP_BASE_ADDR)) {
         printf("[BOOT] APP   : valid, jumping to APP...\r\n");
         boot_jump_to_app(APP_BASE_ADDR);
         return;
     }
-    if (boot_check_app_valid(BACKUP_BASE_ADDR)) {
-        printf("[BOOT] APP invalid, restoring from BACKUP...\r\n");
+    if (OtaBackup_IsValid()) {
+        printf("[BOOT] APP invalid, restoring from external backup...\r\n");
         if (boot_restore_backup()) {
             printf("[BOOT] BACKUP restored, jumping to APP...\r\n");
             boot_jump_to_app(APP_BASE_ADDR);

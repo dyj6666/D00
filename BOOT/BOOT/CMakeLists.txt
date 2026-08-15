@@ -33,6 +33,7 @@ if(CMAKE_CROSSCOMPILING)
     BootServices/security.c
     BootServices/esp_flash.c
     BootServices/ota_source.c
+    BootServices/ota_backup.c
     BootServices/aes.c
         BootServices/my_sha256.c
         BootServices/uECC.c
@@ -74,6 +75,7 @@ if(CMAKE_CROSSCOMPILING)
         -mthumb
         -mfpu=fpv4-sp-d16
         -mfloat-abi=hard
+        -Os
         -ffunction-sections
         -fdata-sections
         -Wall

@@ -30,7 +30,7 @@ $script:CmakeBuildPs1 = Join-Path $AppRoot "Script\cmake_build.ps1"
 $script:BootAddr    = "0x08000000"
 $script:AppAddr     = "0x08010000"
 $script:BootSectors = @("0","1","2","3")   # BOOT 64KB = 扇区 0-3（与 boot_config.h 一致）
-$script:AppSectors  = @("4","5","6")
+$script:AppSectors  = @("4","5","6","7","8","9","10")  # RUN 832KB = 扇区 4-10（方案B）
 
 $script:DebugPort = if ($env:D00_DEBUG_PORT) { $env:D00_DEBUG_PORT } else { "COM5" }
 $script:HostPort  = if ($env:D00_HOST_PORT)  { $env:D00_HOST_PORT  } else { "COM13" }
@@ -40,8 +40,8 @@ $script:OtaLog    = Join-Path $AppRoot "_auto_ota.txt"
 # Version written next to the APP validity magic (0x0805FFFC).
 # Defaults live in config/version.json (single source of truth) and
 # override these fallback values; keep both consistent before release.
-$script:OtaVersion = 201
-$script:OtaBuildNo = 9080
+$script:OtaVersion = 209
+$script:OtaBuildNo = 9146
 $script:VersionFile = Join-Path $RepoRoot "config\version.json"
 if (Test-Path -LiteralPath $script:VersionFile) {
     try {

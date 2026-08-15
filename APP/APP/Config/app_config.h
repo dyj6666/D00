@@ -7,18 +7,26 @@
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
 
+/* ================================================================
+ * 显示架构主控：LVGL 顶级 GUI 作为核心链接（方案B 后启用）
+ *   1 = LVGL 独占屏幕（gui_app），旧自绘页面层（lcd_app/lcd_ui）
+ *       仅保留接口兼容（触摸校准/测试命令不绘制），代码留待后续
+ *       彻底移除时清理；
+ *   0 = 旧自绘页面层（兼容回退，不推荐）
+ * ================================================================ */
+#define LVGL_GUI_MASTER  1
+
 
 #define DEBUG_APP 0   /* 调试开关：1=输出更多调试信息 */
 
 #define BOOT_FLAG_UPGRADE  0x5A5A   /* BKP 寄存器升级触发标志 */
 
 /* ---------------- OTA 分区（与 BOOT/boot_config.h 严格一致） ---------------- */
-#define OTA_DOWNLOAD_ADDR       0x080A0000UL   /* 下载暂存区 256KB（扇区9-10） */
-#define OTA_DOWNLOAD_SIZE       (256 * 1024)
-#define OTA_DOWNLOAD_SAFE       (OTA_DOWNLOAD_SIZE - 1024) /* 全量可用（会话槽已迁 PARAM） */
+/* 方案B：内部 DOWNLOAD/BACKUP 已取消，RUN 区 832KB（0x08010000~0x080DFFFF）；
+ * 下载暂存与回滚源均在外部 Flash（ota_dl / img_lib）。 */
 
-/* 外部 Flash OTA 下载（方案A：下载区外移；固件上限 = RUN 区 320KB） */
-#define OTA_EXT_DL_SIZE         (512 * 1024)    /* 外部 ota_dl 槽容量 */
+/* 外部 Flash OTA 下载（方案A+B：下载区外移；固件上限 = RUN 区 832KB） */
+#define OTA_EXT_DL_SIZE         (1024 * 1024)   /* 外部 ota_dl 单槽容量（1MB） */
 #define OTA_EXT_DL_SAFE         (OTA_EXT_DL_SIZE - 1024)
 
 /* 断点续传会话槽区：PARAM 扇区空余（0x080E2000，避开参数槽 +0/+1024）。
@@ -30,7 +38,7 @@
 #define OTA_PARAM_ADDR          0x080E0000UL   /* 参数区 */
 #define OTA_PARAM_SLOT_OFFSET   1024
 #define OTA_PARAM_MAGIC         0x50524D54UL
-#define OTA_APP_VERSION_ADDR    0x0805FFFCUL   /* RUN 区尾部版本号 */
+#define OTA_APP_VERSION_ADDR    0x080DFFFCUL   /* RUN 区尾部版本号（方案B） */
 #define OTA_STATE_NORMAL        0x00000001UL
 #define OTA_STATE_PENDING       0x00000002UL
 #define OTA_STATE_RECOVERY      0x00000003UL

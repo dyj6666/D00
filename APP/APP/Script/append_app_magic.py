@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """为直烧生成带 APP 有效性魔数的完整镜像。
 
-背景：BOOT 通过 0x0805FFF8 处的魔数 (0x4F54412E) 判断 APP 是否有效，
+背景：BOOT 通过 0x080DFFF8 处的魔数 (0x4F54412E) 判断 APP 是否有效（方案B，
+      RUN 区 832KB），
       该魔数平时由 OTA 流程写入。直接烧录（SWD/Keil）时必须先用本脚本
       把魔数与版本号补齐，否则 BOOT 会判定 APP 无效而进入升级模式。
 
 用法：
     python append_app_magic.py <raw_app.bin> [--version N] [--out out.bin]
 
-输出：320 KB 的完整 APP 分区镜像（RUN 区），直接烧录到 0x08010000 即可。
+输出：832 KB 的完整 APP 分区镜像（RUN 区），直接烧录到 0x08010000 即可。
 """
 
 import argparse
 import struct
 from pathlib import Path
 
-APP_PARTITION_SIZE = 320 * 1024          # 0x50000 (RUN 区, 扇区4-6)
+APP_PARTITION_SIZE = 832 * 1024          # 0xD0000 (RUN 区, 方案B 扇区4-10)
 APP_VALID_OFFSET = APP_PARTITION_SIZE - 8
 APP_VALID_MAGIC = 0x4F54412E
 

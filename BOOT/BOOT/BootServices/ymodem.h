@@ -7,6 +7,7 @@
 #define YMODEM_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* Protocol constants */
 #define YMODEM_SOH              0x01
@@ -41,8 +42,11 @@ typedef struct {
     uint32_t received_size;
     uint32_t current_crc;
     uint16_t packet_seq;
-    uint32_t write_addr;        /* current flash write address in Download area */
-    uint32_t flash_end;         /* Download 区上界（越界写保护，调用方设置） */
+    uint32_t write_addr;        /* 当前写入偏移（相对下载槽基址） */
+    uint32_t flash_end;         /* 下载槽上界（越界写保护，调用方设置） */
+    /* 写目标抽象：方案B 下载槽位于外部 Flash，写入由调用方提供回调
+     * （回调内自行处理擦除/喂狗），YMODEM 状态机不感知物理介质。 */
+    bool (*write_fn)(uint32_t off, const uint8_t *data, uint32_t len);
 } ymodem_ctx_t;
 
 ymodem_status_t ymodem_receive(ymodem_ctx_t *ctx, uint32_t flash_addr);

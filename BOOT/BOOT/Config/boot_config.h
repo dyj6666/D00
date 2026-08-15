@@ -4,28 +4,25 @@
 #include "main.h"
 
 /* =====================================================================
- * Flash 分区（STM32F407ZGT6 1MB，扇区对齐核算）
+ * Flash 分区（STM32F407ZGT6 1MB，扇区对齐核算）——方案B 终极布局
  *   BOOT    0x08000000  64KB   扇区0-3
- *   RUN     0x08010000  320KB  扇区4-6   （APP 链接地址，当前运行区）
- *   BACKUP  0x08060000  256KB  扇区7-8   （上一版固件备份，回滚源）
- *   DOWNLOAD 0x080A0000 256KB  扇区9-10  （新固件下载暂存区）
+ *   RUN     0x08010000  832KB  扇区4-10  （APP 链接地址；原 BACKUP+DOWNLOAD
+ *           全部并入，固件上限由 320KB 提升至 832KB，为顶级 GUI 留足空间）
  *   PARAM   0x080E0000  128KB  扇区11    （启动标志/回滚计数/升级日志）
+ *
+ * 回滚源外移（方案B）：内部 BACKUP 区取消，升级前将当前 RUN 全量备份到
+ * 外部 Flash img_lib 分区（ESP_BACKUP_BASE，见 esp_flash.h），升级失败由
+ * BOOT 从外部备份槽恢复；下载暂存同样位于外部 ota_dl 分区（方案A）。
  * ===================================================================== */
 #define BOOT_BASE_ADDR          0x08000000UL
 #define BOOT_SIZE               (64 * 1024)
 
 #define APP_BASE_ADDR           0x08010000UL
-#define APP_SIZE                (320 * 1024)      /* RUN 区 */
-
-#define BACKUP_BASE_ADDR        0x08060000UL
-#define BACKUP_SIZE             (256 * 1024)
-
-#define DOWNLOAD_BASE_ADDR      0x080A0000UL
-#define DOWNLOAD_SIZE           (256 * 1024)
+#define APP_SIZE                (832 * 1024)      /* RUN 区（扇区4-10，含原 BACKUP+DOWNLOAD） */
 
 /* OTA 断点续传会话区：PARAM 扇区空余（0x080E2000，避开参数槽 +0/+1024）。
  * APP ota_agent 下载期写入；BOOT 升级提交成功后失效全部会话槽，杜绝
- * 旧包续传残留。下载区 256KB 全量留给固件。与 APP/app_config.h 严格一致。 */
+ * 旧包续传残留。与 APP/app_config.h 严格一致。 */
 #define BOOT_SESSION_BASE       (PARAM_BASE_ADDR + 8 * 1024)
 #define BOOT_SESSION_SLOTS      1024
 #define BOOT_SESSION_STRIDE     32
@@ -38,11 +35,6 @@
 #define APP_VALID_ADDR          (APP_BASE_ADDR + APP_VALID_OFFSET)
 #define APP_VALID_MAGIC         0x4F54412E
 #define APP_VERSION_ADDR        (APP_VALID_ADDR + 4)
-
-/* BACKUP 区有效性（位于 BACKUP 区尾部，与 RUN 区独立） */
-#define BACKUP_VALID_OFFSET     (BACKUP_SIZE - 8)
-#define BACKUP_VALID_ADDR       (BACKUP_BASE_ADDR + BACKUP_VALID_OFFSET)
-#define BACKUP_VERSION_ADDR     (BACKUP_VALID_ADDR + 4)
 
 /* 备份域标志（APP 触发强制升级） */
 #define BOOT_FLAG_NONE          0x0000
@@ -75,8 +67,10 @@ typedef struct {
 #pragma pack()
 
 /* =================== IWDG =================== */
-#define IWDG_PRESCALER          IWDG_PRESCALER_64   /* 500Hz (LSI/64) */
-#define IWDG_RELOAD             4095                /* ~8.2s：覆盖 320KB 擦除+复制 */
+/* 250Hz (LSI/128) + 4095 = ~16.4s 硬窗口：覆盖 832KB 内部擦写 + 外部备份
+ * 长操作（擦/写/校验）内部均按扇区喂狗，窗口仅作死循环兜底。 */
+#define IWDG_PRESCALER          IWDG_PRESCALER_128  /* 250Hz */
+#define IWDG_RELOAD             4095                /* ~16.4s */
 
 /* =================== 通信超时 =================== */
 #define UART_TIMEOUT            1000

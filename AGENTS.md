@@ -19,12 +19,12 @@
 | 项 | 值 |
 | --- | --- |
 | BOOT 起始 | 0x08000000，64KB，扇区 0-3 |
-| RUN(APP) 起始 | 0x08010000，320KB，扇区 4-6 |
-| BACKUP | 0x08060000，256KB |
-| DOWNLOAD | 0x080A0000，256KB |
+| RUN(APP) 起始 | 0x08010000，832KB，扇区 4-10（方案B：含原 BACKUP+DOWNLOAD） |
+| 回滚源 | 外部 Flash img_lib（0x200000，升级前备份当前 RUN，PENDING 回滚） |
+| 下载暂存 | 外部 Flash ota_dl（0x000000，2MB，单槽 1MB） |
 | PARAM | 0x080E0000，128KB |
-| APP 有效魔数 | 0x4F54412E @ 0x0805FFF8 |
-| APP 版本号 | 0x0805FFFC |
+| APP 有效魔数 | 0x4F54412E @ 0x080DFFF8 |
+| APP 版本号 | 0x080DFFFC |
 | 升级标志 | RTC_BKP_DR1 == 0x5A5A |
 | APP 调试/Shell 控制台 | USART3（当前物理 CH340，COM 号动态；@115200） |
 | APP HOSTLINK 上位机链路 | USART1 |

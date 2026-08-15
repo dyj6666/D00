@@ -13,7 +13,6 @@
 #include "ymodem.h"
 #include "ymodem_port.h"
 #include "crc32.h"
-#include "flash_if.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -356,12 +355,13 @@ static void state_rx_frame(void) {
                 return;
             }
 
-            /* ---- Write valid data to flash ---- */
-            if (!flash_write(fsm.ctx->write_addr, data, valid_len)) {
-                /* 读取写入地址的第一个字，打印出来 */
-                uint32_t dbg_word = *(volatile uint32_t *)fsm.ctx->write_addr;
-                printf("[Ymodem] Flash write error at 0x%08X, current value: 0x%08X\r\n",
-                    (unsigned)fsm.ctx->write_addr, (unsigned)dbg_word);
+            /* ---- Write valid data via abstracted target callback ----
+             * 方案B：下载槽位于外部 Flash，写入由调用方回调完成
+             * （内部擦除/喂狗），状态机不感知物理介质。 */
+            if (fsm.ctx->write_fn == NULL ||
+                !fsm.ctx->write_fn(fsm.ctx->write_addr, data, valid_len)) {
+                printf("[Ymodem] Write failed at offset 0x%08X\r\n",
+                       (unsigned)fsm.ctx->write_addr);
                 cancel_transfer();
                 return;
             }

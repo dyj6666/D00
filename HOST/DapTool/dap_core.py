@@ -47,8 +47,8 @@ SCB_BFAR = 0xE000ED38
 RCC_CSR = 0x40023874
 
 UID_BASE = 0x1FFF7A10
-RUN_VALID_ADDR = 0x0805FFF8
-RUN_VERSION_ADDR = 0x0805FFFC
+RUN_VALID_ADDR = 0x080DFFF8
+RUN_VERSION_ADDR = 0x080DFFFC
 PARAM_BASE = 0x080E0000
 PARAM_SLOT_OFFSET = 1024
 PARAM_MAGIC = 0x50524D54
@@ -496,7 +496,7 @@ class DapSession:
         # 等待 APP 真正运行：OpenOCD 连接可能触发复位，PC 短暂在 BOOT
         for _ in range(20):
             pc = self._read_pc()
-            if 0x08010000 <= pc <= 0x0805FFFF:
+            if 0x08010000 <= pc <= 0x080DFFFF:
                 break
             time.sleep(0.3)
         else:

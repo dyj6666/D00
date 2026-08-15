@@ -625,11 +625,11 @@ class MainWindow(QMainWindow):
         return int(text.strip(), 16)
 
     def _make_app_flash_image(self, raw_path):
-        """把原始 APP.bin 补成 320KB 完整 RUN 分区镜像（魔数@0x4FFF8）。
-        BOOT 只认 0x0805FFF8 的魔数；直接刷原始 bin 会导致 APP 无效。
+        """把原始 APP.bin 补成 832KB 完整 RUN 分区镜像（魔数@0xCFFF8）。
+        BOOT 只认 0x080DFFF8 的魔数（方案B，RUN 区 832KB）；直接刷原始 bin 会导致 APP 无效。
         与 workflow 的 append_app_magic.py 同逻辑；版本取 version.json。"""
         raw = open(raw_path, "rb").read()
-        if len(raw) >= 320 * 1024 - 8:
+        if len(raw) >= 832 * 1024 - 8:
             raise dc.DapError("APP.bin 过大，超过魔数区偏移")
         ver = 202
         try:
@@ -641,11 +641,11 @@ class MainWindow(QMainWindow):
                 ver = int(_json.load(f).get("ota_version", 202))
         except Exception:
             pass
-        image = bytearray(b"\xFF" * (320 * 1024))
+        image = bytearray(b"\xFF" * (832 * 1024))
         image[:len(raw)] = raw
         struct = __import__("struct")
-        struct.pack_into("<I", image, 320 * 1024 - 8, 0x4F54412E)
-        struct.pack_into("<I", image, 320 * 1024 - 4, ver)
+        struct.pack_into("<I", image, 832 * 1024 - 8, 0x4F54412E)
+        struct.pack_into("<I", image, 832 * 1024 - 4, ver)
         tmp = tempfile.NamedTemporaryFile(
             suffix=".bin", prefix="app_flash_", delete=False)
         tmp.write(bytes(image))
@@ -669,7 +669,7 @@ class MainWindow(QMainWindow):
         self.btn_flash.setEnabled(False)
         self.flash_status.setText("烧录中...")
         flash_path = path
-        if addr == 0x08010000 and os.path.getsize(path) < 320 * 1024 - 8:
+        if addr == 0x08010000 and os.path.getsize(path) < 832 * 1024 - 8:
             try:
                 flash_path = self._make_app_flash_image(path)
             except Exception as e:

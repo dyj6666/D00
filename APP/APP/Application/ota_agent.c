@@ -201,6 +201,14 @@ static void ota_confirm_startup(void)
                (int)e, (int)w0, (int)w1);
     if (e && w0 && w1) {
         LOG_Printf("OTA: startup confirmed OK\r\n");
+        /* 方案B：新固件确认后清除外部备份槽头（img_lib 偏移 0 的 4KB 扇区）。
+         * BOOT 升级时保留备份直至本确认点，保证 PENDING 期间回滚源可用；
+         * 确认成功即擦头，令 OtaBackup_IsValid 失效，杜绝旧备份复活。 */
+        if (ExtStore_EraseRange(EXT_PART_IMG_LIB, 0u, 4096u) == EXT_STORE_OK) {
+            LOG_Printf("OTA: external backup slot invalidated\r\n");
+        } else {
+            LOG_Printf("OTA: backup slot invalidate FAILED\r\n");
+        }
         Buzzer_OtaSuccess();   /* 新固件确认成功：播"三短一长"完成旋律 */
     } else {
         LOG_Printf("OTA: confirm write FAILED\r\n");
