@@ -15,6 +15,28 @@ void BSP_I2C1_Init(void)
     if (s_i2c1_mutex == NULL) {
         s_i2c1_mutex = xSemaphoreCreateMutex();
     }
+    /* 显式强制配置 I2C1 引脚（PB6=SCL/PB7=SDA，AF4 开漏上拉）。
+     * 背景：HAL_I2C_MspInit / HAL_GPIO_Init 在部分构建产物中 AF 复用
+     * 写入未生效（PB6/7 保持 AF0），导致 I2C1 信号未接入引脚、总线全
+     * NACK。此处用寄存器级直接配置确保物理通路（不依赖 HAL）。 */
+    GPIO_InitTypeDef g = {0};
+    g.Pin = GPIO_PIN_6 | GPIO_PIN_7;
+    g.Mode = GPIO_MODE_AF_OD;
+    g.Pull = GPIO_PULLUP;
+    g.Speed = GPIO_SPEED_FREQ_HIGH;
+    g.Alternate = GPIO_AF4_I2C1;
+    HAL_GPIO_Init(GPIOB, &g);
+    /* 寄存器级兜底：直接写 AFRL（0x40020424，PB6/PB7 = AF4），绕过 HAL 潜在问题 */
+    volatile uint32_t *afrl = (volatile uint32_t *)0x40020424u;
+    *afrl = (*afrl & ~(0xFFUL << 24)) |
+            ((uint32_t)GPIO_AF4_I2C1 << 24) |
+            ((uint32_t)GPIO_AF4_I2C1 << 28);
+    /* I2C 时序修复：实测 HAL_I2C_Init 配置的 CCR=0x0D/TRISE=0（异常），
+     * 导致总线时钟远超 400kHz、传输 BERR。显式写入 400kHz 快速模式时序：
+     *   CCR   = 0x8035（Fm，PCLK1=42MHz → 42M/(2*400k)≈53）
+     *   TRISE = 43（42MHz × 1µs 上升时间 + 1） */
+    *(volatile uint32_t *)0x4000541Cu = 0x8035u;
+    *(volatile uint32_t *)0x40005420u = 43u;
 }
 
 int BSP_I2C1_Lock(uint32_t timeout_ms)

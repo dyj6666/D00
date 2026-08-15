@@ -52,6 +52,13 @@ static uint8_t reg_op(uint8_t reg, uint8_t *data, uint16_t len, uint8_t is_write
 {
     uint8_t ok = 1;
     if (BSP_I2C1_Lock(50) == 0) {
+        /* 强制 I2C1 400kHz 快速模式时序（HAL_I2C_Init 在部分构建产物中
+         * CCR/TRISE 配置异常——实测 CCR=0x0D/0x8023 均非 400kHz 值，
+         * 导致总线时钟异常、传输 BERR。此处每次传输前兜底修正：
+         *   CCR   = 0x8035（Fm，42MHz/(2*400kHz)≈53）
+         *   TRISE = 43（42MHz×1µs 上升时间 + 1） */
+        *(volatile uint32_t *)0x4000541Cu = 0x8035u;
+        *(volatile uint32_t *)0x40005420u = 43u;
         HAL_StatusTypeDef st;
         /* IT 模式优先：任务在传输期间休眠，CPU 占用从 ~8% 降到 ~1% */
         if (s_i2c_done == NULL) {
@@ -85,7 +92,9 @@ static uint8_t reg_op(uint8_t reg, uint8_t *data, uint16_t len, uint8_t is_write
                 st = HAL_I2C_Mem_Read(&hi2c1, s_addr, reg, I2C_MEMADD_SIZE_8BIT,
                                       data, len, I2C_TIMEOUT);
             }
-            if (st == HAL_OK) ok = 0;
+            if (st == HAL_OK) {
+                ok = 0;
+            }
         }
         BSP_I2C1_Unlock();
     }
