@@ -17,9 +17,6 @@
 #include "ota_agent.h"
 #include "err_mgr.h"
 #include "bsp_lcd.h"
-#include "lcd_ui.h"
-#include "lcd_app.h"
-#include "lcd_test.h"
 #include "touch_svc.h"
 #include "bsp_touch.h"
 #include "buzzer_app.h"
@@ -613,7 +610,7 @@ static const cmd_entry_t cmd_table[] = {
     {"sg_i2c_complex","I2C complex frame demo", CMD_TRANSPORT_ALL, cmd_sg_i2c_complex},
     {"ota_rbtest",   "OTA rollback self-test (danger)", CMD_TRANSPORT_UART, cmd_ota_rbtest},
     {"eb_stress",    "Event bus stress <n> <payload> <mode>", CMD_TRANSPORT_ALL, cmd_eb_stress},
-    {"lcd",          "LCD <info|page <0-5>|test|clear|bench|dir|bl>", CMD_TRANSPORT_ALL, cmd_lcd},
+    {"lcd",          "LCD <info|bl <0|1>> (LVGL master)", CMD_TRANSPORT_ALL, cmd_lcd},
     {"touch",        "Touch <info|cal|test>", CMD_TRANSPORT_ALL, cmd_touch},
     {"usr",          "User storage <info|scan|get|set|erase|reset>", CMD_TRANSPORT_ALL, cmd_usr},
     {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
@@ -1336,109 +1333,20 @@ static void cmd_touch(const char *args)
         return;
     }
     if (strcmp(args, "test") == 0) {
-        LcdUI_ShowPage(3);   /* TOUCH 测试ҳ */
-        LOG_Printf("TOUCH: test page shown, touch the screen\r\n");
+        LOG_Printf("TOUCH: test moved to LVGL GUI (touch page) - use touch info/cal\r\n");
         return;
     }
     LOG_Printf("Usage: touch <info|cal|nudge <dx> <dy>|test>\r\n");
 }
-/* ================== LCD 测试命令 ==================
- * 用法：lcd <info|test|clear|bench|dir <0-7>|bl <0|1>>
- * 所有测试绘制均在 LcdUI 渲Ⱦ任务内串行ִ行，与面板ˢ新完ȫ互斥。 */
-static uint8_t s_lcd_dir = 0;
-static uint16_t s_lcd_soak_sec = 30;
-
-static void lcd_soak_wrapper(void)
-{
-    LcdTest_RunSoak(s_lcd_soak_sec);
-}
-
-static void lcd_test_clear(void)
-{
-    BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
-}
-
-static void lcd_test_bench(void)
-{
-    BSP_LCD_Bench();
-}
-
-static void lcd_test_dir(void)
-{
-    BSP_LCD_ScanDir(s_lcd_dir);
-    /* 重画方向测试：四边ɫ块边框（红上/绿下/蓝左/黄右）+ 中心ʮ字 */
-    uint16_t w = BSP_LCD_GetWidth(), h = BSP_LCD_GetHeight();
-    BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
-    BSP_LCD_Fill(0, 0, (uint16_t)(w - 1), 9, BSP_LCD_COLOR_RED);
-    BSP_LCD_Fill(0, (uint16_t)(h - 10), (uint16_t)(w - 1),
-                 (uint16_t)(h - 1), BSP_LCD_COLOR_GREEN);
-    BSP_LCD_Fill(0, 0, 9, (uint16_t)(h - 1), BSP_LCD_COLOR_BLUE);
-    BSP_LCD_Fill((uint16_t)(w - 10), 0, (uint16_t)(w - 1),
-                 (uint16_t)(h - 1), BSP_LCD_COLOR_YELLOW);
-    BSP_LCD_Fill((uint16_t)(w / 2 - 2), (uint16_t)(h / 2 - 40),
-                 (uint16_t)(w / 2 + 2), (uint16_t)(h / 2 + 40),
-                 BSP_LCD_COLOR_WHITE);
-    BSP_LCD_Fill((uint16_t)(w / 2 - 40), (uint16_t)(h / 2 - 2),
-                 (uint16_t)(w / 2 + 40), (uint16_t)(h / 2 + 2),
-                 BSP_LCD_COLOR_WHITE);
-}
-
-static void lcd_test_pattern(void)
-{
-    static const uint16_t bars[] = {
-        BSP_LCD_COLOR_RED, BSP_LCD_COLOR_GREEN, BSP_LCD_COLOR_BLUE,
-        BSP_LCD_COLOR_YELLOW, BSP_LCD_COLOR_CYAN, BSP_LCD_COLOR_MAGENTA,
-        BSP_LCD_COLOR_WHITE, 0xFBE0
-    };
-    /* 先清屏避免与既有显ʾ重合 */
-    BSP_LCD_Clear(BSP_LCD_COLOR_BLACK);
-    uint16_t w = BSP_LCD_GetWidth();
-    uint16_t h = BSP_LCD_GetHeight();
-    /* 上半屏彩条 */
-    for (int i = 0; i < 8; i++) {
-        BSP_LCD_Fill((uint16_t)(i * w / 8), 0,
-                     (uint16_t)((i + 1) * w / 8 - 1),
-                     (uint16_t)(h / 2 - 1), bars[i]);
-    }
-    BSP_LCD_Fill(0, h / 2, (uint16_t)(w - 1), (uint16_t)(h - 1),
-                 BSP_LCD_COLOR_BLACK);
-    BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 8), "D00 LCD TEST",
-                       BSP_LCD_COLOR_WHITE, BSP_LCD_FONT_24);
-    BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 40),
-                       "abcdefghijklmnopqrstuvwxyz",
-                       BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
-    BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 64), "0123456789",
-                       BSP_LCD_COLOR_GREEN, BSP_LCD_FONT_16);
-    BSP_LCD_ShowString(8, (uint16_t)(h / 2 + 88),
-                       "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-                       BSP_LCD_COLOR_CYAN, BSP_LCD_FONT_16);
-}
-
+/* ================== LCD 命令（LVGL 接管显示） ==================
+ * 用法：lcd <info|bl <0|1>>
+ * LVGL 作为唯一显示层后，原自绘页面/测试/老化命令全部移除，
+ * 渲染由 GuiApp 任务统一负责；本命令仅保留信息查询与背光控制。 */
 static void cmd_lcd(const char *args)
 {
     if (args == NULL || strcmp(args, "info") == 0) {
-        LOG_Printf("LCD: id=0x%04X, %ux%u\r\n",
+        LOG_Printf("LCD: id=0x%04X, %ux%u, LVGL GUI master\r\n",
                    BSP_LCD_GetId(), BSP_LCD_GetWidth(), BSP_LCD_GetHeight());
-        LOG_Printf("LCD: page=%u cpu=%u%%\r\n",
-                   (unsigned)LcdUI_GetPage(),
-                   (unsigned)LcdApp_GetCpuPct());
-        return;
-    }
-    if (strncmp(args, "page", 4) == 0) {
-        int pg = atoi(args + 4);
-        if (pg >= 0 && pg <= 5) {
-            LcdUI_ShowPage((uint8_t)pg);
-            LOG_Printf("LCD: page %d\r\n", pg);
-        } else {
-            LOG_Printf("Usage: lcd page <0-5> (HOME/SYSTEM/BUS/NET/TOUCH/IMU)\r\n");
-        }
-        return;
-    }
-    if (strcmp(args, "clear") == 0) {
-        LcdUI_EnterTest();
-        LcdUI_RunTest(lcd_test_clear);
-        LcdUI_ExitTest();   /* 重绘面板恢复干净显ʾ */
-        LOG_Printf("LCD: cleared\r\n");
         return;
     }
     if (strcmp(args, "bl") == 0) {
@@ -1451,53 +1359,9 @@ static void cmd_lcd(const char *args)
         LOG_Printf("LCD: backlight %s\r\n", atoi(args + 3) ? "on" : "off");
         return;
     }
-    if (strcmp(args, "bench") == 0) {
-        LcdUI_EnterTest();
-        LcdUI_RunTest(lcd_test_bench);
-        /* 保持测试画面供观察；按键恢复 HOME */
-        return;
-    }
-    if (strncmp(args, "dir", 3) == 0) {
-        int d = atoi(args + 3);
-        if (d < 0 || d > 7) {
-            LOG_Printf("Usage: lcd dir <0-7>\r\n");
-            return;
-        }
-        s_lcd_dir = (uint8_t)d;
-        LcdUI_EnterTest();
-        LcdUI_RunTest(lcd_test_dir);
-        LOG_Printf("LCD: scan dir=%d\r\n", d);
-        return;
-    }
-    if (strcmp(args, "test") == 0) {
-        LcdUI_EnterTest();
-        LcdUI_RunTest(lcd_test_pattern);
-        LOG_Printf("LCD: test pattern drawn\r\n");
-        return;
-    }
-        if (strcmp(args, "selftest") == 0) {
-        LcdUI_EnterTest();
-        LcdUI_RunTest(LcdTest_RunSelfTest);
-        LcdUI_ExitTest();
-        return;
-    }
-    if (strncmp(args, "soak", 4) == 0) {
-        int sec = atoi(args + 4);
-        if (sec < 1 || sec > 3600) sec = 30;
-        s_lcd_soak_sec = (uint16_t)sec;
-        LcdUI_EnterTest();
-        LcdUI_RunTest(lcd_soak_wrapper);
-        LcdUI_ExitTest();
-        return;
-    }
-    if (strncmp(args, "stress", 6) == 0) {
-        int n = atoi(args + 6);
-        if (n < 1 || n > 1000) n = 50;
-        LcdTest_RunStress((uint16_t)n);
-        return;
-    }
-    LOG_Printf("Usage: lcd <info|test|clear|bench|dir <0-7>|selftest|soak <sec>|stress <n>|bl <0|1>>\r\n");
+    LOG_Printf("Usage: lcd <info|bl <0|1>>\r\n");
 }
+
 #if CRASH_INJECT_ENABLE
 /* ================== 崩溃注入（仅调试构建，用于验证纠错系统） ==================
  * 用法：

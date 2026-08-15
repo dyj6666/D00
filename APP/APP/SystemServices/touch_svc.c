@@ -6,7 +6,6 @@
 #include "touch_svc.h"
 #include "bsp_touch.h"
 #include "bsp_lcd.h"
-#include "lcd_ui.h"
 #include "usr_store.h"
 #include "FreeRTOS.h"
 #include "task.h"
@@ -177,14 +176,13 @@ void TouchSvc_Calibrate(void)
     cal_corner_t pts[4];
     uint8_t ok = 1;
 
-    LcdUI_EnterTest();   /* 暂停 1s 页面刷新，校准画面保持纯净 */
     LOG_Printf("[TOUCH] calibrate: tap the 4 crosses (TL/TR/BR/BL)\r\n");
     for (uint8_t i = 0; i < 4; i++) {
         pts[i].lx = corners[i][0];
         pts[i].ly = corners[i][1];
         s_cal_cx = pts[i].lx;
         s_cal_cy = pts[i].ly;
-        LcdUI_RunTest(cal_draw_cb);   /* 渲染任务串行绘制 */
+        cal_draw_cb();   /* LVGL 接管后直接绘制校准十字（BSP 层，短暂覆盖画面可接受） */
         LOG_Printf("[TOUCH] cal: tap corner %u @(%u,%u)...\r\n",
                    (unsigned)(i + 1), (unsigned)pts[i].lx, (unsigned)pts[i].ly);
 
@@ -224,7 +222,6 @@ void TouchSvc_Calibrate(void)
         LOG_Printf("[TOUCH] cal: aborted\r\n");
     }
 
-    LcdUI_ExitTest();    /* 重绘当前页恢复 */
 }
 
 /* ---------- 接口 ---------- */

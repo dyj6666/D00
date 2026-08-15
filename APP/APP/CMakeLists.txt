@@ -110,8 +110,6 @@ if(CMAKE_CROSSCOMPILING)
     SystemServices/signal_gen.c
     SystemServices/la_buffer.c
     SystemServices/la_trigger.c
-    SystemServices/lcd_ui.c
-    SystemServices/lcd_test.c
     SystemServices/touch_svc.c
     SystemServices/imu_fusion.c
     SystemServices/imu_svc.c
@@ -121,7 +119,6 @@ if(CMAKE_CROSSCOMPILING)
     Application/ota_agent.c
     Application/ota_can_svc.c
     Application/data_agent.c
-    Application/lcd_app.c
     Application/buzzer_app.c
     Application/eth_app.c
     Application/tcp_svc.c
@@ -153,7 +150,6 @@ if(CMAKE_CROSSCOMPILING)
     Middlewares/Third_Party/lvgl/src/core/lv_obj_tree.c
     Middlewares/Third_Party/lvgl/src/core/lv_refr.c
     Middlewares/Third_Party/lvgl/src/core/lv_theme.c
-    Middlewares/Third_Party/lvgl/src/draw/hpmicro/pdma/lv_draw_hpmicro_pdma.c
     Middlewares/Third_Party/lvgl/src/draw/lv_draw.c
     Middlewares/Third_Party/lvgl/src/draw/lv_draw_arc.c
     Middlewares/Third_Party/lvgl/src/draw/lv_draw_img.c

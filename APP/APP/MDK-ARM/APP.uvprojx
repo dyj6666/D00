@@ -2323,16 +2323,6 @@
               <FilePath>..\SystemServices\la_trigger.c</FilePath>
             </File>
             <File>
-              <FileName>lcd_ui.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\SystemServices\lcd_ui.c</FilePath>
-            </File>
-            <File>
-              <FileName>lcd_test.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\SystemServices\lcd_test.c</FilePath>
-            </File>
-            <File>
               <FileName>touch_svc.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\SystemServices\touch_svc.c</FilePath>
@@ -2381,11 +2371,6 @@
               <FileName>data_agent.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Application\data_agent.c</FilePath>
-            </File>
-            <File>
-              <FileName>lcd_app.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Application\lcd_app.c</FilePath>
             </File>
             <File>
               <FileName>buzzer_app.c</FileName>

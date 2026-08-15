@@ -31,4 +31,5 @@ void LvPort_IndevInit(void)
     s_indev_drv.type    = LV_INDEV_TYPE_POINTER;
     s_indev_drv.read_cb = indev_read;
     s_indev = lv_indev_drv_register(&s_indev_drv);
+    (void)s_indev;   /* 首个输入设备自动生效，句柄保留供后续扩展 */
 }
