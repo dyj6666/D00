@@ -1,14 +1,21 @@
 /* ================================================================
- * gui_app —— GUI 应用层（LVGL 核心链接）
+ * gui_app —— GUI 应用层（LVGL v8.3.5 骨架）
  *
- * 架构位置：APP 应用层；向下经 Ports 层驱动 LVGL，取代旧自绘
- *           lcd_app/lcd_ui 页面层成为系统唯一显示出口。模块注册
- *           入口（module.c）调 GuiApp_Init。
+ * 界面设计（240x320 深色主题，验证全链路）：
+ *   - 标题区：D00 GUI + LVGL 版本徽标
+ *   - 信息卡片：固件版本（读 RUN 尾部）+ 分区方案B 标识
+ *   - 交互区：按钮（计数）+ 滑块（数值联动）——验证触摸输入
+ *   - 状态区：系统 tick 时钟 + 触摸坐标实时显示
+ * 渲染任务：lv_timer_handler 每 10ms 周期驱动（事件驱动，无忙轮询）。
+ * 性能基准：`gui bench` 命令（内存带宽/LCD 原始层/LVGL 场景 FPS/flush 分解）。
  * ================================================================ */
 #ifndef GUI_APP_H
 #define GUI_APP_H
 
 /* 初始化 GUI：LCD 硬件 + LVGL 核心 + 端口 + 界面 + 渲染任务 */
 void GuiApp_Init(void);
+
+/* 请求执行性能基准（命令上下文调用；实际在 GUI 任务内串行执行） */
+void GuiApp_Bench(void);
 
 #endif /* GUI_APP_H */

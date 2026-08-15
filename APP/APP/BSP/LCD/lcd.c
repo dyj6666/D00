@@ -1,4 +1,4 @@
-﻿/**
+/**
  ****************************************************************************************************
  * @file        lcd.c
  * @author      正点原子团队(ALIENTEK)
@@ -858,16 +858,18 @@ void lcd_clear(uint16_t color)
  */
 void lcd_fill(uint16_t sx, uint16_t sy, uint16_t ex, uint16_t ey, uint32_t color)
 {
-    /* 完整窗口 + 连续写：lcd_set_window 写全 CASET/PASET（x0/x1/y0/y1），
-     * 不依赖任何残留值，任意区域可靠全覆盖（且性能最优）。 */
-    uint32_t xlen = (uint32_t)(ex - sx + 1);
-    uint32_t ylen = (uint32_t)(ey - sy + 1);
-    uint32_t n = xlen * ylen;
-    lcd_set_window(sx, sy, (uint16_t)xlen, (uint16_t)ylen);
-    lcd_write_ram_prepare();
+    /* 逐行"单行多列窗口"填充：ST7789 单点窗口只收 1 像素、
+     * 多行窗口 RAMWR 行递增异常，单行窗口连续写为实测唯一正确路径。 */
+    uint16_t xlen = (uint16_t)(ex - sx + 1);
+    uint16_t ylen = (uint16_t)(ey - sy + 1);
     volatile uint16_t *ram = &LCD->LCD_RAM;
-    while (n--) {
-        *ram = (uint16_t)color;
+    for (uint16_t row = 0; row < ylen; row++) {
+        lcd_set_window(sx, (uint16_t)(sy + row), xlen, 1);
+        lcd_write_ram_prepare();
+        uint32_t n = xlen;
+        while (n--) {
+            *ram = (uint16_t)color;
+        }
     }
 }
 

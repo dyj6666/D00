@@ -71,6 +71,13 @@ void BSP_LCD_ReadPixels(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 void BSP_LCD_WritePixels(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                          const uint16_t *buf);
 
+/* 仅设置写窗口（CASET/PASET + RAM 写就绪），不写像素数据。
+ * 供 DMA 异步 flush 使用：CPU 设窗口后由 DMA 直接打像素到 LCD_RAM。 */
+void BSP_LCD_SetWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
+
+/* LCD GRAM 写地址（FSMC 映射，16bit 写端口），供 DMA 传输目标使用 */
+uint32_t BSP_LCD_GetRamAddr(void);
+
 /* 画点 / 线 / 矩形框 / 圆 */
 void BSP_LCD_DrawPoint(uint16_t x, uint16_t y, uint16_t color);
 void BSP_LCD_DrawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
@@ -94,5 +101,8 @@ void BSP_LCD_Backlight(uint8_t on);
 
 /* 性能基准（DWT 计时，输出清屏/填充/字符/字符串速率；结束自动清屏） */
 void BSP_LCD_Bench(void);
+
+/* 读回自检：写已知图案 → 读回抽样点对比 → 输出错位诊断（花屏定位用） */
+void BSP_LCD_SelfTest(void);
 
 #endif

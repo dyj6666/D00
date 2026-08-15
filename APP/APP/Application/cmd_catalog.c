@@ -17,6 +17,7 @@
 #include "ota_agent.h"
 #include "err_mgr.h"
 #include "bsp_lcd.h"
+#include "gui_app.h"
 #include "touch_svc.h"
 #include "bsp_touch.h"
 #include "buzzer_app.h"
@@ -253,6 +254,7 @@ static void cmd_net(const char *args)
     }
 }
 static void cmd_lcd(const char *args);
+static void cmd_gui(const char *args);
 static void cmd_touch(const char *args);
 static void cmd_beep(const char *args);
 static void cmd_power(const char *args);
@@ -625,6 +627,7 @@ static const cmd_entry_t cmd_table[] = {
     {"ota_rbtest",   "OTA rollback self-test (danger)", CMD_TRANSPORT_UART, cmd_ota_rbtest},
     {"eb_stress",    "Event bus stress <n> <payload> <mode>", CMD_TRANSPORT_ALL, cmd_eb_stress},
     {"lcd",          "LCD <info|bl <0|1>> (LVGL master)", CMD_TRANSPORT_ALL, cmd_lcd},
+    {"gui",          "GUI bench (LVGL performance)", CMD_TRANSPORT_ALL, cmd_gui},
     {"touch",        "Touch <info|cal|test>", CMD_TRANSPORT_ALL, cmd_touch},
     {"usr",          "User storage <info|scan|get|set|erase|reset>", CMD_TRANSPORT_ALL, cmd_usr},
     {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
@@ -1373,7 +1376,21 @@ static void cmd_lcd(const char *args)
         LOG_Printf("LCD: backlight %s\r\n", atoi(args + 3) ? "on" : "off");
         return;
     }
-    LOG_Printf("Usage: lcd <info|bl <0|1>>\r\n");
+    if (strcmp(args, "selftest") == 0) {
+        BSP_LCD_SelfTest();
+        return;
+    }
+    LOG_Printf("Usage: lcd <info|bl <0|1>|selftest>\r\n");
+}
+
+static void cmd_gui(const char *args)
+{
+    if (args != NULL && strcmp(args, "bench") == 0) {
+        LOG_Printf("GUI: bench requested (runs in GUI task)...\r\n");
+        GuiApp_Bench();
+        return;
+    }
+    LOG_Printf("Usage: gui <bench>\r\n");
 }
 
 #if CRASH_INJECT_ENABLE
