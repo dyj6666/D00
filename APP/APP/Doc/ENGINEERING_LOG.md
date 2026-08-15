@@ -3353,3 +3353,50 @@ auto-stop）全部按设计工作。
   ②传感器初始化失败应周期重试自愈而非死循环；
   ③SPI 字节级超时在 RTOS+中断负载下需留足余量（200µs→5ms）；
   ④调试器 halt 可能截断 I2C 传输导致钳位，恢复后需总线释放兜底。
+
+### 10.49 方案B：RUN 区 320KB→832KB + 回滚源外移外部 Flash（重点问题）
+
+**背景**：LVGL 顶级 GUI 需要大 Flash。方案A 已把下载区外移到外部 ota_dl，固件上限受 RUN 320KB 限制。方案B 将内部 BACKUP(256KB)+DOWNLOAD(256KB) 全部并入 RUN → 832KB；回滚源（升级前备份）改存外部 Flash img_lib 分区（2MB）。
+
+#### 10.49.1 分区改造
+
+- 内部 Flash：BOOT 64KB + RUN 832KB（扇区4-10）+ PARAM 128KB；
+- 外部 Flash：ota_dl 2MB（单槽 1MB 下载）+ img_lib 2MB（前 832KB 作备份槽）；
+- 魔数/版本脚 0x0805FFF8/FFFC → 0x080DFFF8/FFFC；
+- OTA 上限 320KB → 832KB（BOOT security body_len ≤ APP_SIZE 自动生效）；
+- IWDG 500Hz/8.2s → 250Hz/16.4s（832KB 擦写窗口，长操作内部逐块喂狗）；
+- YMODEM 兜底改收包到外部 ota_dl（写回调抽象，按需擦 4KB 扇区）；
+- 上位机联动：append_app_magic/DapTool 832KB 镜像、common.ps1 扇区 4-10。
+
+#### 10.49.2 重点问题：PENDING 回滚死循环（OtaBackup_Init 遗漏）
+
+- **现象**：推送"启动即死循环"测试固件后，BOOT PENDING 计数耗尽应回滚，实际参数被归一为 NORMAL，死循环固件反复重启。
+- **排查过程**：
+  1. 先怀疑崩溃点被 err_mgr 故障自愈跳过（实测：0xDEADBEEF 总线读被自愈恢复继续运行）→ 改用死循环+不喂狗；
+  2. 死循环固件仍不回滚 → DAP 读参数：NORMAL + last_build=测试号 + PC 停在死循环；
+  3. 逐路径审查：boot_apply_download 走 OtaBackup_Init ✓、BootApp_Run 正常模式有 Init ✓，**唯独 PENDING 分支 boot_rollback 之前没有 OtaBackup_Init** → s_ready=false → OtaBackup_IsValid 恒 false → 回滚被误判"无备份"；
+  4. 修复：BootApp_Run 入口统一 OtaBackup_Init（早于所有分支）。
+- **验证**：死循环固件 OTA → 3 次 PENDING 启动失败 → 自动回滚（参数 rollback_count=1、last_error=0x1001、RUN 恢复为上一版）→ 正常运行；RUN 擦除模拟损坏 → BOOT 自动从外部备份修复。
+- **经验**：①所有使用共享初始化状态的分支必须在入口统一初始化，禁止依赖"别的路径恰好 init 过"；②回滚验证必须用"不可自愈的启动失败"（死循环），可恢复的 HardFault 会被自愈机制吞掉导致假阳性；③DAP 干预（halt/reset）会污染回滚时序，验证时全程不干预。
+
+### 10.50 LVGL v8.3.5 顶级 GUI 骨架（重点问题：AC5 移植五连坑）
+
+**背景**：方案B 后 Flash 富余，LVGL 作为系统核心显示链接（gui_app 取代旧 lcd_app/lcd_ui 自绘页面层）。目录：Middlewares/Third_Party/lvgl（库）+ Ports（显示/输入/tick）+ Application/gui_app（界面）。堆 128KB + 双绘制缓冲放外部 SRAM（0x68080000/0x680A0000）。
+
+#### 10.50.1 移植过程踩坑（均为系统性根因）
+
+1. **lv_conf_template 的 `#if 0` 陷阱**：v8.3 模板用 `#if 0 /*Set it to "1"*/` 包裹全部配置。复制成 lv_conf.h 后未改 1 → 所有配置走 lv_conf_internal 默认值（字体全 0、LV_MEM_ADR 失效）。**现象**：14 号字体生效（internal 默认 1）而 16 号空编译（默认 0），排查 40 分钟。修复：`#if 0`→`#if 1`。
+2. **uvprojx BOM 陷阱**：`git show HEAD:file | Out-File -Encoding utf8` 会写 UTF-8 BOM，Keil 无法解析工程静默退出且回写原始文件，导致手改丢失。修复：必须用 Python write_bytes 保持无 BOM；工程 XML 一律原样字节写。
+3. **UINT32_MAX 未定义**：ARMCC 5.06 的 stdint 在 C99 下偶发不导出 UINT32_MAX，LVGL 多处引用。修复：lv_conf.h 顶部条件兜底定义（已有则跳过）。
+4. **LV_TICK_CUSTOM_INCLUDE 默认 Arduino.h**：模板默认值直接 include Arduino.h 编译失败。修复：改为 stm32f4xx_hal.h + HAL_GetTick()（LVGL 自带 lv_tick_get 实现，勿自定义同名函数——会 multiply defined）。
+5. **qrcodegen.o 引用 __aeabi_assert**：LVGL 内置 qrcodegen 第三方库无 LV_USE_QRCODE guard，且 AC5 assert 需要 __aeabi_assert 实现。修复：Core/Src/sys_assert.c 提供实现（死循环 + IWDG 兜底）。
+
+#### 10.50.2 验证（骨架全链路）
+
+- Keil AC5：0 Error / 24 Warning（LVGL 枚举混用等无害）；ROM 426.7KB / 832KB；
+- GCC 交叉：0 Error，ROM 400.5KB；
+- 硬件：DAP 直刷 + OTA 升级 v212→v213 均成功；启动日志 `[GUI] LVGL : lcd id=0x7789, 240x320`、GUI 任务运行；
+- 外部 SRAM：DAP 读 0x68080000 见 TLSF 堆元数据、0x680A0000 见真实渲染像素（绘制缓冲在用）；
+- 界面骨架：深色主题 + 标题 + 固件卡片 + 按钮（计数）+ 滑块（数值联动）+ tick/触摸坐标实时显示，触摸经 lv_port_indev 轮询 touch_svc。
+
+**经验沉淀**：①任何从模板复制的配置文件必须先确认顶层开关（#if 0/1）；②Windows 下生成 Keil 工程文件必须保持无 BOM 原始字节；③第三方库的 assert 依赖在 AC5 需要显式 __aeabi_assert；④LV_TICK_CUSTOM 时 tick 函数由 LVGL 提供，端口只配 EXPR。

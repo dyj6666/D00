@@ -748,10 +748,14 @@ void LcdApp_Init(void)
     LOG_Printf("[APP] LCD  : id=0x%04X, %ux%u\r\n",
                id, BSP_LCD_GetWidth(), BSP_LCD_GetHeight());
 
+#if LVGL_GUI_MASTER
+    /* LVGL 接管：旧页面层停用，LCD 硬件已初始化，GUI 由 gui_app 构建 */
+#else
     LcdUI_Init();
     for (unsigned int i = 0; i < sizeof(lcd_pages) / sizeof(lcd_pages[0]); i++) {
         LcdUI_AddPage(&lcd_pages[i]);
     }
     LcdUI_ShowPage(0);
     EventBus_Subscribe(MSG_KEY_SHORT, lcd_on_key);
+#endif
 }

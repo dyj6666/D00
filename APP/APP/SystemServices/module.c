@@ -18,7 +18,7 @@
 #include "data_agent.h"
 #include "la_sample.h"
 #include "la_buffer.h"
-#include "lcd_app.h"
+#include "gui_app.h"
 #include "touch_svc.h"
 #include "imu_svc.h"
 #include "eth_app.h"
@@ -66,7 +66,7 @@ MODULE_INIT("ExtStore",4,  ExtStore_Init),
     MODULE_INIT("TouchSvc", 45,  TouchSvc_Init),
     MODULE_INIT("LedApp",   50,  LedApp_Init),
     MODULE_INIT("ImuSvc",   52,  ImuSvc_Init),
-    MODULE_INIT("LcdApp",   55,  LcdApp_Init),
+    MODULE_INIT("GuiApp",   55,  GuiApp_Init),
     MODULE_INIT("OtaAgent", 60,  OtaAgent_Init),
     MODULE_INIT("EthApp",   65,  EthApp_Init),
     MODULE_INIT("IcmpSvc",  66,  IcmpSvc_Init),

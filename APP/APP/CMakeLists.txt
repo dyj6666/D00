@@ -23,7 +23,7 @@ if(CMAKE_CROSSCOMPILING)
 
     # 工具链通过 -DCMAKE_TOOLCHAIN_FILE=cmake/arm-none-eabi-toolchain.cmake 注入
 
-    add_compile_definitions(USE_HAL_DRIVER STM32F407xx)
+    add_compile_definitions(USE_HAL_DRIVER STM32F407xx LV_CONF_INCLUDE_SIMPLE __STDC_LIMIT_MACROS)
 
     set(CPU_FLAGS "-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16")
     set(CMAKE_C_FLAGS "${CPU_FLAGS} -Os -ffunction-sections -fdata-sections -Wall -Wno-unknown-attributes -Wno-attributes -fno-common -fno-strict-aliasing" CACHE STRING "" FORCE)
@@ -33,7 +33,7 @@ if(CMAKE_CROSSCOMPILING)
     set(CMAKE_EXE_LINKER_FLAGS "${CPU_FLAGS} -T${CMAKE_CURRENT_SOURCE_DIR}/cmake/APP.ld -Wl,--gc-sections -Wl,-Map=APP.map -Wl,--no-warn-rwx-segments --specs=nano.specs -u _printf_float" CACHE STRING "" FORCE)
     set(CMAKE_EXE_LINKER_FLAGS_RELEASE "" CACHE STRING "" FORCE)
 
-    include_directories(Core/Inc Drivers/STM32F4xx_HAL_Driver/Inc Drivers/STM32F4xx_HAL_Driver/Inc/Legacy Drivers/CMSIS/Device/ST/STM32F4xx/Include Drivers/CMSIS/Include Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F Config BSP SystemServices Application Drivers LWIP/App LWIP/Target Middlewares/Third_Party/LwIP/src/include Middlewares/Third_Party/LwIP/system Middlewares/Third_Party/LwIP/src/include/netif/ppp Middlewares/Third_Party/LwIP/src/include/lwip Middlewares/Third_Party/LwIP/src/include/lwip/apps Middlewares/Third_Party/LwIP/src/include/lwip/priv Middlewares/Third_Party/LwIP/src/include/lwip/prot Middlewares/Third_Party/LwIP/src/include/netif Middlewares/Third_Party/LwIP/src/include/compat/posix Middlewares/Third_Party/LwIP/src/include/compat/posix/arpa Middlewares/Third_Party/LwIP/src/include/compat/posix/net Middlewares/Third_Party/LwIP/src/include/compat/posix/sys Middlewares/Third_Party/LwIP/src/include/compat/stdc Middlewares/Third_Party/LwIP/system/arch)
+    include_directories(Core/Inc Ports Middlewares/Third_Party/lvgl Drivers/STM32F4xx_HAL_Driver/Inc Drivers/STM32F4xx_HAL_Driver/Inc/Legacy Drivers/CMSIS/Device/ST/STM32F4xx/Include Drivers/CMSIS/Include Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F Config BSP SystemServices Application Drivers LWIP/App LWIP/Target Middlewares/Third_Party/LwIP/src/include Middlewares/Third_Party/LwIP/system Middlewares/Third_Party/LwIP/src/include/netif/ppp Middlewares/Third_Party/LwIP/src/include/lwip Middlewares/Third_Party/LwIP/src/include/lwip/apps Middlewares/Third_Party/LwIP/src/include/lwip/priv Middlewares/Third_Party/LwIP/src/include/lwip/prot Middlewares/Third_Party/LwIP/src/include/netif Middlewares/Third_Party/LwIP/src/include/compat/posix Middlewares/Third_Party/LwIP/src/include/compat/posix/arpa Middlewares/Third_Party/LwIP/src/include/compat/posix/net Middlewares/Third_Party/LwIP/src/include/compat/posix/sys Middlewares/Third_Party/LwIP/src/include/compat/stdc Middlewares/Third_Party/LwIP/system/arch)
 
     set(APP_SOURCES
     Core/Src/i2c.c
@@ -133,6 +133,164 @@ if(CMAKE_CROSSCOMPILING)
     Application/ota_mgr.c
     Application/ota_tcp_svc.c
     Application/ota_http_svc.c
+    Application/gui_app.c
+    Ports/lv_port.c
+    Ports/lv_port_disp.c
+    Ports/lv_port_indev.c
+    Core/Src/sys_assert.c
+    Middlewares/Third_Party/lvgl/src/core/lv_disp.c
+    Middlewares/Third_Party/lvgl/src/core/lv_event.c
+    Middlewares/Third_Party/lvgl/src/core/lv_group.c
+    Middlewares/Third_Party/lvgl/src/core/lv_indev.c
+    Middlewares/Third_Party/lvgl/src/core/lv_indev_scroll.c
+    Middlewares/Third_Party/lvgl/src/core/lv_obj.c
+    Middlewares/Third_Party/lvgl/src/core/lv_obj_class.c
+    Middlewares/Third_Party/lvgl/src/core/lv_obj_draw.c
+    Middlewares/Third_Party/lvgl/src/core/lv_obj_pos.c
+    Middlewares/Third_Party/lvgl/src/core/lv_obj_scroll.c
+    Middlewares/Third_Party/lvgl/src/core/lv_obj_style.c
+    Middlewares/Third_Party/lvgl/src/core/lv_obj_style_gen.c
+    Middlewares/Third_Party/lvgl/src/core/lv_obj_tree.c
+    Middlewares/Third_Party/lvgl/src/core/lv_refr.c
+    Middlewares/Third_Party/lvgl/src/core/lv_theme.c
+    Middlewares/Third_Party/lvgl/src/draw/hpmicro/pdma/lv_draw_hpmicro_pdma.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw_arc.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw_img.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw_label.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw_layer.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw_line.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw_mask.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw_rect.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw_transform.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_draw_triangle.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_img_buf.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_img_cache.c
+    Middlewares/Third_Party/lvgl/src/draw/lv_img_decoder.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_arc.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_blend.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_dither.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_gradient.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_img.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_layer.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_letter.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_line.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_polygon.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_rect.c
+    Middlewares/Third_Party/lvgl/src/draw/sw/lv_draw_sw_transform.c
+    Middlewares/Third_Party/lvgl/src/extra/layouts/flex/lv_flex.c
+    Middlewares/Third_Party/lvgl/src/extra/layouts/grid/lv_grid.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/bmp/lv_bmp.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/ffmpeg/lv_ffmpeg.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/freetype/lv_freetype.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/fsdrv/lv_fs_fatfs.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/fsdrv/lv_fs_posix.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/fsdrv/lv_fs_stdio.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/fsdrv/lv_fs_win32.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/gif/gifdec.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/gif/lv_gif.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/png/lodepng.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/png/lv_png.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/qrcode/lv_qrcode.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/qrcode/qrcodegen.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/rlottie/lv_rlottie.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/sjpg/lv_sjpg.c
+    Middlewares/Third_Party/lvgl/src/extra/libs/sjpg/tjpgd.c
+    Middlewares/Third_Party/lvgl/src/extra/lv_extra.c
+    Middlewares/Third_Party/lvgl/src/extra/themes/basic/lv_theme_basic.c
+    Middlewares/Third_Party/lvgl/src/extra/themes/default/lv_theme_default.c
+    Middlewares/Third_Party/lvgl/src/extra/themes/mono/lv_theme_mono.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/animimg/lv_animimg.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/calendar/lv_calendar.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/calendar/lv_calendar_header_arrow.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/calendar/lv_calendar_header_dropdown.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/chart/lv_chart.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/colorwheel/lv_colorwheel.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/imgbtn/lv_imgbtn.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/keyboard/lv_keyboard.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/led/lv_led.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/list/lv_list.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/menu/lv_menu.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/meter/lv_meter.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/msgbox/lv_msgbox.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/span/lv_span.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/spinbox/lv_spinbox.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/spinner/lv_spinner.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/tabview/lv_tabview.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/tileview/lv_tileview.c
+    Middlewares/Third_Party/lvgl/src/extra/widgets/win/lv_win.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_dejavu_16_persian_hebrew.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_fmt_txt.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_loader.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_10.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_12.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_12_subpx.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_14.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_16.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_18.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_20.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_22.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_24.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_26.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_28.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_28_compressed.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_30.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_32.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_34.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_36.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_38.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_40.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_42.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_44.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_46.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_48.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_montserrat_8.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_simsun_16_cjk.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_unscii_16.c
+    Middlewares/Third_Party/lvgl/src/font/lv_font_unscii_8.c
+    Middlewares/Third_Party/lvgl/src/hal/lv_hal_disp.c
+    Middlewares/Third_Party/lvgl/src/hal/lv_hal_indev.c
+    Middlewares/Third_Party/lvgl/src/hal/lv_hal_tick.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_anim.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_anim_timeline.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_area.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_async.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_bidi.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_color.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_fs.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_gc.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_ll.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_log.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_lru.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_math.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_mem.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_printf.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_style.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_style_gen.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_templ.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_timer.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_tlsf.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_txt.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_txt_ap.c
+    Middlewares/Third_Party/lvgl/src/misc/lv_utils.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_arc.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_bar.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_btn.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_btnmatrix.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_canvas.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_checkbox.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_dropdown.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_img.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_label.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_line.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_objx_templ.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_roller.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_slider.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_switch.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_table.c
+    Middlewares/Third_Party/lvgl/src/widgets/lv_textarea.c
     BSP/bsp_system.c
     BSP/bsp_flash.c
     BSP/bsp_uart.c

@@ -1,4 +1,4 @@
-/* ================================================================
+﻿/* ================================================================
  * lcd_ui —— LCD 用户界面：状态页/菜单/ETH 全状态绘制
  *
  * 架构位置：APP 服务层；独立 UI 任务周期刷新
@@ -293,6 +293,9 @@ static int ui_send(const ui_cmd_t *cmd)
 /* ---------- 框架接口 ---------- */
 void LcdUI_Init(void)
 {
+#if LVGL_GUI_MASTER
+    return;   /* LVGL 接管屏幕：旧渲染任务不再创建 */
+#else
     if (ui_queue != NULL) return;
     ui_queue = xQueueCreate(UI_QUEUE_LEN, sizeof(ui_cmd_t));
     configASSERT(ui_queue);
@@ -303,90 +306,144 @@ void LcdUI_Init(void)
         .priority = osPriorityNormal,
     };
     osThreadNew(lcd_ui_task, NULL, &attr);
+#endif
 }
 
 int LcdUI_AddPage(const lcd_ui_page_t *page)
 {
+#if LVGL_GUI_MASTER
+    (void)page;
+    return -1;   /* 页面由 LVGL GUI 构建 */
+#else
     if (page == NULL || ui_page_count >= LCD_UI_MAX_PAGES) return -1;
     ui_pages[ui_page_count++] = page;
     return (int)(ui_page_count - 1);
+#endif
 }
 
 void LcdUI_ShowPage(uint8_t index)
 {
+#if LVGL_GUI_MASTER
+    (void)index;
+    return;
+#else
     ui_cmd_t c = {0};
     c.type = UI_CMD_SHOW_PAGE;
     c.value = index;
     ui_send(&c);
+#endif
 }
 
 int LcdUI_NextPage(void)
 {
+#if LVGL_GUI_MASTER
+    return -1;
+#else
     ui_cmd_t c = {0};
     c.type = UI_CMD_NEXT_PAGE;
     return ui_send(&c);
+#endif
 }
 
 uint8_t LcdUI_GetPage(void)
 {
+#if LVGL_GUI_MASTER
+    return 0;
+#else
     return ui_page_cur;
+#endif
 }
 
 uint16_t LcdUI_GetPendingCount(void)
 {
+#if LVGL_GUI_MASTER
+    return 0;
+#else
     if (ui_queue == NULL) return 0;
     return (uint16_t)uxQueueMessagesWaiting(ui_queue);
+#endif
 }
 
 uint32_t LcdUI_GetDroppedCount(void)
 {
+#if LVGL_GUI_MASTER
+    return 0;
+#else
     return ui_dropped;
+#endif
 }
 
 void LcdUI_EnterTest(void)
 {
+#if LVGL_GUI_MASTER
+    return;
+#else
     ui_cmd_t c = {0};
     c.type = UI_CMD_ENTER_TEST;
     ui_send(&c);
+#endif
 }
 
 void LcdUI_ExitTest(void)
 {
+#if LVGL_GUI_MASTER
+    return;
+#else
     ui_cmd_t c = {0};
     c.type = UI_CMD_EXIT_TEST;
     ui_send(&c);
+#endif
 }
 
 void LcdUI_RunTest(void (*fn)(void))
 {
+#if LVGL_GUI_MASTER
+    (void)fn;
+    return;
+#else
     if (fn == NULL) return;
     ui_cmd_t c = {0};
     c.type = UI_CMD_RUN_TEST;
     c.u.fn = fn;
     ui_send(&c);
+#endif
 }
 
 /* ---------- 组件命令 ---------- */
 void LcdUI_Clear(uint16_t color)
 {
+#if LVGL_GUI_MASTER
+    (void)color;
+    return;
+#else
     ui_cmd_t c = {0};
     c.type = UI_CMD_CLEAR;
     c.color = color;
     ui_send(&c);
+#endif
 }
 
 void LcdUI_Fill(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
                 uint16_t color)
 {
+#if LVGL_GUI_MASTER
+    (void)x0; (void)y0; (void)x1; (void)y1; (void)color;
+    return;
+#else
     ui_cmd_t c = {0};
     c.type = UI_CMD_FILL;
     c.x = x0; c.y = y0; c.x1 = x1; c.y1 = y1; c.color = color;
     ui_send(&c);
+#endif
 }
 
 void LcdUI_Text(uint16_t x, uint16_t y, const char *s,
                 uint16_t color, bsp_lcd_font_t font)
 {
+#if LVGL_GUI_MASTER
+    (void)x; (void)y; (void)s; (void)color; (void)font;
+    return;
+#else
     if (s == NULL) return;
     ui_cmd_t c = {0};
     c.type = UI_CMD_TEXT;
@@ -394,33 +451,49 @@ void LcdUI_Text(uint16_t x, uint16_t y, const char *s,
     strncpy(c.u.text, s, UI_TEXT_MAX - 1);
     c.u.text[UI_TEXT_MAX - 1] = '\0';
     ui_send(&c);
+#endif
 }
 
 void LcdUI_Num(uint16_t x, uint16_t y, uint32_t value, uint8_t digits,
                uint16_t color, bsp_lcd_font_t font)
 {
+#if LVGL_GUI_MASTER
+    (void)x; (void)y; (void)value; (void)digits; (void)color; (void)font;
+    return;
+#else
     ui_cmd_t c = {0};
     c.type = UI_CMD_NUM;
     c.x = x; c.y = y; c.value = value;
     c.digits = digits; c.color = color; c.font = (uint8_t)font;
     ui_send(&c);
+#endif
 }
 
 void LcdUI_Bar(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                uint8_t pct, uint16_t color, uint16_t bg)
 {
+#if LVGL_GUI_MASTER
+    (void)x; (void)y; (void)w; (void)h; (void)pct; (void)color; (void)bg;
+    return;
+#else
     ui_cmd_t c = {0};
     c.type = UI_CMD_BAR;
     c.x = x; c.y = y; c.w = w; c.h = h;
     c.value = pct; c.color = color; c.color2 = bg;
     ui_send(&c);
+#endif
 }
 
 void LcdUI_Rect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
                 uint16_t color)
 {
+#if LVGL_GUI_MASTER
+    (void)x0; (void)y0; (void)x1; (void)y1; (void)color;
+    return;
+#else
     ui_cmd_t c = {0};
     c.type = UI_CMD_RECT;
     c.x = x0; c.y = y0; c.x1 = x1; c.y1 = y1; c.color = color;
     ui_send(&c);
+#endif
 }
