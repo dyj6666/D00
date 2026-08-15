@@ -10,9 +10,9 @@
                 │
                 ├─1 self_check.ps1        环境/串口/硬件自检
                 ├─2 auto_build.ps1        Keil 发布构建（BOOT+APP）或 GCC 快速构建
-                ├─3 auto_flash.ps1        SWD 逐扇区擦写 BOOT+带魔数 APP 镜像，校验+复位
-                ├─4 auto_verify.ps1       复位后抓调试口日志（默认 COM5，自动探测），关键字判定 PASS/FAIL
-                ├─5 auto_ota.ps1          HOSTLINK 安全升级冒烟（数据口默认 COM13 921600）
+                ├─3 auto_flash.ps1        SWD（ST-Link）或 -Dap（CMSIS-DAP/flash_dap.ps1）烧录
+                ├─4 auto_verify.ps1       DAP 自动复位（OpenOCD）+ 抓日志 + MPU 传感器检查
+                ├─5 auto_ota.ps1          HOSTLINK 或 -Tcp（以太网）安全升级冒烟
                 ├─6 auto_hosttest.ps1     主机单测（BOOT ctest + APP 协议测试）
                 └─7 auto_pipeline.ps1     一键总流水线，产出 last_report.json 证据报告
                      │
@@ -27,6 +27,18 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 安装内容：启用 `.githooks\pre-commit`（暂存区 UTF-8/行尾卫生检查）。
 `AGENTS.md`、`workflow\`、`config\version.json`、`.github\workflows\ci.yml` 均已入库，克隆后开箱即用。
+
+## 二点五、工作流自愈与卫生保障（2026-08-15 增强）
+
+- **复位方式自适应**：`auto_verify` / `self_check -TestHw` 自动探测 CMSIS-DAP（OpenOCD）
+  → ST-Link（STM32CubeProgrammer）→ 串口，不再依赖单一工具链；
+- **烧录自适应**：`auto_flash -Dap` 走 `flash_dap.ps1`（500kHz + 分块 + 喂狗，防 DAP 假死）；
+- **串口自动探测**：调试口/上位机口按 USB 在线状态自动解析（COM 漂移免改参），
+  可用 `D00_DEBUG_PORT` / `D00_HOST_PORT` 环境变量覆盖；
+- **工程文件卫生**：`self_check` 检查 .uvprojx/.sct/.ld 无 UTF-8 BOM（Keil 对 BOM 静默拒绝），
+  检查关键配置头（app_config/FreeRTOSConfig/lv_conf）比 .o 新时提示 `-Clean` 全量重建；
+- **OTA 双通道**：`auto_ota.ps1` 支持 HOSTLINK（串口）与 `-Tcp`（以太网 192.168.10.10:9020）；
+  独立推送可用 `ota_tcp_push.ps1`。
 
 ## 三、怎么用
 

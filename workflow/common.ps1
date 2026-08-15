@@ -11,9 +11,13 @@ $script:HostRoot = Join-Path $RepoRoot "HOST"
 
 $script:UV4        = "D:\MDK\CORE\UV4\UV4.exe"
 $script:Programmer = "D:\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe"
+$script:OpenOCD    = "D:\GIT-SPACE\D00\tools\xpack-openocd-0.12.0-7\bin\openocd.exe"
+$script:OpenOcdScripts = "D:\GIT-SPACE\D00\tools\xpack-openocd-0.12.0-7\openocd\scripts"
 $script:Python     = "D:\Python\python.exe"
 $script:Cmake      = "cmake"
 $script:Ninja      = "ninja"
+$script:DapFlash   = Join-Path $script:WorkflowDir "flash_dap.ps1"
+$script:OtaTcpCli  = Join-Path $script:AppRoot "Script\ota_tcp_cli.py"
 
 $script:AppUvprojx   = Join-Path $AppRoot "MDK-ARM\APP.uvprojx"
 $script:BootUvprojx  = Join-Path $BootRoot "MDK-ARM\BOOT.uvprojx"
@@ -33,15 +37,15 @@ $script:BootSectors = @("0","1","2","3")   # BOOT 64KB = 扇区 0-3（与 boot_c
 $script:AppSectors  = @("4","5","6","7","8","9","10")  # RUN 832KB = 扇区 4-10（方案B）
 
 $script:DebugPort = if ($env:D00_DEBUG_PORT) { $env:D00_DEBUG_PORT } else { "COM5" }
-$script:HostPort  = if ($env:D00_HOST_PORT)  { $env:D00_HOST_PORT  } else { "COM13" }
+$script:HostPort  = if ($env:D00_HOST_PORT)  { $env:D00_HOST_PORT  } else { "" }
 $script:BootLog   = Join-Path $AppRoot "_auto_boot.txt"
 $script:OtaLog    = Join-Path $AppRoot "_auto_ota.txt"
 
 # Version written next to the APP validity magic (0x0805FFFC).
 # Defaults live in config/version.json (single source of truth) and
 # override these fallback values; keep both consistent before release.
-$script:OtaVersion = 209
-$script:OtaBuildNo = 9146
+$script:OtaVersion = 213
+$script:OtaBuildNo = 9156
 $script:VersionFile = Join-Path $RepoRoot "config\version.json"
 if (Test-Path -LiteralPath $script:VersionFile) {
     try {
@@ -207,6 +211,143 @@ function Get-DebugPort {
     if ($ports -contains $script:DebugPort) { return $script:DebugPort }
     if ($ports.Count -gt 0) { return $ports[0] }
     return $script:DebugPort
+}
+
+function Get-AllSerialPorts {
+    # Returns all available serial ports (COMx names). Never throws.
+    try {
+        return @([System.IO.Ports.SerialPort]::GetPortNames())
+    } catch {
+        return @()
+    }
+}
+
+function Get-HostPort {
+    # HOSTLINK (USART1) / YMODEM port resolver.
+    # Priority: env D00_HOST_PORT > configured > first port that is NOT the
+    # debug port (covers COM-number drift after replug). Falls back to "".
+    if ($env:D00_HOST_PORT) { return $env:D00_HOST_PORT }
+    $ports = Get-AllSerialPorts
+    if ($script:HostPort -and ($ports -contains $script:HostPort)) {
+        return $script:HostPort
+    }
+    $dbg = Get-DebugPort
+    foreach ($p in $ports) {
+        if ($p -ne $dbg) { return $p }
+    }
+    if ($script:HostPort) { return $script:HostPort }
+    return ""
+}
+
+function Test-DapOnline {
+    # Probe CMSIS-DAP via OpenOCD (halt + read DPIDR). Returns $true when a
+    # DAP probe is connected and the target answers on SWD.
+    if (-not (Test-Path -LiteralPath $script:OpenOCD)) { return $false }
+    $work = Join-Path $env:TEMP ("dap_probe_" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $work | Out-Null
+    $log = Join-Path $work "probe.log"
+    try {
+        $r = Invoke-Exe -FilePath $script:OpenOCD -Arguments @(
+            "-s", $script:OpenOcdScripts,
+            "-f", "interface/cmsis-dap.cfg",
+            "-f", "target/stm32f4x.cfg",
+            "-c", "adapter speed 500",
+            "-c", "init", "-c", "halt", "-c", "shutdown"
+        ) -LogFile $log -TimeoutSec 25
+        # OpenOCD logs to stderr; Inspect the captured log file.
+        $logText = ""
+        if (Test-Path -LiteralPath $log) { $logText = Get-Content -LiteralPath $log -Raw }
+        return ($r.ExitCode -eq 0) -and ($logText -match "SWD DPIDR")
+    } catch {
+        return $false
+    }
+}
+
+function Invoke-OpenOcdReset {
+    # Reset the target via CMSIS-DAP (OpenOCD). Works with DAP probes only.
+    # Prefer this over STM32CubeProgrammer (which does not support CMSIS-DAP).
+    param([switch]$Halt)
+    $args = @(
+        "-s", $script:OpenOcdScripts,
+        "-f", "interface/cmsis-dap.cfg",
+        "-f", "target/stm32f4x.cfg",
+        "-c", "adapter speed 500",
+        "-c", "init"
+    )
+    if ($Halt) { $args += @("-c", "halt", "-c", "reg pc") }
+    else       { $args += @("-c", "reset run") }
+    $args += @("-c", "shutdown")
+    $r = Invoke-Exe -FilePath $script:OpenOCD -Arguments $args -TimeoutSec 60
+    if ($r.ExitCode -ne 0) {
+        throw "OpenOCD reset failed (DAP offline?)"
+    }
+    if ($Halt) { return $r.Stdout }
+}
+
+function Reset-Target {
+    # Unified reset: DAP (OpenOCD) -> ST-Link (STM32CubeProgrammer) -> serial.
+    # Returns the method actually used ("dap"/"stlink"/"serial"/"none").
+    param([switch]$SerialReset, [switch]$NoReset)
+    if ($NoReset) { return "none" }
+    if ($SerialReset) {
+        $dbg = Get-DebugPort
+        $logger = Start-Com9Logger -OutFile (Join-Path $script:AppRoot "_auto_serialreset.txt") `
+            -Seconds 6 -Cmd "reset"
+        Start-Sleep -Seconds 2
+        Stop-Logger $logger
+        return "serial"
+    }
+    if (Test-DapOnline) {
+        Invoke-OpenOcdReset
+        return "dap"
+    }
+    # ST-Link fallback
+    $r = Invoke-Exe -FilePath $script:Programmer -Arguments @("-c", "port=SWD", "-rst") -TimeoutSec 60
+    if ($r.ExitCode -eq 0) { return "stlink" }
+    throw "No working reset path (DAP offline and ST-Link absent). Use -SerialReset."
+}
+
+function Test-ProjectNoBom {
+    # Project/config files (XML scatter/linker) must be BOM-free, otherwise
+    # Keil silently rejects the project. Returns list of offending files.
+    param([string[]]$Files)
+    $bad = @()
+    foreach ($f in $Files) {
+        if (-not (Test-Path -LiteralPath $f)) { continue }
+        $bytes = [System.IO.File]::ReadAllBytes($f)
+        if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+            $bad += $f
+        }
+    }
+    return $bad
+}
+
+function Test-StaleObjects {
+    # Detects Keil incremental-build staleness: an object newer source file
+    # (global config headers force recompile of dependents, but Keil -b does
+    # not always track them). Returns $true when a full rebuild (-Clean) is
+    # recommended. Compares key config headers vs every .o in MDK-ARM output.
+    param([string]$ProjectDir)
+    $objDir = Join-Path $ProjectDir "MDK-ARM\APP"
+    if (-not (Test-Path -LiteralPath $objDir)) { return $false }
+    $headers = @(
+        (Join-Path $ProjectDir "Config\app_config.h"),
+        (Join-Path $ProjectDir "Core\Inc\FreeRTOSConfig.h"),
+        (Join-Path $ProjectDir "Middlewares\Third_Party\lvgl\lv_conf.h"),
+        (Join-Path $ProjectDir "Core\Src\main.c"),
+        (Join-Path $ProjectDir "MDK-ARM\APP.uvprojx")
+    )
+    $latestHeader = 0
+    foreach ($h in $headers) {
+        if (Test-Path -LiteralPath $h) {
+            $t = (Get-Item -LiteralPath $h).LastWriteTimeUtc.Ticks
+            if ($t -gt $latestHeader) { $latestHeader = $t }
+        }
+    }
+    if ($latestHeader -eq 0) { return $false }
+    $objs = Get-ChildItem -LiteralPath $objDir -Filter *.o -ErrorAction SilentlyContinue
+    $stale = @($objs | Where-Object { $_.LastWriteTimeUtc.Ticks -lt $latestHeader })
+    return ($stale.Count -gt 0)
 }
 
 function Stop-Logger {

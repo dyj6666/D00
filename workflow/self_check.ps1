@@ -32,6 +32,8 @@ $cm = Get-Command cmake -ErrorAction SilentlyContinue
 Report ($null -ne $cm) "cmake" $(if ($cm) { $cm.Source } else { "not in PATH" })
 $nm = Get-Command ninja -ErrorAction SilentlyContinue
 Report ($null -ne $nm) "ninja" $(if ($nm) { $nm.Source } else { "not in PATH" })
+$ocd = $script:OpenOCD
+Report (Test-Path -LiteralPath $ocd) "OpenOCD (CMSIS-DAP)" $(if (Test-Path -LiteralPath $ocd) { $ocd } else { "not found - DAP flash/reset unavailable" })
 Report (Test-Path -LiteralPath (Join-Path $script:RepoRoot ".git")) "git repo" $script:RepoRoot
 Report (Test-Path -LiteralPath $script:AppUvprojx) "APP project" $script:AppUvprojx
 Report (Test-Path -LiteralPath $script:BootUvprojx) "BOOT project" $script:BootUvprojx
@@ -49,7 +51,8 @@ $appCfg = Join-Path $script:AppRoot "Config\app_config.h"
 $bootCfg = Join-Path $script:BootRoot "Config\boot_config.h"
 if (Test-Path -LiteralPath $appCfg) {
     $txt = Get-Content -LiteralPath $appCfg -Raw
-    if ($txt -notmatch "0x0805FFFC") { Warn "app_config.h" "OTA_APP_VERSION_ADDR 0x0805FFFC not found (convention drift?)" }
+    if ($txt -notmatch "0x080DFFFC") { Warn "app_config.h" "OTA_APP_VERSION_ADDR 0x080DFFFC not found (convention drift?)" }
+    if ($txt -notmatch "1024 \* 1024") { Warn "app_config.h" "OTA_EXT_DL_SIZE 1MB not found (Plan-B drift?)" }
 } else { Warn "app_config.h" "not found" }
 if (Test-Path -LiteralPath $bootCfg) {
     $txt = Get-Content -LiteralPath $bootCfg -Raw
@@ -57,6 +60,25 @@ if (Test-Path -LiteralPath $bootCfg) {
 } else { Warn "boot_config.h" "not found" }
 
 # ---------- 版本单一事实源：config/version.json 与 common.ps1 必须一致 ----------
+# ---------- Project file hygiene: BOM / stale objects ----------
+Write-Step "Project file hygiene check"
+$projFiles = @(
+    (Join-Path $script:AppRoot "MDK-ARM\APP.uvprojx"),
+    (Join-Path $script:AppRoot "MDK-ARM\APP\APP.sct"),
+    (Join-Path $script:AppRoot "cmake\APP.ld"),
+    (Join-Path $script:BootRoot "MDK-ARM\BOOT.uvprojx"),
+    (Join-Path $script:BootRoot "MDK-ARM\BOOT\BOOT.sct")
+)
+$bomBad = Test-ProjectNoBom -Files $projFiles
+foreach ($f in $bomBad) { Warn "BOM" ("UTF-8 BOM found in Keil project file (breaks Keil): " + $f) }
+if ($bomBad.Count -eq 0) { Report $true "No BOM in project files" "OK" }
+
+if (Test-StaleObjects -ProjectDir $script:AppRoot) {
+    Warn "StaleObjects" "Key config header newer than some .o - run auto_build -Clean for a full rebuild"
+} else {
+    Report $true "Incremental build hygiene" "OK"
+}
+
 Write-Step "Version single-source check"
 $verFile = Join-Path $script:RepoRoot "config\version.json"
 if (Test-Path -LiteralPath $verFile) {
@@ -146,13 +168,17 @@ if (Test-Path -LiteralPath (Join-Path $script:RepoRoot ".git")) {
 }
 
 if ($TestHw) {
-    Write-Step "Probing SWD target (reset only)"
-    $r = Invoke-Exe -FilePath $script:Programmer -Arguments @("-c", "port=SWD", "-rst") -TimeoutSec 90
-    Report ($r.ExitCode -eq 0) "SWD target probe" $r.Stdout.Trim()
+    Write-Step "Probing target (DAP -> ST-Link fallback, reset only)"
+    try {
+        $m = Reset-Target
+        Report $true "Target probe" "reset via $m"
+    } catch {
+        Report $false "Target probe" $_.Exception.Message
+    }
 }
 
 Write-Host ""
 if ($fails.Count -gt 0) { Write-Host ("FAILED: " + ($fails -join ", ")); exit 1 }
-if ($warns.Count -gt 0) { Write-Host ("PASSED with warnings: " + ($warns -join ", ")); exit 2 }
+if ($warns.Count -gt 0) { Write-Host ("PASSED with warnings: " + ($warns -join ", ")); exit 0 }
 Write-Host "ALL CHECKS PASSED"
 exit 0

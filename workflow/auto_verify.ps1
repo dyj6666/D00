@@ -1,8 +1,8 @@
 param(
     [int]$Seconds = 25,
-    [string]$Port = "SWD",
     [switch]$NoReset,
-    [switch]$SerialReset
+    [switch]$SerialReset,
+    [switch]$CheckSensors
 )
 . "$PSScriptRoot\common.ps1"
 $ErrorActionPreference = "Stop"
@@ -19,10 +19,12 @@ $logger = Start-Com9Logger -OutFile $script:BootLog -Seconds $Seconds `
     -Cmd $(if ($SerialReset) { "reset" } else { "" })
 if (-not $NoReset -and -not $SerialReset) {
     Start-Sleep -Seconds 2
-    $r = Invoke-Exe -FilePath $script:Programmer -Arguments @("-c", "port=$Port", "-rst") -TimeoutSec 60
-    if ($r.ExitCode -ne 0) {
+    try {
+        $m = Reset-Target
+        Write-Step "Reset via: $m"
+    } catch {
         Stop-Logger $logger
-        throw "SWD reset failed - is the target connected? (或使用 -SerialReset 走串口复位)"
+        throw $_.Exception.Message
     }
 }
 try { $logger.WaitForExit(($Seconds + 30) * 1000) } catch {}
@@ -41,6 +43,14 @@ if ($v.Recovered.Count -gt 0) {
     Write-Host ("WARN: previous-crash recovery recorded on boot: " + ($v.Recovered | Select-Object -Last 1))
 }
 $report.stages["verify_tail"] = (($txt -split "`r?`n" | Select-Object -Last 25) -join "`n")
+if ($CheckSensors) {
+    # Sensor health: MPU6050 must be ready in a healthy boot log.
+    $mpuOk = $txt -match "MPU6050 ready"
+    $report.stages["verify_mpu"] = $(if ($mpuOk) { "OK" } else { "WARN(missing)" })
+    if (-not $mpuOk -and $v.Pass) {
+        Write-Step "WARN: MPU6050 not ready in log (may need board power-cycle if DAP disturbed I2C)"
+    }
+}
 $report.generated = Get-Date -Format "o"
 Save-Report $report
 

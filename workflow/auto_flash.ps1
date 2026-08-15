@@ -3,7 +3,8 @@ param(
     [switch]$SkipApp,
     [switch]$KeepImage,
     [int]$Version = 0,
-    [string]$Port = "SWD"
+    [string]$Port = "SWD",
+    [switch]$Dap
 )
 . "$PSScriptRoot\common.ps1"
 $ErrorActionPreference = "Stop"
@@ -40,9 +41,31 @@ if (-not $SkipApp) {
 }
 $cmdArgs += @("-rst")
 
-Write-Step "STM32CubeProgrammer: erase + program + verify + reset"
-$r = Invoke-Exe -FilePath $script:Programmer -Arguments $cmdArgs -LogFile $flashLog -TimeoutSec 600
-$ok = $r.ExitCode -eq 0
+if ($Dap) {
+    # CMSIS-DAP ???flash_dap.ps1?500kHz + ?? + ???? DAP ???
+    Write-Step "DAP flash: BOOT+APP via flash_dap.ps1"
+    $ok = $true
+    if (-not $SkipBoot) {
+        $r = Invoke-Exe -FilePath "powershell.exe" -Arguments @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script:DapFlash,
+            "-File", $script:BootBin, "-Addr", "0x08000000") -LogFile $flashLog -TimeoutSec 600
+        if ($r.ExitCode -ne 0) { $ok = $false; $okDetail = "BOOT DAP flash failed" }
+    }
+    if ($ok -and -not $SkipApp) {
+        $r = Invoke-Exe -FilePath "powershell.exe" -Arguments @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script:DapFlash,
+            "-File", $script:AppFlashImg, "-Addr", "0x08010000") -LogFile $flashLog -TimeoutSec 900
+        $ok = ($r.ExitCode -eq 0)
+        if (-not $ok) { $okDetail = "APP DAP flash failed" }
+    }
+    if ($ok) { $okDetail = "DAP flash + verify OK" }
+} else {
+    Write-Step "STM32CubeProgrammer: erase + program + verify + reset"
+    $r = Invoke-Exe -FilePath $script:Programmer -Arguments $cmdArgs -LogFile $flashLog -TimeoutSec 600
+    $ok = $r.ExitCode -eq 0
+    $okDetail = "STM32_Programmer"
+}
+$ok = [bool]$ok
 $report.stages["flash"] = $(if ($ok) { "OK" } else { "FAIL" })
 $report.stages["flash_log"] = $flashLog
 $report.stages["flash_targets"] = [pscustomobject]@{
@@ -59,5 +82,5 @@ if (-not $ok) {
     }
     exit 1
 }
-Write-Host "FLASH OK: BOOT+APP programmed, verified, target reset"
+Write-Host "FLASH OK: $okDetail"
 exit 0
