@@ -573,6 +573,20 @@ static void cmd_http(const char *args)
     LOG_Printf("Usage: http <info|on|off>\r\n");
 }
 
+/* 命令表（47 条）——按域导航（新增命令追加到对应域注释下）：
+ *   系统:  help/info/reset/led/taskstats/ver/echo/sysmon/eb_stress
+ *   OTA :  ota/ota_rbtest
+ *   LA  :  la_start/la_stop/la_first/la_trig/la_dma_start/la_dma_stop
+ *          la_dump/la_info/la_state/la_peek
+ *   信号:  sg_uart_start/sg_uart_stop/sg_uart_hex/sg_spi_start/sg_spi_stop
+ *          sg_i2c_start/sg_i2c_stop/sg_i2c_complex
+ *   网络:  tcp/net/icmp/dhcp/dns/sntp/mqtt/http/stream
+ *   存储:  usr/store/w25q
+ *   硬件:  lcd/touch/beep/power/mpu/can
+ *   诊断:  crash（仅 CRASH_INJECT_ENABLE）
+ * 设计权衡：命令实现集中于此（组合根模式，见 ARCHITECTURE.md §1）。
+ * 当单域命令膨胀到 ~20 条或本文件超 3000 行时，按域拆分为
+ * cmd_la.c、cmd_net.c、cmd_storage.c 再在此聚合注册。 */
 static const cmd_entry_t cmd_table[] = {
     {"help",         "Show command help", CMD_TRANSPORT_ALL, cmd_help},
     {"info",         "System info (version/kernel/tasks)", CMD_TRANSPORT_ALL, cmd_info},

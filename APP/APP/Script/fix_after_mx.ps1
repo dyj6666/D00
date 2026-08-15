@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # fix_after_mx.ps1 - CubeMX regeneration reconciliation script
 # Run AFTER regenerating code from CubeMX. Re-applies the
 # "out-of-model" configuration CubeMX would otherwise wipe:

@@ -12,14 +12,15 @@
 #include "lvgl.h"
 #include "lv_port_disp.h"
 #include "bsp_lcd.h"
+#include "mem_map.h"
 
 #define DISP_HOR_RES   240u
 #define DISP_VER_RES   320u
 #define DISP_BUF_ROWS  40u                  /* 1/8 屏高：240×40×2B = 19.2KB/块 */
 #define DISP_BUF_SIZE  (DISP_HOR_RES * DISP_BUF_ROWS)
 
-/* 双缓冲固定映射到外部 SRAM（FSMC NE3 @0x68000000，1MB；F407 内部仅 128KB） */
-#define DISP_BUF_ADDR1 0x680A0000u
+/* 双缓冲固定映射到外部 SRAM（布局单一事实源见 Config/mem_map.h） */
+#define DISP_BUF_ADDR1 MEM_LVGL_DISP_BASE
 #define DISP_BUF_ADDR2 (DISP_BUF_ADDR1 + DISP_BUF_SIZE * (uint32_t)sizeof(lv_color_t))
 
 static lv_disp_draw_buf_t s_draw_buf;

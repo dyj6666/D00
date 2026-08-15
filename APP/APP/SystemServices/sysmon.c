@@ -1,4 +1,4 @@
-﻿/* ================================================================
+/* ================================================================
  * sysmon —— 系统监控：堆/栈/任务状态周期汇总
  *
  * 架构位置：APP 服务层；sysmon 命令与 LCD 页共用
@@ -115,37 +115,54 @@ static void print_task_list(void)
     vPortFree(arr);
 }
 
+/* CPU 统计两拍采样状态：第一拍存基准，第二拍差分输出。
+ * 事件总线任务是 Realtime 优先级，禁止在其中 vTaskDelay(1000)
+ * 阻塞整条总线（曾实测 sysmon 阻塞 1s 拖垮全部消息）。 */
+static TaskStatus_t *s_cpu_snap1 = NULL;
+static UBaseType_t   s_cpu_n1 = 0;
+static uint32_t      s_cpu_total1 = 0;
+
 static void print_cpu_usage(void)
 {
-    /* 1 秒窗口差分算法：
+    /* 两拍差分算法：
      * DWT 周期计数器在 168 MHz 下 32 位约 25.6 s 回绕，直接对“启动以来累加值”
      * 求百分比会得到垃圾数据；改为对相邻两次快照做差分，窗口远小于回绕周期，
-     * 数值稳定且不受回绕影响。 */
+     * 数值稳定且不受回绕影响。两拍均非阻塞：本函数在事件总线任务内执行，
+     * 绝不能在 Realtime 任务里睡 1 秒。 */
     UBaseType_t size = uxTaskGetNumberOfTasks();
-    TaskStatus_t *snap1 = pvPortMalloc(size * sizeof(TaskStatus_t));
-    TaskStatus_t *snap2 = pvPortMalloc(size * sizeof(TaskStatus_t));
-    uint32_t total1 = 0, total2 = 0;
 
-    if (snap1 == NULL || snap2 == NULL) {
-        vPortFree(snap1);
-        vPortFree(snap2);
-        LOG_Printf("=== CPU USAGE ===\r\n  (no memory)\r\n");
+    if (s_cpu_snap1 == NULL) {
+        /* 第一拍：只采样基准，立即返回 */
+        s_cpu_snap1 = pvPortMalloc(size * sizeof(TaskStatus_t));
+        if (s_cpu_snap1 == NULL) {
+            LOG_Printf("=== CPU USAGE ===\r\n  (no memory)\r\n");
+            return;
+        }
+        s_cpu_n1 = uxTaskGetSystemState(s_cpu_snap1, size, &s_cpu_total1);
+        LOG_Printf("=== CPU USAGE ===\r\n  (sampling, run sysmon again)\r\n");
         return;
     }
 
-    UBaseType_t n1 = uxTaskGetSystemState(snap1, size, &total1);
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    /* 第二拍：差分计算并输出 */
+    TaskStatus_t *snap2 = pvPortMalloc(size * sizeof(TaskStatus_t));
+    uint32_t total2 = 0;
+    if (snap2 == NULL) {
+        vPortFree(s_cpu_snap1);
+        s_cpu_snap1 = NULL;
+        LOG_Printf("=== CPU USAGE ===\r\n  (no memory)\r\n");
+        return;
+    }
     UBaseType_t n2 = uxTaskGetSystemState(snap2, size, &total2);
 
-    uint32_t dt = total2 - total1;
+    uint32_t dt = total2 - s_cpu_total1;
     if (dt == 0) dt = 1;
 
-    LOG_Printf("=== CPU USAGE (last 1s) ===\r\n");
+    LOG_Printf("=== CPU USAGE ===\r\n");
     for (UBaseType_t i = 0; i < n2; i++) {
         uint32_t base = 0;
-        for (UBaseType_t j = 0; j < n1; j++) {
-            if (strcmp(snap1[j].pcTaskName, snap2[i].pcTaskName) == 0) {
-                base = snap1[j].ulRunTimeCounter;
+        for (UBaseType_t j = 0; j < s_cpu_n1; j++) {
+            if (strcmp(s_cpu_snap1[j].pcTaskName, snap2[i].pcTaskName) == 0) {
+                base = s_cpu_snap1[j].ulRunTimeCounter;
                 break;
             }
         }
@@ -155,7 +172,8 @@ static void print_cpu_usage(void)
         LOG_Printf("  %-16s %3lu%%\r\n", snap2[i].pcTaskName, (unsigned long)pct);
     }
 
-    vPortFree(snap1);
+    vPortFree(s_cpu_snap1);
+    s_cpu_snap1 = NULL;
     vPortFree(snap2);
 }
 

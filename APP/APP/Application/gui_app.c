@@ -57,7 +57,6 @@ static void gui_build(void)
     /* 最小渲染测试：纯色背景 + 单 label（避开按钮/滑块/主题渐变） */
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x0E1420), 0);
-    lv_obj_t *t = lv_label_create(scr);
     /* 标题 */
     lv_obj_t *title = lv_label_create(scr);
     lv_label_set_text(title, "D00  GUI");

@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include "stm32f4xx.h"
+#include "mem_map.h"
 
 typedef enum {
     LA_MODE_IDLE = 0,
@@ -60,8 +61,8 @@ typedef struct {
     uint16_t states;
 } LA_SamplePoint;
 
-#define LA_SRAM_START_ADDR   0x68000000
-#define LA_BUFFER_SIZE       (512 * 1024)
+#define LA_SRAM_START_ADDR   MEM_LA_BASE          /* 见 Config/mem_map.h 单一事实源 */
+#define LA_BUFFER_SIZE       MEM_LA_AREA_SIZE
 #define LA_BUF_MAX_COUNT     (LA_BUFFER_SIZE / sizeof(LA_SamplePoint))
 
 #endif

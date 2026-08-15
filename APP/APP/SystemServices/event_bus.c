@@ -8,6 +8,9 @@
 #include "event_bus.h"
 #include "app_config.h"
 #include "watchdog.h"
+/* 跨编译器 CMSIS 内建函数入口（__get_PRIMASK 等）：
+ * AC5 走 cmsis_armcc.h（内联汇编），GCC 走 cmsis_gcc.h；按编译器自动分发。 */
+#include "cmsis_compiler.h"
 
 #include <string.h>
 
@@ -37,6 +40,18 @@ static QueueHandle_t free_queue;          /* 空闲槽队列（ISR 安全） */
 
 static volatile uint32_t g_msg_lost_count = 0;  /* 池空丢消息计数 */
 
+/* 丢消息计数原子自增：任务/ISR 双上下文调用，32 位 ++ 非原子，
+ * 关中断保护（临界区极短，只做一次读-改-写）。 */
+static void msg_lost_inc(void)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    g_msg_lost_count++;
+    if (primask == 0u) {
+        __enable_irq();   /* 仅在原先开中断时恢复 */
+    }
+}
+
 /** @brief 初始化事件总线：建主队列/空闲池并填充全部槽 */
 void EventBus_Init(void)
 {
@@ -62,7 +77,7 @@ int EventBus_AllocMsg(uint16_t src, uint16_t type, uint16_t len, message_t **out
     if (out == NULL) return -1;
     if (len > EVENT_BUS_MSG_MAX_PAYLOAD) return -3;
     if (xQueueReceive(free_queue, &slot, 0) != pdTRUE) {
-        g_msg_lost_count++;
+        msg_lost_inc();
         return -1;   /* 池空 */
     }
 
@@ -87,7 +102,7 @@ int EventBus_Publish(message_t *msg)
     if (msg == NULL) return -1;
     if (xQueueSend(msg_queue, &msg, 0) != pdTRUE) {
         /* 队列满：立即回收，记录丢失 */
-        g_msg_lost_count++;
+        msg_lost_inc();
         EventBus_FreeMsg(msg);
         return -1;
     }
@@ -99,7 +114,7 @@ int EventBus_PublishFromISR(message_t *msg)
     if (msg == NULL) return -1;
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     if (xQueueSendFromISR(msg_queue, &msg, &xHigherPriorityTaskWoken) != pdTRUE) {
-        g_msg_lost_count++;
+        msg_lost_inc();
         EventBus_FreeMsg(msg);
         portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
         return -1;

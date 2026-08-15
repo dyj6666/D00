@@ -32,4 +32,7 @@ StreamBufferHandle_t LOG_GetRxStream(void);
 /** @brief 日志发送任务主体（供 freertos.c 调用） */
 void LoggerTXTaskFunction(void);
 
+/** @brief TX DMA 超时自愈计数（供 sysmon 健康检查） */
+uint32_t LOG_GetTxErrCount(void);
+
 #endif /* LOGGER_H */

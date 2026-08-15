@@ -3495,3 +3495,57 @@ auto-stop）全部按设计工作。
 即恢复运行，单次会话天然安全，持续挂起必须用持久会话；③DAP 单连接，严禁
 并行会话（实测互斥超时）；④硬件级证据（寄存器值+符号）比打印日志更接近
 根因，应作为排查第一动作。
+
+### 10.54 全仓架构体检修复（2026-08-15，全面整改）
+**背景**：按三份架构评估报告（APP/BOOT/HOST 深度审查）执行全量修复：
+CI 结构错误、VLink 分片 bug、文档漂移（方案A→B）、版本单源化、上位机重复实现、
+固件健壮性（BOOT halt→自愈/APP 互斥/超时自愈/事件总线原子）、死代码、入库卫生、
+主机单测补充（BOOT ymodem FSM + OTA_Tool 打包契约 + VLink 分片回归）。
+
+**关键问题一：云端 CI 从未真正运行（P0）**
+- 现象：ci.yml 的 `architecture-layering` job 在 `run:` 步骤下挂了 `with: python-version`，
+  GitHub Actions 报 "Unexpected value 'with'" 使整个 workflow 无法注册；`host-python-tests` 为空壳 job。
+- 根因：历史上把 setup-python 的 `with` 误挂到相邻步骤，且测试步骤被塞进错误的 job。
+- 解决：重建 ci.yml——setup-python 独立步骤、HOST 测试回归 host-python-tests、新增 OTA_Tool 加密测试。
+- 验证：本地 YAML 解析核对 + GitHub 行为佐证；本地等价执行全部 5 套 HOST 测试通过。
+
+**关键问题二：VLink LIST_VARS 只收第一分片（P0 潜伏 bug）**
+- 现象：变量表超一帧（约 247B）时 VLink 静默丢变量（当前 9 个变量未触发）。
+- 根因：client.py 收到首个 LIST_VARS 帧即返回，未按 payload[0]=总包数/payload[1]=序号收齐。
+- 解决：收齐全部分片按序号合并；新增 test_client.py 回归（多片/单篇/乱序 3 用例）。
+
+**关键问题三：workflow ps1 被 PowerShell 5.1 按 GBK 误读（系统性根因，排查 >5 步）**
+- 现象（诡异且互相矛盾）：auto_pipeline.ps1 的 `-Mode selfcheck` 下 flash/verify 阶段仍执行；
+  `@(...) + $StageArgs` 结果变 $null；字符串赋值结果为空串；Start-Process 参数数组被无空格拼接。
+- 排查：①怀疑 PS5.1 数组 splatting 绑定错误→复现不符；②怀疑 $LASTEXITCODE 被内部原生
+  进程污染→实测 .ps1 的 exit 不设置 $LASTEXITCODE；③怀疑 $? 被空 catch 块污染→属实但非主因；
+  ④最小化脚本复现 switch/+= 全部正常→排除语法；⑤比对磁盘文件与内存内容→发现关键线索；
+  ⑥最终定位：**UTF-8 无 BOM 的 .ps1 被 PS5.1 按 ANSI(GBK) 解码，某些中文注释的字节序列
+  与换行/引号组合错位，吞掉下一行开头的语法字符**（case 标签、赋值行被注释吞噬）。
+  解释力：所有诡异现象（switch 失效/赋值空/null 数组/无空格拼接）全部吻合；
+  self_check.ps1 正常是因为其注释字节序列恰好未触发。
+- 根因：仓库"UTF-8 无 BOM"约定与 PS5.1 按 ANSI 读无 BOM 文件的冲突。
+- 解决：workflow/*.ps1、install.ps1、APP Script/*.ps1 统一加 UTF-8 BOM（PS5.1 识别 BOM 后按 UTF-8 正确解码）。
+  注意：edit 类工具重写文件会剥离 BOM，后续改这些脚本必须直接写文件并保留 BOM。
+- 验证：-Mode selfcheck 只跑 selfcheck 阶段；完整流水线 selfcheck+build+verify+hosttest 全 PASS。
+
+**关键问题四：BOOT Flash 级失败永久 halt（放弃自愈）**
+- 现象：备份/擦除/写入失败时 `while(1){喂狗}`，设备挂死需人工断电。
+- 根因：历史保守策略；实际"复位→魔数无效→外部备份自动修复"路径已存在但未被利用。
+- 解决：新增 boot_abort_apply()（归一参数+清升级标志+复位自愈）；boot_param_save 关键路径
+  重试+显式处置；SP/PC 校验统一为 boot_vector_valid()；AES256 宏写死防静默降级。
+- 验证：Keil/GCC 0E0W；实机 OTA 升级 v213 成功后运行验证通过。
+
+**关键问题五：文档漂移（方案A 残留）**
+- 现象：README/WORKFLOW/BOOT 联动契约表/flash分区 仍写 320KB/0x0805FFF8；
+  self_check 的 README 漂移检查逻辑写反（要求旧值）。
+- 解决：全部回填方案B（832KB/0x080DFFF8/外部回滚源）；self_check 检查逻辑修正。
+- 附带澄清：BOOT 评估曾报"ECDSA DER(70-72B) vs 设备 64B 不匹配"为高危——
+  实测 python-ecdsa 0.19.2 的 sign_digest 默认 sigencode_string(64B)，与设备一致（误报）；
+  仍显式传 sigencode 消除版本依赖（低成本加固）。
+
+**其余修复**：ext_store 递归互斥（并发 WriteSafe 踩踏）；ota_mutex 取锁失败即返回；
+DataLink_SendPacket 丢帧返回 -2；logger TX 2000ms 超时自愈；sysmon CPU 统计改两拍非阻塞
+（曾阻塞 Realtime 事件总线 1s）；事件总线计数关中断自增；外部 SRAM 布局收敛 mem_map.h
+（编译期重叠断言）；la_dma_buf 无效命令移除（固件无此命令）；VLink config.json/test 残留
+与 _gui_probe 入库清理；乱码注释修复（pinout.h/lv_conf.h）；CMake 陈旧引用清理。

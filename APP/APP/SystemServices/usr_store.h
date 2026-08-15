@@ -21,9 +21,6 @@
 #define USR_KEY_DNS_SERVER  3   /* uint8_t[4] */
 #define USR_KEY_SNTP_SERVER 4   /* uint8_t[4] */
 #define USR_KEY_MQTT_BROKER 5   /* uint8_t[4]+port(2) */
-#define USR_KEY_DNS_SERVER  3   /* uint8_t[4] */
-#define USR_KEY_SNTP_SERVER 4   /* uint8_t[4] */
-#define USR_KEY_MQTT_BROKER 5   /* uint8_t[4]+port(2) */
 
 #define USR_EEPROM_SIZE     256
 #define USR_DATA_MAX        200  /* 单记录数据上限（还受剩余空间约束） */

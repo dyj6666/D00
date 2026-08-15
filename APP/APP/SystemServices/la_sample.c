@@ -28,11 +28,11 @@ void LA_RegisterVariables(void)
 
 /* --------------------- 时间戳模式（EXTI）相关 --------------------- */
 /* 预触发环形缓冲：原放 CCM（6KB，CCM 占用 98.8% 紧张）。优化后移至
- * 外部 SRAM 空闲区（0x680A9A00，LVGL 绘制缓冲之后，344KB 空闲）。
+ * 外部 SRAM 空闲区（MEM_LA_PRETRIG_BASE，见 Config/mem_map.h 单一事实源）。
  * LA 为调试工具，时间戳模式为事件触发写入（非连续流），FSMC 写外部
  * SRAM 的延迟可接受；CCM 腾出 6KB 供 FreeRTOS 堆扩展。
  * （MPU 异常隔离测试确认与本迁移无关。） */
-#define PRE_TRIGGER_BUF_ADDR  0x680A9A00u
+#define PRE_TRIGGER_BUF_ADDR  MEM_LA_PRETRIG_BASE
 static LA_SamplePoint *pre_trigger_buf = (LA_SamplePoint *)PRE_TRIGGER_BUF_ADDR;
 static volatile uint32_t ts_overflow = 0;
 static volatile LA_SampleMode current_mode = LA_MODE_IDLE;
@@ -45,6 +45,9 @@ static uint8_t last_trigger_state = 0xFF;   /* 触发通道上一状态，用于
 
 /* --------------------- DMA 流模式相关 ---------------------
  * 引擎：TIM1 更新事件 -> DMA2_Stream5(Ch6) 将 LA_GPIO_PORT->IDR 整字搬入环形缓冲。
+ * 缓冲形态：单环形缓冲（记录最后 32768 点），非 ping-pong 双缓冲——
+ *   半/全传输回调仅计数，数据须停采后统一导出；DMA 模式不支持触发
+ *   （触发逻辑仅在时间戳模式）。命名/文档不得再称"双缓冲"。
  * TIM1 位于 APB2(168MHz)，采样率由 PSC/ARR 组合精确设定。
  * DMA1 无法访问 AHB1（GPIO），因此不能用 TIM3+DMA1 做此功能。 */
 #define LA_TIM_CLOCK_HZ  168000000UL

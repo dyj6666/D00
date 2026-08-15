@@ -1,4 +1,4 @@
-﻿/* ================================================================
+/* ================================================================
  * data_link —— HOSTLINK 串口协议链路（DMA 收发 + 双任务队列）
  *
  * 架构位置：APP 服务层；对上提供 DataLink_Send* 接口，对下挂 BSP UART
@@ -190,8 +190,9 @@ uint32_t DataLink_GetCmdLostCount(void)
  * @brief  发送一帧数据（帧头+payload，自动追加 CRC 后入 TX 队列）
  * @param  data  不含 CRC 的帧数据（帧头+payload）
  * @param  len   数据长度，不得小于帧头长度
- * @return 0=入队成功；-1=参数非法或超长
- * @note   队列满时丢帧并计数 g_tx_lost，调用方按需使用 Wait 版本
+ * @return 0=入队成功；-1=参数非法或超长；-2=队列满被丢弃（tx_lost 计数）
+ * @note   非阻塞版本；队列满丢帧必须显式区分，调用方不能误判为发送成功。
+ *         需要可靠投递时使用 Wait 版本。
  */
 int DataLink_SendPacket(const uint8_t *data, uint16_t len)
 {
@@ -206,6 +207,7 @@ int DataLink_SendPacket(const uint8_t *data, uint16_t len)
     frame.len = len + PROTOCOL_CRC_LEN;          /* 帧总长 = 数据 + 2B CRC */
     if (xQueueSend(tx_queue, &frame, 0) != pdTRUE) {
         g_tx_lost++;
+        return -2;   /* 显式丢弃语义：调用方可感知 */
     }
     return 0;
 }

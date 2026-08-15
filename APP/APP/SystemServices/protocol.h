@@ -28,6 +28,8 @@
 
 #define PROTOCOL_HEADER_LEN  5       /* SYNC1+SYNC2+CMD+payload_len */
 #define PROTOCOL_CRC_LEN     2
+/* 协议版本号（CMD_GET_INFO 返回）：与 OTA 固件版本（app_footer @0x080DFFFC，
+ * 单一事实源 config/version.json）是两个独立概念，互不影响。 */
 #define PROTOCOL_VERSION     1
 
 /* ---------------- 命令码 ---------------- */

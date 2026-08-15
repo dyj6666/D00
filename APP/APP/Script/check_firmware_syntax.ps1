@@ -1,4 +1,4 @@
-# 固件业务代码交叉编译语法冒烟测试（arm-none-eabi-gcc -fsyntax-only）
+﻿# 固件业务代码交叉编译语法冒烟测试（arm-none-eabi-gcc -fsyntax-only）
 # 用途：在没有 Keil 的 CI/本机环境快速发现语法与类型错误。
 $ErrorActionPreference = 'Stop'
 

@@ -22,7 +22,7 @@
 #define KEY0_Pin            GPIO_PIN_4
 #define KEY0_PRESSED_STATE  GPIO_PIN_RESET
 
-/* 触摸屏（XPT2046 电阻ʽ，̽索者V3 LCD 触摸接口） */
+/* 触摸屏（XPT2046 电阻屏，探索者V3 LCD 触摸接口） */
 #define TOUCH_CLK_GPIO_Port  GPIOB
 #define TOUCH_CLK_Pin        GPIO_PIN_0
 #define TOUCH_PEN_GPIO_Port  GPIOB
@@ -34,21 +34,21 @@
 #define TOUCH_MOSI_GPIO_Port GPIOF
 #define TOUCH_MOSI_Pin       GPIO_PIN_11
 
-/* 板载有Դ蜂鸣器（高电ƽ发声） */
+/* 板载有源蜂鸣器（高电平发声） */
 #define BEEP_GPIO_Port       GPIOF
 #define BEEP_Pin             GPIO_PIN_8
 
-/* 外接 MPU6050（I2C1 Ӳ件，400kHz） */
+/* 外接 MPU6050（I2C1 硬件，400kHz） */
 #define MPU6050_SCL_Port     GPIOB
 #define MPU6050_SCL_Pin      GPIO_PIN_6
 #define MPU6050_SDA_Port     GPIOB
 #define MPU6050_SDA_Pin      GPIO_PIN_7
 
-/* 串口资Դ规划（ETH 接入后）：
+/* 串口资源规划（ETH 接入后）：
  *   USART1 PA9/PA10  HOSTLINK
- *   USART3 PC10/PC11 调试/Shell（USART2 让λ给 ETH）
- *   UART5  PC12/PD2  摄像ͷ（Ԥ留）
- *   USART6 PC6/PC7   ESP32-S3（Ԥ留）
+ *   USART3 PC10/PC11 调试/Shell（USART2 让位给 ETH）
+ *   UART5  PC12/PD2  摄像头（预留）
+ *   USART6 PC6/PC7   ESP32-S3（预留）
  *   UART4  PA0/PA1   牺牲给 ETH */
 #define DBG_TX_Port         GPIOC
 #define DBG_TX_Pin          GPIO_PIN_10

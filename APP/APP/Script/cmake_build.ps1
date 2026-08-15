@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$Clean
 )
 # D00 APP CMake 快速增量构建（GCC + Ninja）

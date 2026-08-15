@@ -404,9 +404,6 @@ if(CMAKE_CROSSCOMPILING)
         BSP/LCD/lcd.c
         BSP/LCD/lcd_ex.c
         BSP/bsp_lcd.c
-        SystemServices/lcd_ui.c
-        Application/lcd_app.c
-        SystemServices/lcd_test.c
         SystemServices/touch_svc.c
         PROPERTIES COMPILE_FLAGS "-O1")
 

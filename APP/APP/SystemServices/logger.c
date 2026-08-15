@@ -25,6 +25,9 @@ static uint8_t tx_dma_buf[LOG_TX_DMA_CHUNK] __attribute__((aligned(4)));
 /* LoggerTX 任务句柄：ISR 中唤醒发送任务 */
 static TaskHandle_t logger_tx_handle = NULL;
 
+/* TX DMA 超时自愈计数（通知丢失/中止等，可经 sysmon 查询） */
+static volatile uint32_t s_tx_err = 0;
+
 /** @brief TX DMA 完成中断：唤醒发送任务继续搬运下一块 */
 static void logger_tx_isr(bsp_uart_id_t id, void *ctx)
 {
@@ -112,7 +115,12 @@ void LoggerTXTaskFunction(void)
         len = xStreamBufferReceive(global_tx_stream, tx_dma_buf, sizeof(tx_dma_buf), portMAX_DELAY);
         if (len > 0) {
             if (BSP_UART_TransmitDMA(BSP_UART_DBG, tx_dma_buf, len) == 0) {
-                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                /* 与 data_link 一致的超时自愈：通知丢失/中止不再永久挂起 */
+                if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2000)) == 0) {
+                    BSP_UART_AbortTransmit(BSP_UART_DBG);
+                    ulTaskNotifyTake(pdTRUE, 0);   /* 清除竞态残留通知 */
+                    s_tx_err++;
+                }
             }
         }
     }
@@ -121,4 +129,9 @@ void LoggerTXTaskFunction(void)
 StreamBufferHandle_t LOG_GetRxStream(void)
 {
     return global_rx_stream;
+}
+
+uint32_t LOG_GetTxErrCount(void)
+{
+    return s_tx_err;
 }

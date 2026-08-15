@@ -18,6 +18,9 @@
 #include "bsp_w25q128.h"
 #include "logger.h"
 
+#include "FreeRTOS.h"
+#include "semphr.h"
+
 #include <string.h>
 
 /* ---------------- 常量 ---------------- */
@@ -60,6 +63,26 @@ static uint8_t s_ready;           /* Init 成功标志 */
 static uint8_t s_safe_frame[512 + EXT_SAFE_HEADER];
 static uint8_t s_safe_check[512 + EXT_SAFE_HEADER];
 
+/* 业务序列互斥：WriteSafe/ReadSafe/坏区表更新均为多步序列 +
+ * 共享静态缓冲，并发会互相踩踏。递归互斥允许 API 内嵌套
+ * （如 WriteSafe 失败时调用 MarkBad 标记坏区）。 */
+static SemaphoreHandle_t s_mutex;
+#define EXT_LOCK_TIMEOUT_MS   5000u
+
+static bool ext_lock(void)
+{
+    if (s_mutex == NULL) {
+        return false;
+    }
+    return xSemaphoreTakeRecursive(s_mutex,
+                                   pdMS_TO_TICKS(EXT_LOCK_TIMEOUT_MS)) == pdTRUE;
+}
+
+static void ext_unlock(void)
+{
+    (void)xSemaphoreGiveRecursive(s_mutex);
+}
+
 /* ---------------- CRC32（标准 0xEDB88320） ---------------- */
 static uint32_t ext_crc32(const uint8_t *data, uint32_t len)
 {
@@ -73,9 +96,20 @@ static uint32_t ext_crc32(const uint8_t *data, uint32_t len)
     return crc;
 }
 
+/* 掉电安全帧结构（前置声明供锁内函数原型使用） */
+typedef struct {
+    uint32_t magic;
+    uint16_t len;
+    uint16_t ver;
+    uint8_t  data[];              /* 数据 + 4B CRC32 尾部 */
+} ext_safe_frame_t;
+
+static int ext_writesafe_locked(ext_part_id_t id, uint32_t phys,
+                                uint32_t stride, const void *data, uint32_t len);
+static int ext_erase_range_locked(ext_part_id_t id, uint32_t off, uint32_t len);
+
 /* ---------------- BSP 错误码映射 ---------------- */
-static int ext_map_err(int rc)
-{
+static int ext_map_err(int rc){
     switch (rc) {
     case BSP_W25Q_OK:          return EXT_STORE_OK;
     case BSP_W25Q_ERR_PARAM:   return EXT_STORE_ERR_PARAM;
@@ -171,9 +205,14 @@ void ExtStore_MarkBad(ext_part_id_t id, uint32_t off)
     if (off >= p->size) {
         return;
     }
+    if (!ext_lock()) {
+        LOG_Printf("[EXT] MarkBad lock timeout\r\n");
+        return;
+    }
     uint32_t sector = (p->base + off) / EXT_SECTOR;
     ext_bad_map_t map;
     if (bad_map_read(&map) != EXT_STORE_OK) {
+        ext_unlock();
         return;
     }
     map.bitmap[sector >> 5] |= (1u << (sector & 31u));
@@ -182,6 +221,7 @@ void ExtStore_MarkBad(ext_part_id_t id, uint32_t off)
                    p->name, (unsigned long)off,
                    (unsigned long)sector);
     }
+    ext_unlock();
 }
 
 void ExtStore_BadMapClear(void)
@@ -189,17 +229,25 @@ void ExtStore_BadMapClear(void)
     if (s_ready == 0u) {
         return;
     }
+    if (!ext_lock()) {
+        LOG_Printf("[EXT] BadMapClear lock timeout\r\n");
+        return;
+    }
     /* 擦坏区表双份扇区（恢复全好） */
     for (int copy = 0; copy < 2; copy++) {
         uint32_t base = (copy == 0) ? EXT_META_BAD_A : EXT_META_BAD_B;
         (void)BSP_W25Q128_EraseSector(s_parts[EXT_PART_META].base + base);
     }
+    ext_unlock();
     LOG_Printf("[EXT] bad map cleared\r\n");
 }
 
 /* ---------------- 生命周期 ---------------- */
 void ExtStore_Init(void)
 {
+    if (s_mutex == NULL) {
+        s_mutex = xSemaphoreCreateRecursiveMutex();
+    }
     int rc = ExtStore_Probe();
     if (rc == EXT_STORE_OK) {
         s_ready = 1u;
@@ -244,6 +292,17 @@ int ExtStore_EraseRange(ext_part_id_t id, uint32_t off, uint32_t len)
     if ((s_parts[id].flags & EXT_PART_F_WRITABLE) == 0u) {
         return EXT_STORE_ERR_RO;
     }
+    /* 多步擦除序列：持锁防并发（内部 MarkBad/IsBad 递归可重入） */
+    if (!ext_lock()) {
+        return EXT_STORE_ERR_BUSY;
+    }
+    rc = ext_erase_range_locked(id, off, len);
+    ext_unlock();
+    return rc;
+}
+
+static int ext_erase_range_locked(ext_part_id_t id, uint32_t off, uint32_t len)
+{
     const ext_part_desc_t *p = &s_parts[id];
     uint32_t end = off + len;
     uint32_t pos = off;
@@ -311,23 +370,22 @@ int ExtStore_Write(ext_part_id_t id, uint32_t off, const void *data, uint32_t le
     if ((s_parts[id].flags & EXT_PART_F_WRITABLE) == 0u) {
         return EXT_STORE_ERR_RO;
     }
-    /* 写入前检查目标扇区坏标记（坏区不写） */
+    if (!ext_lock()) {
+        return EXT_STORE_ERR_BUSY;
+    }
+    /* 写入前检查目标扇区坏标记（坏区不写）；持锁保证 check-then-act 原子 */
     for (uint32_t o = off; o < off + len; o += EXT_SECTOR) {
         if (ExtStore_IsBad(id, o)) {
+            ext_unlock();
             return EXT_STORE_ERR_BAD;
         }
     }
-    return ext_map_err(BSP_W25Q128_Write(s_parts[id].base + off, data, len));
+    rc = ext_map_err(BSP_W25Q128_Write(s_parts[id].base + off, data, len));
+    ext_unlock();
+    return rc;
 }
 
 /* ---------------- 掉电安全双份读写 ---------------- */
-typedef struct {
-    uint32_t magic;
-    uint16_t len;
-    uint16_t ver;
-    uint8_t  data[];              /* 数据 + 4B CRC32 尾部 */
-} ext_safe_frame_t;
-
 int ExtStore_WriteSafe(ext_part_id_t id, uint32_t slot, uint32_t stride,
                        const void *data, uint32_t len)
 {
@@ -346,7 +404,19 @@ int ExtStore_WriteSafe(ext_part_id_t id, uint32_t slot, uint32_t stride,
     if ((s_parts[id].flags & EXT_PART_F_WRITABLE) == 0u) {
         return EXT_STORE_ERR_RO;
     }
+    /* 多步序列 + 共享帧缓冲：全程持锁（递归互斥，内部 MarkBad 可重入） */
+    if (!ext_lock()) {
+        return EXT_STORE_ERR_BUSY;
+    }
+    rc = ext_writesafe_locked(id, phys, stride, data, len);
+    ext_unlock();
+    return rc;
+}
 
+/* WriteSafe 锁内主体（调用方已持递归互斥） */
+static int ext_writesafe_locked(ext_part_id_t id, uint32_t phys,
+                                uint32_t stride, const void *data, uint32_t len)
+{
     /* 构造帧（静态缓冲；大帧业务自行分块） */
     uint8_t *frame = s_safe_frame;
     if (len > 512u) {
@@ -405,10 +475,14 @@ int ExtStore_ReadSafe(ext_part_id_t id, uint32_t slot, uint32_t stride,
     if (buf == NULL || len == 0u || len > 0xFFFEu) {
         return EXT_STORE_ERR_PARAM;
     }
-    uint8_t *frame = s_safe_frame;
     if (len > 512u) {
         return EXT_STORE_ERR_PARAM;
     }
+    /* 共享帧缓冲：与 WriteSafe 互斥（避免读一半被覆盖） */
+    if (!ext_lock()) {
+        return EXT_STORE_ERR_BUSY;
+    }
+    uint8_t *frame = s_safe_frame;
     const uint32_t base = s_parts[id].base + phys;
     /* 主有效取主，否则取副 */
     for (int copy = 0; copy < 2; copy++) {
@@ -428,8 +502,10 @@ int ExtStore_ReadSafe(ext_part_id_t id, uint32_t slot, uint32_t stride,
             if (out_ver != NULL) {
                 *out_ver = f->ver;
             }
+            ext_unlock();
             return EXT_STORE_OK;
         }
     }
+    ext_unlock();
     return EXT_STORE_ERR_CRC;
 }

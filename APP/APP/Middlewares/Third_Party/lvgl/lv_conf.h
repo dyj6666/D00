@@ -63,7 +63,7 @@
     #define LV_MEM_SIZE    (128U * 1024U)        /*[bytes]*/
 
     /*Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too.*/
-    #define LV_MEM_ADR     0x68080000             /* ?? SRAM???B? */
+    #define LV_MEM_ADR     0x68080000             /* 外部 SRAM 128KB 池（与 Ports/lv_port_disp.c 绘制缓冲 0x680A0000 相邻，扩容前核对边界） */
     /*Instead of an address give a memory allocator that will be called to get a memory pool for LVGL. E.g. my_malloc*/
     #if LV_MEM_ADR == 0
         #undef LV_MEM_POOL_INCLUDE

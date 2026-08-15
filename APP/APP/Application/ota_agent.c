@@ -1,4 +1,4 @@
-﻿/* ================================================================
+/* ================================================================
  * ota_agent —— 运行时 OTA：下载到外部 Flash ota_dl 槽 + 启动确认
  *
  * 架构位置：APP 应用层；供 data_link / cmd_shell / OtaTcp / OtaHttp 调用
@@ -57,12 +57,15 @@ static uint32_t ota_begin_version = 0; /* 本次会话版本（会话槽持久�
 static SemaphoreHandle_t s_ota_mutex = NULL;  /* 传输互斥：防 UART/TCP/HTTP 并发操作 */
 
 /* 并发保护：任何传输（UART CmdTask / TCP 任务 / HTTP shell）调用 Ota_*
- * 前必须取得互斥锁，防止两个传输同时通过状态检查导致下载区竞争。 */
-static void ota_mutex_take(void)
+ * 前必须取得互斥锁，防止两个传输同时通过状态检查导致下载区竞争。
+ * 取锁失败返回 false（另一传输持有或异常），调用方必须放弃操作并报错，
+ * 严禁"超时仍进临界区"的既往行为。 */
+static bool ota_mutex_take(void)
 {
-    if (s_ota_mutex != NULL) {
-        (void)xSemaphoreTake(s_ota_mutex, pdMS_TO_TICKS(200u));
+    if (s_ota_mutex == NULL) {
+        return false;
     }
+    return xSemaphoreTake(s_ota_mutex, pdMS_TO_TICKS(200u)) == pdTRUE;
 }
 
 static void ota_mutex_give(void)
@@ -220,12 +223,15 @@ static void ota_confirm_startup(void)
  * @brief  开始一次 OTA 下载会话
  * @param  version  固件版本号（低于当前版本会被拒绝）
  * @param  size     固件包总长
- * @return 0=成功；1=已在接收中；2=长度非法；3=擦除失败；4=版本降级拒绝
+ * @return 0=成功；1=已在接收中；2=长度非法；3=擦除失败；4=版本降级拒绝；5=并发忙
  * @note   存在同版本同大小的部分会话时自动续传（不擦下载区）
  */
 uint8_t Ota_Begin(uint32_t version, uint32_t size)
 {
-    ota_mutex_take();
+    if (!ota_mutex_take()) {
+        LOG_Printf("OTA: busy (concurrent transfer)\r\n");
+        return 5;
+    }
     if (ota_state == OTA_ST_RECEIVING) {
         ota_mutex_give();
         Buzzer_OtaFail();
@@ -294,7 +300,10 @@ uint8_t Ota_Begin(uint32_t version, uint32_t size)
  */
 uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
 {
-    ota_mutex_take();
+    if (!ota_mutex_take()) {
+        LOG_Printf("OTA: busy (concurrent transfer)\r\n");
+        return 4;
+    }
     if (ota_state != OTA_ST_RECEIVING) {
         ota_mutex_give();
         return 1;
@@ -307,11 +316,11 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
         return 2;
     }
     if (ExtStore_Write(EXT_PART_OTA_DL, offset, data, len) != EXT_STORE_OK) {
+        /* 读回探测实际写入内容（诊断用，不再打印伪造的 SR 常量） */
         uint32_t probe = 0u;
         (void)ExtStore_Read(EXT_PART_OTA_DL, offset, &probe, sizeof(probe));
-        LOG_Printf("OTA: flash write FAILED at %lu probe=0x%08X SR=0x%08X\r\n",
-                   (unsigned long)offset, (unsigned)probe,
-                   (unsigned)0u);
+        LOG_Printf("OTA: flash write FAILED at %lu probe=0x%08X\r\n",
+                   (unsigned long)offset, (unsigned)probe);
         ota_state = OTA_ST_IDLE;
         ota_mutex_give();
         Buzzer_OtaFail();
@@ -333,12 +342,15 @@ uint8_t Ota_Data(uint32_t offset, const uint8_t *data, uint16_t len)
 
 /**
  * @brief  结束下载：校验收齐后写升级标志并复位进 BOOT
- * @return 0=成功（随后复位，不会返回）；1=非接收态；2=固件不完整
+ * @return 0=成功（随后复位，不会返回）；1=非接收态；2=固件不完整；3=并发忙
  * @note   采用参数区 UPGRADE 状态 + BKP 标志双保险触发
  */
 uint8_t Ota_End(void)
 {
-    ota_mutex_take();
+    if (!ota_mutex_take()) {
+        LOG_Printf("OTA: busy (concurrent transfer)\r\n");
+        return 3;
+    }
     if (ota_state != OTA_ST_RECEIVING) {
         ota_mutex_give();
         return 1;
@@ -387,7 +399,9 @@ uint8_t Ota_End(void)
 /** @brief 读取当前 OTA 状态与进度（供 status 命令/续传客户端使用） */
 uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total)
 {
-    ota_mutex_take();
+    if (!ota_mutex_take()) {
+        return 1;   /* 并发忙 */
+    }
     *state = ota_state;
     *received = ota_received;
     *total = ota_total;
@@ -398,7 +412,10 @@ uint8_t Ota_Status(uint8_t *state, uint32_t *received, uint32_t *total)
 /** @brief 强制回到 IDLE 并清空全部会话槽（配合 --no-resume 从零开始） */
 uint8_t Ota_Reset(void)
 {
-    ota_mutex_take();
+    if (!ota_mutex_take()) {
+        LOG_Printf("OTA: busy (concurrent transfer)\r\n");
+        return 1;
+    }
     ota_state = OTA_ST_IDLE;
     ota_received = 0;
     ota_total = 0;
@@ -411,7 +428,10 @@ uint8_t Ota_Reset(void)
 /** @brief 危险自测：把参数区置为 PENDING+MAX，下次复位触发 BOOT 回滚 */
 void Ota_ForceRollbackTest(void)
 {
-    ota_mutex_take();
+    if (!ota_mutex_take()) {
+        LOG_Printf("OTA: busy, rollback test skipped\r\n");
+        return;
+    }
     ota_param_t param;
     memcpy(&param, (const void *)OTA_PARAM_ADDR, sizeof(param));
     if (param.magic != OTA_PARAM_MAGIC || param.crc32 != ota_param_crc(&param)) {
