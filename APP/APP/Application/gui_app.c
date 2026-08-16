@@ -22,6 +22,8 @@
 #include "task.h"
 #include "cmsis_os2.h"
 #include "logger.h"
+#include "event_bus.h"
+#include "msg_types.h"
 #include "stm32f4xx.h"   /* DWT 周期计数器 */
 
 #include <string.h>
@@ -38,7 +40,26 @@
 static volatile uint8_t s_bench_request;
 static void gui_bench_run(void);
 
-/* ---------------- 渲染任务：LVGL 周期驱动 + 1s 数据刷新 ---------------- */
+/* ---------------- 按键 → 页面导航 ----------------
+ * KEY0 短按：翻页（HOME→NET→SYS→HOME）；长按：回主页。
+ * 事件总线回调运行在 eventBusTask 上下文（优先级高于 GUI 任务），
+ * LVGL API 非线程安全，回调只置标志，实际切换由 GUI 任务消费执行。 */
+static volatile uint8_t s_key_page_next;
+static volatile uint8_t s_key_home;
+
+static void gui_on_key_event(const message_t *msg)
+{
+    if (msg == NULL) {
+        return;
+    }
+    if (msg->hdr.type == MSG_KEY_SHORT) {
+        s_key_page_next = 1;
+    } else if (msg->hdr.type == MSG_KEY_LONG) {
+        s_key_home = 1;
+    }
+}
+
+/* ---------------- 渲染任务：LVGL 周期驱动 + 250ms 三相轮转刷新 ---------------- */
 static void gui_task(void *arg)
 {
     (void)arg;
@@ -46,15 +67,26 @@ static void gui_task(void *arg)
     uint32_t last = 0;
     for (;;) {
         lv_timer_handler();
+        /* 按键导航（事件总线回调置位，本任务上下文串行消费）：
+         * 短按翻页、长按回主页——与触摸导航栏等效 */
+        if (s_key_page_next) {
+            s_key_page_next = 0;
+            GuiPages_PageNext();
+        }
+        if (s_key_home) {
+            s_key_home = 0;
+            GuiPages_ShowHome();
+        }
         /* 性能基准请求（命令上下文置位，本任务上下文串行执行） */
         if (s_bench_request) {
             s_bench_request = 0;
             gui_bench_run();
         }
-        /* 1s 节拍：采集外设数据并刷新三页控件 */
-        if (lv_tick_get() - last >= 1000u) {
+        /* 250ms 三相轮转刷新（采集/曲线/文本分片，彻底错峰——避免所有
+         * 控件同帧爆发重绘；数据粒度 250ms 使数值更新更平滑） */
+        if (lv_tick_get() - last >= 250u) {
             last = lv_tick_get();
-            GuiPages_Refresh();
+            GuiPages_RefreshFast();
         }
         vTaskDelay(pdMS_TO_TICKS(GUI_PERIOD_MS));
     }
@@ -323,6 +355,11 @@ void GuiApp_Init(void)
     lv_init();          /* LVGL 核心（堆位于外部 SRAM） */
     LvPort_Init();      /* 显示 + 触摸端口 */
     GuiPages_Init();    /* 构建三页面并加载主页 */
+
+    /* 按键 → 页面导航：短按翻页 / 长按回主页（LED/蜂鸣器已有各自订阅，
+     * 事件总线为广播语义，多订阅互不冲突） */
+    EventBus_Subscribe(MSG_KEY_SHORT, gui_on_key_event);
+    EventBus_Subscribe(MSG_KEY_LONG, gui_on_key_event);
 
     osThreadAttr_t attr = {
         .name       = "GuiApp",

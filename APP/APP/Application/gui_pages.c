@@ -131,14 +131,18 @@ static void gui_cpu_sample(void)
     uint32_t total = 0;
     uint32_t n = uxTaskGetSystemState(s_cpu_snap, GUI_CPU_SNAP_MAX, &total);
     uint32_t idle = 0;
+    uint8_t idle_found = 0;
     for (uint32_t i = 0; i < n; i++) {
         /* 空闲任务名固定 "IDLE"（FreeRTOS 默认） */
         if (strcmp(s_cpu_snap[i].pcTaskName, "IDLE") == 0) {
             idle = s_cpu_snap[i].ulRunTimeCounter;
+            idle_found = 1u;
             break;
         }
     }
-    if (s_cpu_ready && total > s_cpu_total_prev) {
+    /* 差分窗口：cpu% = 100 - idle_delta/total_delta。
+     * IDLE 未找到（任务表溢出）或首窗无基线时置 0（防御，不误报 100%）。 */
+    if (s_cpu_ready && idle_found && total > s_cpu_total_prev) {
         uint32_t dt = total - s_cpu_total_prev;
         uint32_t di = idle - s_cpu_idle_prev;
         s_data.cpu_percent = (dt > 0u) ? (100u - di * 100u / dt) : 0u;
@@ -146,7 +150,7 @@ static void gui_cpu_sample(void)
             s_data.cpu_percent = 100u;   /* 首窗差分异常时钳位 */
         }
     } else {
-        s_data.cpu_percent = 0u;         /* 首窗无基线，显示 0 */
+        s_data.cpu_percent = 0u;
     }
     s_cpu_total_prev = total;
     s_cpu_idle_prev = idle;
@@ -156,7 +160,7 @@ static void gui_cpu_sample(void)
 /* ---------------- 探测节流计数 ---------------- */
 static uint32_t s_probe_cnt;
 
-/* ---------------- 数据采集（1s 一次，页面刷新只读快照） ---------------- */
+/* ---------------- 数据采集（250ms 三相轮转的相 0 执行，只读快照） ---------------- */
 static void gui_data_collect(void)
 {
     /* ETH：先同步链路/IP/时长，再拷贝快照；帧率用 1s 差分 */
@@ -171,8 +175,9 @@ static void gui_data_collect(void)
     s_data.eth_tx = es->tx_packets;
     s_data.eth_uptime_s = es->link_uptime_s;
     s_data.eth_dhcp_on = EthApp_DhcpActive();
-    s_data.eth_rx_rate = s_data.eth_rx - rx_prev;
-    s_data.eth_tx_rate = s_data.eth_tx - tx_prev;
+    /* 采集粒度 250ms：差分 × 4 折算为帧/s（曲线 Y 轴单位） */
+    s_data.eth_rx_rate = (s_data.eth_rx - rx_prev) * 4u;
+    s_data.eth_tx_rate = (s_data.eth_tx - tx_prev) * 4u;
 
     /* ICMP */
     const icmp_svc_stat_t *is = IcmpSvc_GetStat();
@@ -360,6 +365,9 @@ static void page_home_build(void)
     s_scr_home = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_home, GUI_COL_BG, 0);
     lv_obj_set_style_bg_opa(s_scr_home, LV_OPA_COVER, 0);
+    /* 禁滚动：内容在导航栏(288)之内，超屏宁可裁剪——滚动拖动 = 大面积
+     * 重绘 = 卡顿（见 13.4） */
+    lv_obj_clear_flag(s_scr_home, LV_OBJ_FLAG_SCROLLABLE);
 
     GuiTheme_TitleBar(s_scr_home, "D00 Platform", NULL);
     s_h_sub = GuiTheme_Label(s_scr_home, "--:--:--",
@@ -389,7 +397,11 @@ static void page_home_build(void)
     nav_build(s_scr_home);
 }
 
-static void page_home_refresh(void)
+/* ---------------- 主页分片刷新（250ms 轮转相，彻底错峰） ----------------
+ * 原整页 1s 全刷：10+ label 同帧重绘造成可感知顿挫；拆成
+ * top(摘要+时钟) / cards0-2 / cards3-5 三片，每 250ms 一片，
+ * 每片仅 3-4 个控件变化（LVGL 相同文本自动跳过重绘），刷新帧轻量。 */
+static void page_home_refresh_top(void)
 {
     /* 摘要条 */
     lv_label_set_text_fmt(s_h_sum[0], LV_SYMBOL_BARS " CPU %lu%%",
@@ -404,41 +416,58 @@ static void page_home_refresh(void)
                           (unsigned long)((up % 3600u) / 60u),
                           (unsigned long)(up % 60u));
 
-    /* 时钟（标题栏副文本） */
+    /* 时钟（标题栏副文本）：RTC 有效显示真实时间，否则降级 uptime——
+     * 保证时钟始终在走（无 RTC 电池/未 SNTP 同步时界面不"死"） */
     if (s_data.rtc_valid) {
         lv_label_set_text_fmt(s_h_sub, "%02u:%02u:%02u",
                               (unsigned)s_data.rtc_h,
                               (unsigned)s_data.rtc_m,
                               (unsigned)s_data.rtc_s);
-    }
-
-    /* 外设卡片 */
-    if (s_data.eth_link) {
-        card_set(0, GUI_STATE_OK, "%u.%u.%u.%u",
-                 s_data.eth_ip[0], s_data.eth_ip[1],
-                 s_data.eth_ip[2], s_data.eth_ip[3]);
     } else {
-        card_set(0, GUI_STATE_ERR, "link down");
+        uint32_t up = s_data.uptime_s;
+        lv_label_set_text_fmt(s_h_sub, "%02lu:%02lu:%02lu",
+                              (unsigned long)(up / 3600u),
+                              (unsigned long)((up % 3600u) / 60u),
+                              (unsigned long)(up % 60u));
+    }
+}
+
+/* 外设卡片分片：seg=0 → 卡片 0-2，seg=1 → 卡片 3-5 */
+static void page_home_refresh_cards(uint8_t seg)
+{
+    if (seg == 0) {
+        /* ETHERNET */
+        if (s_data.eth_link) {
+            card_set(0, GUI_STATE_OK, "%u.%u.%u.%u",
+                     s_data.eth_ip[0], s_data.eth_ip[1],
+                     s_data.eth_ip[2], s_data.eth_ip[3]);
+        } else {
+            card_set(0, GUI_STATE_ERR, "link down");
+        }
+
+        /* CAN */
+        if (s_data.can_active) {
+            card_set(1, (s_data.can_err == 0u) ? GUI_STATE_OK : GUI_STATE_WARN,
+                     "tx%lu rx%lu", (unsigned long)s_data.can_tx,
+                     (unsigned long)s_data.can_rx);
+        } else {
+            card_set(1, GUI_STATE_ERR, "offline");
+        }
+
+        /* IMU */
+        if (s_data.imu_ready) {
+            char r[16], p[16];
+            ImuSvc_FormatFixed(s_data.imu_roll, 1, r);
+            ImuSvc_FormatFixed(s_data.imu_pitch, 1, p);
+            card_set(2, (s_data.imu_fault == 0u) ? GUI_STATE_OK : GUI_STATE_WARN,
+                     "R%s P%s", r, p);
+        } else {
+            card_set(2, GUI_STATE_ERR, "offline");
+        }
+        return;
     }
 
-    if (s_data.can_active) {
-        card_set(1, (s_data.can_err == 0u) ? GUI_STATE_OK : GUI_STATE_WARN,
-                 "tx%lu rx%lu", (unsigned long)s_data.can_tx,
-                 (unsigned long)s_data.can_rx);
-    } else {
-        card_set(1, GUI_STATE_ERR, "offline");
-    }
-
-    if (s_data.imu_ready) {
-        char r[16], p[16];
-        ImuSvc_FormatFixed(s_data.imu_roll, 1, r);
-        ImuSvc_FormatFixed(s_data.imu_pitch, 1, p);
-        card_set(2, (s_data.imu_fault == 0u) ? GUI_STATE_OK : GUI_STATE_WARN,
-                 "R%s P%s", r, p);
-    } else {
-        card_set(2, GUI_STATE_ERR, "offline");
-    }
-
+    /* TOUCH */
     if (s_data.touch_state == TOUCH_EVT_DOWN ||
         s_data.touch_state == TOUCH_EVT_MOVE) {
         card_set(3, GUI_STATE_OK, "%u,%u",
@@ -447,6 +476,7 @@ static void page_home_refresh(void)
         card_set(3, GUI_STATE_OK, "ready");
     }
 
+    /* FLASH */
     if (s_data.w25q_ok) {
         card_set(4, GUI_STATE_OK, "16MB");
     } else {
@@ -471,11 +501,14 @@ static void page_net_build(void)
     s_scr_net = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_net, GUI_COL_BG, 0);
     lv_obj_set_style_bg_opa(s_scr_net, LV_OPA_COVER, 0);
+    /* 禁滚动：内容压缩在导航栏(288)之内，任何超屏内容宁可裁剪也不进入
+     * 滚动模式——滚动拖动 = 大面积重绘 = 卡顿（实测来源，见 13.4） */
+    lv_obj_clear_flag(s_scr_net, LV_OBJ_FLAG_SCROLLABLE);
 
     GuiTheme_TitleBar(s_scr_net, "Network", "monitor");
 
     /* 链路信息卡 */
-    lv_obj_t *link = GuiTheme_Card(s_scr_net, 224, 62);
+    lv_obj_t *link = GuiTheme_Card(s_scr_net, 224, 54);
     lv_obj_set_pos(link, 8, 32);
 
     lv_obj_t *lk = GuiTheme_Label(link, "LINK", &lv_font_montserrat_12,
@@ -498,15 +531,15 @@ static void page_net_build(void)
     lv_obj_align(s_n_dhcp, LV_ALIGN_TOP_RIGHT, -10, 40);
 
     /* 吞吐曲线卡 */
-    lv_obj_t *ch = GuiTheme_Card(s_scr_net, 224, 92);
-    lv_obj_set_pos(ch, 8, 102);
+    lv_obj_t *ch = GuiTheme_Card(s_scr_net, 224, 80);
+    lv_obj_set_pos(ch, 8, 92);
     lv_obj_t *ct = GuiTheme_Label(ch, "RATE  (pkts/s)", &lv_font_montserrat_12,
                                   GUI_COL_TEXT_DIM);
     lv_obj_set_pos(ct, 10, 4);
 
     s_n_chart = lv_chart_create(ch);
-    lv_obj_set_size(s_n_chart, 208, 58);
-    lv_obj_set_pos(s_n_chart, 8, 22);
+    lv_obj_set_size(s_n_chart, 208, 52);
+    lv_obj_set_pos(s_n_chart, 8, 20);
     lv_obj_remove_style_all(s_n_chart);
     lv_obj_set_style_bg_color(s_n_chart, GUI_COL_BG, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(s_n_chart, LV_OPA_COVER, LV_PART_MAIN);
@@ -531,25 +564,47 @@ static void page_net_build(void)
     s_n_ser_tx = lv_chart_add_series(s_n_chart, GUI_COL_ACCENT,
                                      LV_CHART_AXIS_PRIMARY_Y);
 
-    /* 统计网格 2×4 */
+    /* 统计网格 2×4（压缩：导航栏 288 以上，杜绝超屏滚动） */
     static const char *stat_names[8] = {
         "RX pkts", "TX pkts", "ICMP rx", "ICMP tx",
         "RTT min", "RTT avg", "RTT max", "ICMP pps",
     };
     for (uint32_t i = 0; i < 8u; i++) {
-        lv_obj_t *c = GuiTheme_Card(s_scr_net, 108, 28);
+        lv_obj_t *c = GuiTheme_Card(s_scr_net, 108, 24);
         lv_obj_set_pos(c, (lv_coord_t)(8 + (i % 2u) * 116),
-                       (lv_coord_t)(202 + (i / 2u) * 32));
+                       (lv_coord_t)(178 + (i / 2u) * 26));
         GuiTheme_Label(c, stat_names[i], &lv_font_montserrat_12,
                        GUI_COL_TEXT_DIM);
         lv_obj_align(lv_obj_get_child(c, lv_obj_get_child_cnt(c) - 1u),
-                     LV_ALIGN_TOP_LEFT, 10, 2);
+                     LV_ALIGN_TOP_LEFT, 10, 1);
         s_n_stat[i] = GuiTheme_Label(c, "--", &lv_font_montserrat_14,
                                      GUI_COL_TEXT);
-        lv_obj_align(s_n_stat[i], LV_ALIGN_TOP_RIGHT, -10, 2);
+        lv_obj_align(s_n_stat[i], LV_ALIGN_TOP_RIGHT, -10, 1);
     }
 
     nav_build(s_scr_net);
+}
+
+/* 吞吐曲线追加（0.5s 节拍执行，与文本刷新错峰——避免每帧同时重绘
+ * 大区域 chart 与多个 label 造成顿挫） */
+static void page_net_curve(void)
+{
+    if (s_n_chart == NULL) {
+        return;
+    }
+    /* SHIFT 模式：追加一点自动滚动 */
+    lv_chart_set_next_value(s_n_chart, s_n_ser_rx,
+                            (lv_coord_t)s_data.eth_rx_rate);
+    lv_chart_set_next_value(s_n_chart, s_n_ser_tx,
+                            (lv_coord_t)s_data.eth_tx_rate);
+    /* Y 轴自适应上限（200 起步，按峰值翻倍扩张，曲线不削顶） */
+    uint32_t hi = (s_data.eth_rx_rate > s_data.eth_tx_rate)
+                      ? s_data.eth_rx_rate : s_data.eth_tx_rate;
+    if (hi > (uint32_t)s_chart_ymax && s_chart_ymax < 20000) {
+        s_chart_ymax = (lv_coord_t)((uint32_t)s_chart_ymax * 2u);
+        lv_chart_set_range(s_n_chart, LV_CHART_AXIS_PRIMARY_Y, 0,
+                           s_chart_ymax);
+    }
 }
 
 static void page_net_refresh(void)
@@ -575,19 +630,7 @@ static void page_net_refresh(void)
     }
     lv_label_set_text(s_n_dhcp, s_data.eth_dhcp_on ? "DHCP on" : "DHCP off");
 
-    /* 吞吐曲线（SHIFT 模式：追加一点自动滚动） */
-    lv_chart_set_next_value(s_n_chart, s_n_ser_rx,
-                            (lv_coord_t)s_data.eth_rx_rate);
-    lv_chart_set_next_value(s_n_chart, s_n_ser_tx,
-                            (lv_coord_t)s_data.eth_tx_rate);
-    /* Y 轴自适应上限（200 起步，按峰值翻倍扩张，曲线不削顶） */
-    uint32_t hi = (s_data.eth_rx_rate > s_data.eth_tx_rate)
-                      ? s_data.eth_rx_rate : s_data.eth_tx_rate;
-    if (hi > (uint32_t)s_chart_ymax && s_chart_ymax < 20000) {
-        s_chart_ymax = (lv_coord_t)((uint32_t)s_chart_ymax * 2u);
-        lv_chart_set_range(s_n_chart, LV_CHART_AXIS_PRIMARY_Y, 0,
-                           s_chart_ymax);
-    }
+    /* 吞吐曲线由 0.5s 节拍 page_net_curve 追加（错峰，见上） */
 
     /* 统计 */
     lv_label_set_text_fmt(s_n_stat[0], "%lu", (unsigned long)s_data.eth_rx);
@@ -608,6 +651,8 @@ static void page_sys_build(void)
     s_scr_sys = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr_sys, GUI_COL_BG, 0);
     lv_obj_set_style_bg_opa(s_scr_sys, LV_OPA_COVER, 0);
+    /* 禁滚动（见 13.4：滚动拖动 = 大面积重绘卡顿） */
+    lv_obj_clear_flag(s_scr_sys, LV_OBJ_FLAG_SCROLLABLE);
 
     GuiTheme_TitleBar(s_scr_sys, "System", "monitor");
 
@@ -660,6 +705,7 @@ static void page_sys_build(void)
     lv_obj_set_style_radius(s_s_heap_bar, 5, LV_PART_INDICATOR);
     lv_bar_set_range(s_s_heap_bar, 0, 100);
     lv_bar_set_value(s_s_heap_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_anim_time(s_s_heap_bar, 250, 0);  /* 堆条平滑过渡时长 */
     s_s_heap_txt = GuiTheme_Label(heap_c, "--", &lv_font_montserrat_12,
                                   GUI_COL_TEXT);
     lv_obj_align(s_s_heap_txt, LV_ALIGN_BOTTOM_MID, 0, -8);
@@ -676,6 +722,30 @@ static void page_sys_build(void)
     nav_build(s_scr_sys);
 }
 
+/* ---------------- CPU 环平滑动画：值从当前渐变到新值（200ms ease-out） ----------------
+ * 直接 lv_arc_set_value 每秒跳变（视觉顿挫）；动画过渡后环形表丝滑跟随 */
+static void cpu_arc_anim_cb(void *var, int32_t v)
+{
+    lv_arc_set_value((lv_obj_t *)var, (lv_coord_t)v);
+}
+
+static void page_sys_set_cpu(uint32_t pct)
+{
+    if (s_s_cpu_arc == NULL || s_s_cpu_pct == NULL) {
+        return;
+    }
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_s_cpu_arc);
+    lv_anim_set_exec_cb(&a, cpu_arc_anim_cb);
+    lv_anim_set_values(&a, (int32_t)lv_arc_get_value(s_s_cpu_arc),
+                       (int32_t)pct);
+    lv_anim_set_time(&a, 250);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+    lv_label_set_text_fmt(s_s_cpu_pct, "%lu%%", (unsigned long)pct);
+}
+
 static void page_sys_refresh(void)
 {
     uint32_t ver = *(volatile uint32_t *)OTA_APP_VERSION_ADDR;
@@ -685,17 +755,15 @@ static void page_sys_refresh(void)
                           (unsigned long)s_data.crash_seq,
                           (unsigned long)s_data.task_count);
 
-    /* CPU 环形表 */
-    lv_arc_set_value(s_s_cpu_arc, (lv_coord_t)s_data.cpu_percent);
-    lv_label_set_text_fmt(s_s_cpu_pct, "%lu%%",
-                          (unsigned long)s_data.cpu_percent);
+    /* CPU 环形表（动画平滑过渡） */
+    page_sys_set_cpu(s_data.cpu_percent);
 
-    /* 堆 */
+    /* 堆（bar 内置动画：平滑滑动到新值） */
     uint32_t used = (s_data.heap_total > s_data.heap_free)
                         ? (s_data.heap_total - s_data.heap_free) : 0u;
     uint32_t pct = (s_data.heap_total > 0u)
                        ? (used * 100u / s_data.heap_total) : 0u;
-    lv_bar_set_value(s_s_heap_bar, (lv_coord_t)pct, LV_ANIM_OFF);
+    lv_bar_set_value(s_s_heap_bar, (lv_coord_t)pct, LV_ANIM_ON);
     lv_label_set_text_fmt(s_s_heap_txt, "%lu/%lu KB",
                           (unsigned long)(used / 1024u),
                           (unsigned long)(s_data.heap_total / 1024u));
@@ -739,22 +807,50 @@ static void page_sys_refresh(void)
 /* ================================================================
  * 页面切换（方向动画：向右导航 MOVE_LEFT，向左 MOVE_RIGHT）
  * ================================================================ */
+/* ---------------- 页面切换（方向动画：向右导航 MOVE_LEFT，向左 MOVE_RIGHT） ----------------
+ * 快速连点保护：lv_scr_load_anim 无完成回调，连续切换会打断进行中的
+ * 动画——旧屏残留为 scr_prev（LVGL 仍视为可见并渲染），两页内容叠加
+ * （实测 HOME 与 NET 子栏重合，见 ENGINEERING_LOG 13.4）。
+ * 切换动画期间屏蔽新请求（80ms 动画 + 余量 = 200ms），杜绝打断。 */
 static lv_obj_t *s_active;
+static uint8_t s_page_busy;
+
+static void page_busy_clear(lv_timer_t *t)
+{
+    (void)t;
+    s_page_busy = 0;
+}
 
 static void page_show(lv_obj_t *scr, lv_scr_load_anim_t dir)
 {
-    if (scr == s_active || scr == NULL) {
+    if (scr == s_active || scr == NULL || s_page_busy) {
         return;
     }
     s_active = scr;
+    s_page_busy = 1;
     /* 动画 80ms：小屏切换轻快（原 150ms 在 60Hz 刷新下整页移动 9 帧，
      * 期间全屏重绘叠加触摸采样延迟，产生切换卡顿感） */
     lv_scr_load_anim(scr, dir, 80, 0, false);
+    /* 一次性定时器：200ms 后解除切换屏蔽（动画完成后可再次切换） */
+    lv_timer_t *t = lv_timer_create(page_busy_clear, 200, NULL);
+    lv_timer_set_repeat_count(t, 1);
 }
 
 void GuiPages_ShowHome(void) { page_show(s_scr_home, LV_SCR_LOAD_ANIM_MOVE_RIGHT); }
 void GuiPages_ShowNet(void)  { page_show(s_scr_net,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 void GuiPages_ShowSys(void)  { page_show(s_scr_sys,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
+
+/* 单按键翻页（KEY0 短按）：按当前活动页轮换，动画方向跟随导航语义 */
+void GuiPages_PageNext(void)
+{
+    if (s_active == s_scr_home) {
+        page_show(s_scr_net, LV_SCR_LOAD_ANIM_MOVE_LEFT);
+    } else if (s_active == s_scr_net) {
+        page_show(s_scr_sys, LV_SCR_LOAD_ANIM_MOVE_LEFT);
+    } else {
+        page_show(s_scr_home, LV_SCR_LOAD_ANIM_MOVE_RIGHT);
+    }
+}
 
 lv_obj_t *GuiPages_GetHome(void)
 {
@@ -773,10 +869,31 @@ void GuiPages_Init(void)
     gui_data_collect();   /* 首窗立即采集（CPU 基线等） */
 }
 
-void GuiPages_Refresh(void)
+/* ---------------- 250ms 三相轮转刷新（彻底错峰） ----------------
+ * 每 250ms 执行一相，3 相 = 750ms 完整刷一遍全部页面：
+ *   相 0：数据采集 + 主页摘要/时钟 + 吞吐曲线
+ *   相 1：主页卡片 0-2 + 网络页文本
+ *   相 2：主页卡片 3-5 + 系统页文本（含 CPU 环/堆条动画值）
+ * 每相仅 3-4 个控件变化（LVGL 相同文本自动跳过重绘），刷新帧轻量；
+ * 数据采集粒度 250ms → 数值更新更"活"，配合环/条动画视觉平滑。 */
+static uint8_t s_refr_phase;
+
+void GuiPages_RefreshFast(void)
 {
-    gui_data_collect();
-    page_home_refresh();
-    page_net_refresh();
-    page_sys_refresh();
+    switch (s_refr_phase) {
+    case 0:
+        gui_data_collect();
+        page_home_refresh_top();
+        page_net_curve();
+        break;
+    case 1:
+        page_home_refresh_cards(0);
+        page_net_refresh();
+        break;
+    default:
+        page_home_refresh_cards(1);
+        page_sys_refresh();
+        break;
+    }
+    s_refr_phase = (uint8_t)((s_refr_phase + 1u) % 3u);
 }

@@ -23,7 +23,12 @@ void GuiPages_ShowHome(void);
 void GuiPages_ShowNet(void);
 void GuiPages_ShowSys(void);
 
-/* 1s 节拍：采集全部外设数据并刷新控件（gui_task 调用） */
-void GuiPages_Refresh(void);
+/* 单按键翻页：HOME → NET → SYS → HOME 轮换（KEY0 短按导航，
+ * 复用页面切换动画与连点保护；长按回主页走 GuiPages_ShowHome） */
+void GuiPages_PageNext(void);
+
+/* 250ms 快速节拍：三相轮转刷新（采集/曲线/文本分片，gui_task 调用，
+ * 彻底错峰避免同帧爆发重绘；数据粒度 250ms 使数值更新更平滑） */
+void GuiPages_RefreshFast(void);
 
 #endif /* GUI_PAGES_H */
