@@ -327,7 +327,10 @@ void GuiApp_Init(void)
     osThreadAttr_t attr = {
         .name       = "GuiApp",
         .stack_size = GUI_TASK_STACK,
-        .priority   = osPriorityNormal,
+        /* 优先级 28（AboveNormal）：高于交互/网络服务（24），渲染与触摸
+         * 处理不被 TcpSvc/HttpSvc 等抢占（触摸跟手度）；低于协议栈(32)
+         * 与实时采样，不干扰既有优先级设计 */
+        .priority   = osPriorityAboveNormal,
     };
     osThreadId_t h = osThreadNew(gui_task, NULL, &attr);
     LOG_Printf("[GUI] task %s (stack=%u, heap=%u)\r\n",

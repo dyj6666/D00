@@ -92,7 +92,10 @@
 #define LV_DISP_DEF_REFR_PERIOD 16      /*[ms] 60Hz 上限（原 30ms 锁 33fps，屏 60Hz 浪费一半）*/
 
 /*Input device read period in milliseconds*/
-#define LV_INDEV_DEF_READ_PERIOD 30     /*[ms]*/
+/* 触摸采样 30ms(33Hz)→10ms(100Hz)：触摸移动轨迹跟手度（实测 30ms
+ * 下拖动/点击响应明显延迟，与渲染叠加产生卡顿感；触摸采样极轻量，
+ * 100Hz 无负担） */
+#define LV_INDEV_DEF_READ_PERIOD 10     /*[ms]*/
 
 /*Use a custom tick source that tells the elapsed time in milliseconds.
  *It removes the need to manually update the tick with `lv_tick_inc()`)*/

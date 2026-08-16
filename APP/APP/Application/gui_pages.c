@@ -747,7 +747,9 @@ static void page_show(lv_obj_t *scr, lv_scr_load_anim_t dir)
         return;
     }
     s_active = scr;
-    lv_scr_load_anim(scr, dir, 150, 0, false);
+    /* 动画 80ms：小屏切换轻快（原 150ms 在 60Hz 刷新下整页移动 9 帧，
+     * 期间全屏重绘叠加触摸采样延迟，产生切换卡顿感） */
+    lv_scr_load_anim(scr, dir, 80, 0, false);
 }
 
 void GuiPages_ShowHome(void) { page_show(s_scr_home, LV_SCR_LOAD_ANIM_MOVE_RIGHT); }
