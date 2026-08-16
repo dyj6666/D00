@@ -26,6 +26,14 @@ CONF_MIN = 0.65         # 置信度低于此值输出 "?"
 VOTE_N = 7              # 分类结果多数投票帧数（抑制帧间抖动）
 SWITCH_CONFIRM = 3      # 新手势需连续 N 帧占优才切换（误判彻底压制）
 
+# ---------- 挥手检测（运动分析，非 AI——时序动作用运动更可靠）----------
+# "一挥手" → SWIPE_LEFT/RIGHT 事件（协议 0x02）→ MCU 翻页
+SWIPE_DIST = 100        # 0.5s 窗口内位移 ≥ 此值判定挥动（px）
+SWIPE_WIN_MS = 500
+SWIPE_COOLDOWN_MS = 800 # 冷却防连发
+G_NONE, G_LEFT, G_RIGHT = 0x00, 0x01, 0x02
+G_UP, G_DOWN = 0x03, 0x04
+
 # ---------- UART ----------
 uart = None
 try:
@@ -67,6 +75,11 @@ last_frame_t = 0
 vote_buf = []
 out_gid = -1            # 当前输出手势（切换确认状态）
 switch_pend = 0
+# 挥手检测状态
+sw_x0 = sw_y0 = 0
+sw_t0 = 0
+sw_cooldown = 0
+sw_prev_present = False
 clock = time.clock()
 print("READY: AI 手势识别")
 while True:
@@ -139,6 +152,33 @@ while True:
         track_ok = False
 
     last_frame_t = time.ticks_ms()
+
+    # ---------- 挥手检测（运动分析）----------
+    if track_ok:
+        now2 = time.ticks_ms()
+        if not sw_prev_present:
+            sw_x0, sw_y0 = cx, cy
+            sw_t0 = now2
+        elif (now2 - sw_t0) >= SWIPE_WIN_MS:
+            dxs = cx - sw_x0
+            dys = cy - sw_y0
+            if (abs(dxs) >= SWIPE_DIST or abs(dys) >= SWIPE_DIST) and \
+               (now2 - sw_cooldown) >= SWIPE_COOLDOWN_MS:
+                if abs(dxs) >= abs(dys):
+                    sg = G_RIGHT if dxs > 0 else G_LEFT
+                else:
+                    sg = G_DOWN if dys > 0 else G_UP
+                names = {G_LEFT: "SWIPE_LEFT", G_RIGHT: "SWIPE_RIGHT",
+                         G_UP: "SWIPE_UP", G_DOWN: "SWIPE_DOWN"}
+                print("[GESTURE] %s" % names[sg])
+                if uart:
+                    uart.write(pack(0x02, bytes([sg])))
+                sw_cooldown = now2
+            sw_x0, sw_y0 = cx, cy
+            sw_t0 = now2
+        sw_prev_present = True
+    else:
+        sw_prev_present = False
 
     if track_ok:
         x0 = max(0, cx - side // 2)
