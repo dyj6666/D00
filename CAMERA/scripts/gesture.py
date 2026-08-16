@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-# gesture.py —— 手势识别引擎（事件级，零训练，V4.3 固件）
-# 基于肤色手部追踪，输出离散手势事件（docs/串口协议.md 0x02 帧）：
-#   SWIPE_LEFT/RIGHT/UP/DOWN  快速挥动（体感翻页/移动）
-#   GRAB                      捏合/抓取（面积快速变化）
-#   HOVER                     悬停 ≥0.8s（确认/点击，持续期每500ms重发）
-# 同时每帧输出坐标帧(0x01)——MCU 侧可同步获得连续位置用于角色跟随。
-#
-# 验证（无需 MCU）：IDE 运行 → 挥手/抓取/悬停 → 终端显示 [GESTURE] 事件
+# gesture.py v2 —— 手势识别引擎（运动感知目标锁定版）
+# 解决"脸被当手"：不再依赖"下半部"假设，改为运动感知锁定：
+#   - 帧间匹配给每个肤色块建立连续 ID（位移<60px 视为同一块）
+#   - 新出现的块（手伸入画面）优先锁定；锁定的块持续跟踪（手静止也保持）
+#   - 静止的块（脸）移动量衰减为 0，永不抢锁；手离开 500ms 后解锁
+# 手势事件不变：SWIPE_LEFT/RIGHT/UP/DOWN / GRAB / HOVER（协议 0x02）
 import sensor
 import image
 import time
@@ -17,18 +15,21 @@ THRESHOLDS = [(35, 88, 0, 30, 5, 35)]
 PIX_TH, AREA_TH = 120, 120
 MIN_SIZE, MAX_SIZE = 25, 220
 RATIO_MIN, RATIO_MAX = 0.5, 1.6
-HAND_Y0 = 0.45
 EMA_ALPHA = 0.6
 
-SWIPE_DIST = 110        # 0.4s 内累计位移 ≥ 此值判定挥动（px）
-SWIPE_WIN_S = 0.4       # 挥动判定窗口（s）
-GRAB_CHANGE = 0.45      # 0.3s 内面积变化 ≥ 45% 判定抓取
-HOVER_STABLE = 15       # 悬停抖动阈值（px）
-HOVER_TIME_S = 0.8      # 悬停判定时间（s）
-HOVER_REPEAT_MS = 500   # 悬停重发间隔
-EVENT_COOLDOWN_MS = 300 # 事件冷却（防连发）
+MATCH_DIST = 60        # 帧间同块匹配距离（px）
+MOTION_DECAY = 0.85    # 移动量历史衰减（静止块快速归零）
+NEW_MOTION = 999.0     # 新块初始移动量（优先锁定）
+UNLOCK_MS = 500        # 锁定块消失后解锁延时
 
-# 手势 ID（协议 0x02）
+SWIPE_DIST = 110
+SWIPE_WIN_S = 0.4
+GRAB_CHANGE = 0.45
+HOVER_STABLE = 15
+HOVER_TIME_S = 0.8
+HOVER_REPEAT_MS = 500
+EVENT_COOLDOWN_MS = 300
+
 G_NONE, G_LEFT, G_RIGHT = 0x00, 0x01, 0x02
 G_UP, G_DOWN, G_GRAB, G_HOVER = 0x03, 0x04, 0x05, 0x06
 
@@ -56,15 +57,70 @@ def pack_hand(detected, x, y, w, h):
 def pack_gesture(gid):
     return pack(0x02, bytes([gid]))
 
+# ---------- 目标锁定跟踪 ----------
+class TargetTracker:
+    def __init__(self):
+        self.tracks = []        # [{x,y,area,motion,age,last_seen}]
+        self.locked = None      # 锁定块（对象引用）
+        self.lock_lost_t = 0
+
+    def update(self, cands, now):
+        """cands: [(cx, cy, area)] 候选列表；返回选中 (cx,cy,area) 或 None"""
+        # 1. 帧间匹配（贪心最近邻）
+        matched = [False] * len(cands)
+        for t in self.tracks:
+            best_i, best_d = -1, MATCH_DIST
+            for i, (cx, cy, a) in enumerate(cands):
+                if matched[i]:
+                    continue
+                d = abs(t['x'] - cx) + abs(t['y'] - cy)
+                if d < best_d:
+                    best_d, best_i = d, i
+            if best_i >= 0:
+                cx, cy, a = cands[best_i]
+                t['motion'] = t['motion'] * MOTION_DECAY + best_d
+                t['x'], t['y'], t['area'] = cx, cy, a
+                t['age'] += 1
+                t['last_seen'] = now
+                matched[best_i] = True
+
+        # 2. 新块（未匹配候选 → 新目标，高移动量）
+        for i, (cx, cy, a) in enumerate(cands):
+            if not matched[i]:
+                self.tracks.append({'x': cx, 'y': cy, 'area': a,
+                                    'motion': NEW_MOTION, 'age': 1,
+                                    'last_seen': now})
+
+        # 3. 清理超时块（1s 未匹配）
+        self.tracks = [t for t in self.tracks if now - t['last_seen'] < 1000]
+
+        # 4. 选择：锁定优先
+        if self.locked is not None:
+            if self.locked in self.tracks and self.locked['last_seen'] == now:
+                return (self.locked['x'], self.locked['y'], self.locked['area'])
+            # 锁定块消失：计时解锁
+            if self.lock_lost_t == 0:
+                self.lock_lost_t = now
+            elif now - self.lock_lost_t > UNLOCK_MS:
+                self.locked = None
+                self.lock_lost_t = 0
+        else:
+            # 5. 新锁定：移动量最大的块（手伸入=新块=999）
+            if self.tracks:
+                t = max(self.tracks, key=lambda t: t['motion'])
+                self.locked = t
+                return (t['x'], t['y'], t['area'])
+        return None
+
+
 # ---------- 手势状态机 ----------
 class GestureEngine:
     def __init__(self):
-        self.hx, self.hy = None, None          # 平滑坐标
+        self.hx = self.hy = None
         self.harea = 0
-        self.last_sw_t = 0                     # 上次挥动判定时刻
-        self.sw_x0, self.sw_y0 = 0, 0          # 挥动窗口起点
+        self.sw_x0 = self.sw_y0 = 0
         self.sw_t0 = 0
-        self.grab_area0, self.grab_t0 = 0, 0   # 抓取窗口
+        self.grab_area0 = self.grab_t0 = 0
         self.hover_t0 = 0
         self.hover_sent_t = 0
         self.cooldown_t = 0
@@ -73,7 +129,6 @@ class GestureEngine:
     def update(self, now, cx, cy, area, present):
         out = G_NONE
         if present:
-            # --- 挥动：窗口内累计位移 ---
             if not self.present:
                 self.sw_x0, self.sw_y0 = cx, cy
                 self.sw_t0 = now
@@ -91,7 +146,6 @@ class GestureEngine:
                 self.sw_x0, self.sw_y0 = cx, cy
                 self.sw_t0 = now
 
-            # --- 抓取：面积快速变化 ---
             if self.harea > 0 and now - self.grab_t0 >= 0.3:
                 change = abs(area - self.grab_area0) / max(self.grab_area0, 1)
                 if change >= GRAB_CHANGE and now - self.cooldown_t >= EVENT_COOLDOWN_MS:
@@ -101,7 +155,6 @@ class GestureEngine:
             elif self.harea == 0:
                 self.grab_area0, self.grab_t0 = area, now
 
-            # --- 悬停：位置稳定 ---
             if self.hx is not None:
                 if abs(cx - self.hx) < HOVER_STABLE and abs(cy - self.hy) < HOVER_STABLE:
                     if self.hover_t0 == 0:
@@ -118,7 +171,7 @@ class GestureEngine:
             self.hx, self.hy = cx, cy
             self.harea = area
         else:
-            self.hx, self.hy = None, None
+            self.hx = self.hy = None
             self.harea = 0
             self.hover_t0 = 0
             self.sw_t0 = 0
@@ -133,13 +186,11 @@ sensor.set_pixformat(sensor.RGB565)
 sensor.set_framesize(sensor.QVGA)
 sensor.skip_frames(time=1000)
 
-W, H = sensor.width(), sensor.height()
-roi_y0 = int(H * HAND_Y0)
+tracker = TargetTracker()
 engine = GestureEngine()
 
 clock = time.clock()
-last_t = time.ticks_ms()
-print("READY: 挥手/抓取/悬停试试")
+print("READY: 伸入的手会被锁定，静止的脸不会抢")
 while True:
     clock.tick()
     now = time.ticks_ms()
@@ -147,34 +198,41 @@ while True:
 
     blobs = img.find_blobs(THRESHOLDS, pixels_threshold=PIX_TH,
                            area_threshold=AREA_TH, merge=True)
-    best, best_area = None, 0
+    cands = []
     for b in blobs:
         w, h = b.w(), b.h()
         if not (MIN_SIZE <= w <= MAX_SIZE and MIN_SIZE <= h <= MAX_SIZE):
             continue
         if not (RATIO_MIN < w / h < RATIO_MAX):
             continue
-        if b.cy() < roi_y0:
-            continue
-        if b.area() > best_area:
-            best, best_area = b, b.area()
+        cands.append((b.cx(), b.cy(), b.area()))
 
-    present = best is not None
+    hit = tracker.update(cands, now)
+
+    present = hit is not None
+    bw = bh = 0
     if present:
-        cx, cy = best.cx(), best.cy()
+        cx, cy, area = hit
         if engine.hx is not None:
             cx = int(engine.hx * (1 - EMA_ALPHA) + cx * EMA_ALPHA)
             cy = int(engine.hy * (1 - EMA_ALPHA) + cy * EMA_ALPHA)
-        img.draw_rectangle(best.rect(), color=(255, 0, 0))
         img.draw_cross(cx, cy, color=(0, 255, 0))
+        # 画选中块框（用与坐标最近的 blob）
+        best_b = None
+        for b in blobs:
+            if abs(b.cx() - cx) < 40 and abs(b.cy() - cy) < 40:
+                best_b = b
+                break
+        if best_b:
+            img.draw_rectangle(best_b.rect(), color=(255, 0, 0))
+            bw, bh = best_b.w(), best_b.h()
     else:
         cx = cy = 0
 
-    gid = engine.update(now, cx, cy, best_area, present)
+    gid = engine.update(now, cx, cy, area if present else 0, present)
 
     if uart:
-        uart.write(pack_hand(present, cx, cy, best.w() if best else 0,
-                             best.h() if best else 0))
+        uart.write(pack_hand(present, cx, cy, bw, bh))
         if gid != G_NONE:
             uart.write(pack_gesture(gid))
 
@@ -185,4 +243,4 @@ while True:
         print("[GESTURE] %s" % names[gid])
     elif present and int(clock.fps()) % 30 == 0:
         print("[HAND] x=%d y=%d w=%d h=%d fps=%.1f" %
-              (cx, cy, best.w(), best.h(), clock.fps()))
+              (cx, cy, bw, bh, clock.fps()))
