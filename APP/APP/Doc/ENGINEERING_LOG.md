@@ -3652,3 +3652,53 @@ debug 会话 mww/mdw + resume/sleep/halt 可在零烧录下完成外设行为取
 - 寄存器位编码必须核对 HAL 头/参考手册的完整位表，不能凭"位名直觉"
   （DIR_0/DIR_1 是编码值 01/10 而非"方向 0/1"）；
 - 数据流方向用"交换寄存器对照实验"一步确证，比文档更可靠。
+
+---
+
+## 13. GUI 系统界面升级：三页面监控仪表盘（2026-08，架构演进）
+
+**背景**：原 gui_app.c 为验证骨架（按钮/滑块/计数/触摸坐标），无外设监控
+能力；全面代码评估后，基于 LVGL v8.3.5 打造系统级 LCD 监控界面。
+
+**架构**（新增 `gui_theme` / `gui_pages`，`gui_app` 重构为页面框架）：
+- `gui_theme.c/h`：主题色板（深蓝黑底 + 信息蓝主色 + 三态语义色）与组件
+  工厂（圆角卡片 / 状态点 / 状态色条 / 标题栏），全界面样式单一来源，
+  一处改色全局生效；
+- `gui_pages.c/h`：三个常驻屏幕对象 + 1s 数据快照刷新：
+  1. **主页仪表盘**：CPU/HEAP/UPTIME 摘要条 + 6 张外设卡片（ETHERNET /
+     CAN BUS / IMU / TOUCH / FLASH / EEPROM），每卡左侧状态色条 +
+     状态点 + 数值行，一眼全览健康度；
+  2. **网络页**：链路/IP/GW/MAC/DHCP + RX/TX 实时吞吐曲线（60 点滚动，
+     Y 轴按峰值自适应翻倍）+ ICMP 应答/RTT 统计网格；
+  3. **系统页**：固件版本/崩溃序号 + CPU 环形表（arc）+ 堆进度条 + 服务
+     状态行（事件总线 / DataLink / 用户存储 / OTA 进度 / RTC 时间）；
+- `gui_app.c`：底部导航栏（HOME/NET/SYS，150ms 切换动画），页面对象常驻
+  零重建；`gui bench` 性能基准保留，改在独立临时屏执行，不再破坏页面。
+
+**数据源**：全部走服务/BSP 结构化接口（EthApp_GetStatus / IcmpSvc_GetStat /
+BSP_CAN_GetStats / ImuSvc_GetState / Ota_Status / EventBus_* / DataLink_* /
+UsrStore_Info / BSP_RTC_GetDateTime），零直接寄存器访问（分层守门 0 违规）；
+CPU 占用 = `uxTaskGetSystemState` 双采样差分（IDLE 计数，1s 窗口）；
+存储探测（W25Q/EEPROM）5s 节流，避免频繁 I2C/SPI 总线访问。
+
+**内存权衡（关键决策）**：GUI 数据快照（gui_data_t）与任务状态数组
+（TaskStatus_t[24]）放 **CCM（.ccmram）**——GCC 链接首版主 RAM 溢出 216B，
+CCM 仅 CPU 访问（无 DMA），两处均只被 GUI 任务读写，安全省主 RAM；
+LVGL 堆与对象仍在外部 SRAM（LV_MEM_ADR 0x68080000）。
+
+**验证**：
+- GCC 完整构建：0 error / 0 warning（首方），APP.elf text=428120B；
+- Keil AC5 全量重建：**0 Error** / 20 Warning（全部为 lvgl 第三方 #188-D）；
+- `check_layering.py`：0 errors / 0 warnings；扩展告警扫描
+  （-Wcast-align/-Wdouble-promotion/-Wshadow 等）：仅 lvgl 头文件已知噪音；
+- 硬件上板验证待补（评估时串口不在线）：需实测三页渲染帧率、
+  触摸导航、曲线滚动与页面切换动画。
+
+**经验沉淀（LVGL v8.3.5 细节）**：
+- `lv_chart` **没有 get_range API**：Y 轴自适应需自行跟踪上限（static
+  变量翻倍扩张），不能查询 chart 当前范围；
+- lv_chart 系列线色来自 `lv_chart_add_series` 传入的颜色（渲染取
+  `series->color`），对象级 `LV_PART_INDICATOR` 样式只影响数据点；
+- 小屏多页面最优模式：页面对象常驻 + `lv_scr_load_anim` 切换 +
+  刷新仅改文本/值（零重建、动画优雅、无分配抖动）；bench 类破坏性
+  操作必须与页面对象隔离（独立临时屏）。

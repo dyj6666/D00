@@ -131,6 +131,8 @@ if(CMAKE_CROSSCOMPILING)
     Application/ota_tcp_svc.c
     Application/ota_http_svc.c
     Application/gui_app.c
+    Application/gui_theme.c
+    Application/gui_pages.c
     Ports/lv_port.c
     Ports/lv_port_disp.c
     Ports/lv_port_indev.c
@@ -404,6 +406,9 @@ if(CMAKE_CROSSCOMPILING)
         BSP/LCD/lcd.c
         BSP/LCD/lcd_ex.c
         BSP/bsp_lcd.c
+        SystemServices/lcd_ui.c
+        Application/lcd_app.c
+        SystemServices/lcd_test.c
         SystemServices/touch_svc.c
         PROPERTIES COMPILE_FLAGS "-O1")
 
