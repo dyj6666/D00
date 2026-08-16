@@ -23,7 +23,8 @@ EMA_ALPHA = 0.6
 MODEL = "/sd/model_gesture.tflite"
 LABELS = "/sd/labels_gesture.txt"
 CONF_MIN = 0.65         # 置信度低于此值输出 "?"
-VOTE_N = 5              # 分类结果多数投票帧数（抑制帧间抖动）
+VOTE_N = 7              # 分类结果多数投票帧数（抑制帧间抖动）
+SWITCH_CONFIRM = 3      # 新手势需连续 N 帧占优才切换（误判彻底压制）
 
 # ---------- UART ----------
 uart = None
@@ -64,6 +65,8 @@ ex_prev, ey_prev = None, None
 prev_size = 0
 last_frame_t = 0
 vote_buf = []
+out_gid = -1            # 当前输出手势（切换确认状态）
+switch_pend = 0
 clock = time.clock()
 print("READY: AI 手势识别")
 while True:
@@ -161,17 +164,27 @@ while True:
         if len(vote_buf) > VOTE_N:
             vote_buf.pop(0)
         # 众数
+        vgid = -1
+        vconf = 0.0
         if vote_buf:
             vgid = max(set(vote_buf), key=vote_buf.count)
             vconf = sum(1 for v in vote_buf if v == vgid) * 100.0 / len(vote_buf)
-            if vgid >= 0:
-                label = labels[vgid]
-                gid = vgid
-                conf = vconf / 100.0
-            else:
-                label = "?"
+        # 切换确认：新手势需连续 SWITCH_CONFIRM 帧占优才切换输出
+        # （偶发误判无法累积到确认阈值 → 几乎不可能误输出）
+        if vgid == out_gid:
+            switch_pend = 0
+        else:
+            switch_pend += 1
+            if switch_pend >= SWITCH_CONFIRM:
+                out_gid = vgid
+                switch_pend = 0
+        if out_gid >= 0:
+            label = labels[out_gid]
+            gid = out_gid
+            conf = vconf / 100.0
         else:
             label = "?"
+            gid = 0xFF
         print("[AI] %s = %.0f%% fps=%.1f" % (label, conf * 100, clock.fps()))
         if uart:
             uart.write(pack_gesture_ai(gid, int(conf * 100)))

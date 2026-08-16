@@ -18,7 +18,7 @@ DATASET = r"D:\GIT-SPACE\D00\CAMERA\train\dataset"
 OUT_MODEL = r"D:\GIT-SPACE\D00\CAMERA\train\model_gesture.tflite"
 OUT_LABELS = r"D:\GIT-SPACE\D00\CAMERA\train\labels_gesture.txt"
 IMG_SIZE = 32
-EPOCHS = 40
+EPOCHS = 80
 BATCH = 64
 VAL_SPLIT = 0.15
 AUG_PER_IMG = 13       # 每张训练图生成增强副本数（不含原图）
@@ -120,8 +120,15 @@ model = keras.Sequential([
 model.compile(optimizer="adam", loss="sparse_categorical_crossentropy",
               metrics=["accuracy"])
 
+# 学习率调度 + 早停（单帧准确率最大化）
+callbacks = [
+    keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5,
+                                      patience=5, min_lr=1e-5),
+    keras.callbacks.EarlyStopping(monitor="val_loss", patience=10,
+                                  restore_best_weights=True),
+]
 model.fit(x_train, y_train, epochs=EPOCHS, batch_size=BATCH,
-          validation_data=(x_val, y_val), verbose=1)
+          validation_data=(x_val, y_val), callbacks=callbacks, verbose=1)
 loss, acc = model.evaluate(x_val, y_val, verbose=0)
 print("训练完成: val_acc=%.3f" % acc)
 
