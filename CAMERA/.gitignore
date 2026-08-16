@@ -1,5 +1,8 @@
-# 摄像头资料/数据集/工具均为本地大体积资产（约 1GB），不入库；
-# 仅 README.md 与本忽略文件入库，其余内容随本地保留。
+# 摄像头大体积资料/数据集/工具为本地资产（约 1GB），不入库；
+# 保留：README 索引、开发脚本(scripts/)、IDE 教程文档
 *
 !README.md
 !.gitignore
+!scripts/
+!scripts/**
+!docs/IDE_使用教程.md
