@@ -1,0 +1,8 @@
+# ESP 子空间：大体积资料（PDF 约 75MB/例程 3GB 原盘）本地保留不入库；
+# 仅 README/流程文档/笔记入库。
+*
+!README.md
+!.gitignore
+!docs/ESP-IDF开发流程.md
+!notes/
+!notes/DEV_NOTES.md
