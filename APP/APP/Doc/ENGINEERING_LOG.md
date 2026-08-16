@@ -3734,3 +3734,58 @@ GUI 快照迁入 CCM 解了链接溢出，但 bss 顶仍紧贴安全区（0x340 
   （`_ebss ≤ _estack` 且留安全间隙），RAM 高占用项目每次变更后复查；
 - 迁移 .bss 到 CCM 的判据：纯 CPU 访问 + 无 DMA + 并发有保护
   （DMA 缓冲如 W25Q 的 s_dma_rx 绝不能移 CCM）；
+
+### 13.2 gui bench 确定性 HardFault：bench 场景清空主页对象（2026-08，重点问题）
+
+**现象**：新 GUI 固件（三页面）上板后，`gui bench` 命令必崩：
+TCP 控制台连接被重置；BKP 崩溃摘要 SRC=HardFault、SEQ 每次 +1、
+任务=GuiApp、PC=0x0804CE74（lv_obj_get_parent+0x4）、CFSR=0x8200
+（STKERR+BFARVALID）、BFAR=0x8482CE3A（垃圾指针）；串口完整报告：
+崩溃在 `anim-60x` 打印之后、`BENCH DONE` 之前（uptime 12~25s，
+多次复现 PC 完全一致）。
+
+**排查思路**（DAP 优先）：
+1. 符号化崩溃 PC/LR → lv_obj_get_parent / lv_obj_get_screen——
+   对象树访问垃圾指针；
+2. 读 BKP 摘要（SRC/SEQ/PC/task_name）→ GuiApp 任务、HardFault、
+   崩溃序号递增；串口 COM5 抓完整报告 → R0=R1=0x8482CE36
+   （垃圾对象指针）、崩溃在 anim 收尾段；
+3. 外部 SRAM 写-读稳定性测试 → 硬件正常；扫描 LVGL 堆找损坏对象
+   → 误判（tlsf 空闲块内容），但启发了"对象未损坏、指针来源是
+   悬垂"的排查方向。
+
+**被推翻的方向**（必须记录）：
+- ❌ 4KB 任务栈溢出：增至 8KB 崩溃依旧——不是栈问题（栈余量充足）；
+- ❌ 外部 SRAM/FSMC 高负载数据错误：DAP 写-读-读稳定——硬件正常；
+- ❌ LVGL 堆越界写：堆扫描无有效损坏对象——对象本身未损坏。
+
+**根因（代码审查 + 崩溃时序收敛）**：
+bench 序列中 `bench_lvgl_scene(need_ui=true)` 与 `bench_scene_ui()`
+把活动屏切到**真实主页**（基准意图），随后 `bench_scene_anim()` 执行
+`lv_obj_clean(lv_scr_act())`——**清空了主页全部子对象**（卡片/导航/
+摘要），gui_pages 的 static 控件指针（s_cards 等）全部**悬垂**；bench
+收尾 `GuiPages_ShowHome()`（lv_scr_load_anim）及 1s 节拍
+`GuiPages_Refresh()` 访问悬垂对象——内存已被 tlsf 复用/含垃圾 →
+`lv_obj_get_screen(垃圾) → lv_obj_get_parent` 读垃圾 parent → BusFault
+（压栈时 SP 亦坏 → STKERR）。旧固件（骨架）bench 结束 `gui_build()`
+重建对象，悬垂被掩盖；新页面常驻后立即暴露。
+
+**解决方案**：bench 场景严格隔离——所有场景操作限定在独立临时屏：
+- `bench_lvgl_scene(need_ui)` 结束后立即 `lv_scr_load(s_bench_scr)`；
+- `bench_scene_ui()` 末尾同样切回；
+- `bench_scene_anim()` 开头先切回临时屏再 `lv_obj_clean`。
+
+**验证**（上板实测）：`gui bench` 完整跑通：mem bench（EXT-SRAM
+rd=18/wr=27 MB/s、SRAM128 66、CCM 71、FLASH 58）→ LCD bench →
+fill 59fps → bands 44fps → ui-shadow-on 11fps → ui-shadow-off 46fps
+→ anim 313fps → `BENCH DONE`；崩溃序号不再递增；TCP 控制台长期稳定；
+GuiApp 任务正常（8KB 栈余 6.5KB）；三页面日常刷新正常。
+
+**经验沉淀**：
+- 基准/诊断代码必须与生产对象严格隔离（独立屏/独立任务），
+  "clean 活动屏"这类破坏性操作对共享对象是定时炸弹——旧代码靠
+  重建掩盖，重构后立即暴露；
+- 崩溃 PC 固定 + 任务名确定 + 串口完整报告 = 最快定位路径；DAP
+  断点在此场景反而因 halt 干扰 IWDG（发布构建看门狗未冻结）不适用；
+- 堆余量监控：GUI 任务栈 8KB 后 FreeRTOS 堆余 3KB，TcpCli 动态
+  连接仍正常；后续堆不足时优先回收（6KB 栈折中）。

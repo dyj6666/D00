@@ -26,7 +26,10 @@
 
 #include <string.h>
 
-#define GUI_TASK_STACK  (4u * 1024u)   /* osThreadNew stack_size 单位：字节（4KB，峰值实测 1.5KB） */
+#define GUI_TASK_STACK  (8u * 1024u)   /* 8KB：gui bench 全量渲染（lv_refr_now 深调用）
+                                        * 峰值超 4KB（实测骨架 1.5KB，全量渲染更高）；
+                                        * 4KB 时 bench 栈溢出踩堆 → 对象指针损坏
+                                        * → lv_obj_get_parent HardFault（见日志 13.2） */
 #define GUI_PERIOD_MS   10u
 
 #define GUI_LVGL_VERSION_STR  "LVGL v8.3.5"
@@ -119,7 +122,10 @@ static void bench_lvgl_scene(const char *name, uint32_t frames,
                              bool force_invalid, bool need_ui)
 {
     if (need_ui) {
-        /* UI 场景：加载真实主页（最接近实际负载的基准对象） */
+        /* UI 场景：加载真实主页（最接近实际负载的基准对象）；
+         * 结束后立即切回独立临时屏——后续场景的 clean 绝不能落在主页上
+         * （会清空页面对象，悬垂指针导致 GuiPages_Refresh 崩溃，
+         * 见 ENGINEERING_LOG 13.2） */
         lv_obj_t *home = GuiPages_GetHome();
         if (home != NULL) {
             lv_scr_load(home);
@@ -150,6 +156,9 @@ static void bench_lvgl_scene(const char *name, uint32_t frames,
                (unsigned long)fps,
                (unsigned long)mpx,
                (unsigned long)(st.calls > 0 ? st.pixels / st.calls : 0u));
+    if (need_ui) {
+        lv_scr_load(s_bench_scr);   /* 关键：恢复独立临时屏，防后续 clean 破坏主页 */
+    }
 }
 
 /* ---- 色带场景：12 条全宽色带覆盖全屏（纯填充压力） ---- */
@@ -173,6 +182,9 @@ static void bench_scene_bands(void)
 /* ---- 动画场景：60x60 圆角块往返滑动（动画/局部重绘压力） ---- */
 static void bench_scene_anim(void)
 {
+    /* 先切回独立临时屏再 clean：ui 场景可能已把活动屏切到主页，
+     * 直接 clean(活动屏) 会清空主页对象（悬垂指针崩溃，见 13.2） */
+    lv_scr_load(s_bench_scr);
     lv_obj_clean(lv_scr_act());
     lv_obj_t *m = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(m);
@@ -264,6 +276,7 @@ static void bench_scene_ui(bool shadow)
             idx++;
         }
     }
+    lv_scr_load(s_bench_scr);   /* 恢复独立临时屏（防后续 clean 破坏主页） */
 }
 
 /* ---- 基准总入口（GUI 任务上下文；运行在独立临时屏） ---- */
