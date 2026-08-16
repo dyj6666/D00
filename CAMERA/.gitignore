@@ -1,5 +1,5 @@
 # 摄像头大体积资料/数据集/工具为本地资产（约 1GB），不入库；
-# 保留：README 索引、开发脚本(scripts/)、IDE 教程文档
+# 保留：README 索引、开发脚本(scripts/)、教程与笔记文档
 *
 !README.md
 !.gitignore
@@ -7,3 +7,5 @@
 !scripts/**
 !docs/
 !docs/IDE_使用教程.md
+!notes/
+!notes/DEV_NOTES.md
