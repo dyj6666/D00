@@ -327,10 +327,11 @@ void GuiApp_Init(void)
     osThreadAttr_t attr = {
         .name       = "GuiApp",
         .stack_size = GUI_TASK_STACK,
-        /* 优先级 28（AboveNormal）：高于交互/网络服务（24），渲染与触摸
-         * 处理不被 TcpSvc/HttpSvc 等抢占（触摸跟手度）；低于协议栈(32)
-         * 与实时采样，不干扰既有优先级设计 */
-        .priority   = osPriorityAboveNormal,
+        /* 优先级保持 Normal(24)：曾试提至 32 与 TouchSvc/tcpip 同级，
+         * 同级时间片轮转导致渲染被触摸采样任务每 10ms 打断、碎片化，
+         * 实测触摸"卡到不起作用"（见 ENGINEERING_LOG 13.3）。24 时
+         * 触摸采样任务(32)可抢占 GUI，但每次仅几十 µs，可接受。 */
+        .priority   = osPriorityNormal,
     };
     osThreadId_t h = osThreadNew(gui_task, NULL, &attr);
     LOG_Printf("[GUI] task %s (stack=%u, heap=%u)\r\n",
