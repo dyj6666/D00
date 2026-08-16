@@ -74,9 +74,9 @@ while saved < COUNT:
         prev_cx, prev_cy = best.cx(), best.cy()
 
     if best and now - last_save >= SAVE_EVERY_MS:
-        # 以手中心裁剪正方形区域（1.5 倍边长，留背景余量）
+        # 裁剪聚焦手部：blob 质心偏向"粗端"(手)，边长 1.1x 让胳膊少入框
         cx, cy = best.cx(), best.cy()
-        side = int(max(best.w(), best.h()) * 1.5)
+        side = int(max(best.w(), best.h()) * 1.1)
         # 多样化：裁剪框随机偏移/缩放（模拟手在画面不同位置/大小，
         # 提升模型对位置变化的鲁棒性）
         jx = random.randint(-int(side * 0.35), int(side * 0.35))
