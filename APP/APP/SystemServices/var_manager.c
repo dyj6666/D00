@@ -18,7 +18,11 @@
 
 /* ---------- 内部变量 ---------- */
 static SemaphoreHandle_t var_mutex;
-static VarEntry registry[HOSTLINK_MAX_VARS];
+/* 变量注册表（64×16B=1KB）：纯 CPU 访问（互斥保护），放 CCM 释放主 RAM——
+ * 主 RAM .bss 顶曾越过主栈顶 _estack 192B（栈一压栈即踩 bss），
+ * 迁出 1KB 后安全区恢复完整（见 ENGINEERING_LOG 13.1） */
+static VarEntry registry[HOSTLINK_MAX_VARS]
+    __attribute__((section(".ccmram"), zero_init));
 static uint8_t reg_count = 0;
 static uint16_t subscribed[HOSTLINK_MAX_SUBSCRIBE];
 static uint8_t sub_count = 0;
