@@ -26,12 +26,13 @@ CONF_MIN = 0.65         # 置信度低于此值输出 "?"
 VOTE_N = 7              # 分类结果多数投票帧数（抑制帧间抖动）
 SWITCH_CONFIRM = 3      # 新手势需连续 N 帧占优才切换（误判彻底压制）
 
-# ---------- 挥手检测（运动分析，非 AI——时序动作用运动更可靠）----------
+# ---------- 挥手检测（速度状态机：按帧间位移进入/退出挥动）----------
 # "一挥手" → SWIPE_LEFT/RIGHT 事件（协议 0x02）→ MCU 翻页
-SWIPE_DIST = 55         # 3 帧窗口(~100ms)内位移 ≥ 此值判定挥动（快速挥也能检）
+SWIPE_SPEED = 25        # 帧间位移 ≥ 此值 = 挥动中（px/帧；快速挥必达）
+SWIPE_TOTAL = 80        # 一次挥动累计位移 ≥ 此值才触发事件
 SWIPE_COOLDOWN_MS = 700 # 冷却防连发
-SWIPE_MUTE_MS = 800     # 挥动事件后屏蔽 AI 手势判定的时长
-SWIPE_FRAME_DISP = 35   # 帧间位移 ≥ 此值视为"挥动中"（跳过 AI 判定）
+SWIPE_MUTE_MS = 800     # 事件后屏蔽 AI 手势判定时长
+SWIPE_MUTE_SPEED = 20   # 帧间位移 ≥ 此值即屏蔽 AI 判定（挥动全程静默）
 G_NONE, G_LEFT, G_RIGHT = 0x00, 0x01, 0x02
 G_UP, G_DOWN = 0x03, 0x04
 
@@ -76,8 +77,10 @@ last_frame_t = 0
 vote_buf = []
 out_gid = -1            # 当前输出手势（切换确认状态）
 switch_pend = 0
-# 挥手检测状态
-sw_hist = []            # 坐标历史（4 帧）
+# 挥手检测状态（速度状态机）
+sw_px = sw_py = 0       # 上一帧原始坐标
+sw_active = False       # 挥动中标志
+sw_dx = sw_dy = 0       # 挥动累计位移（方向）
 sw_cooldown = 0
 sw_prev_present = False
 gesture_mute_until = 0  # AI 手势屏蔽截止时刻
@@ -133,9 +136,11 @@ while True:
         cx, cy = ex_prev, ey_prev
         side = int(prev_size * 1.1)
         track_ok = True
+        cx_raw, cy_raw = cx, cy
     elif best is not None:
-        # 手级块：EMA 平滑 + 端部定位
-        cx, cy = best.cx(), best.cy()
+        # 手级块：EMA 平滑 + 端部定位（原始坐标保留给挥手检测用）
+        cx_raw, cy_raw = best.cx(), best.cy()
+        cx, cy = cx_raw, cy_raw
         if ex_prev is not None:
             cx = int(ex_prev * (1 - EMA_ALPHA) + cx * EMA_ALPHA)
             cy = int(ey_prev * (1 - EMA_ALPHA) + cy * EMA_ALPHA)
@@ -150,27 +155,36 @@ while True:
         track_ok = True
     else:
         cx = cy = side = 0
+        cx_raw = cy_raw = 0
         track_ok = False
 
     last_frame_t = time.ticks_ms()
 
-    # ---------- 挥手检测（3 帧短窗口：快速挥也能检到）----------
+    # ---------- 挥手检测（速度状态机）----------
     mute = False
     if track_ok:
         now2 = time.ticks_ms()
-        sw_hist.append((cx, cy))
-        if len(sw_hist) > 4:
-            sw_hist.pop(0)
-        if len(sw_hist) == 4:
-            # 横向取反：sensor 画面为镜像，用户向左挥时图像 x 增大
-            dxs = -(cx - sw_hist[0][0])
-            dys = cy - sw_hist[0][1]
-            if (abs(dxs) >= SWIPE_DIST or abs(dys) >= SWIPE_DIST) and \
+        if sw_prev_present:
+            fd = abs(cx_raw - sw_px) + abs(cy_raw - sw_py)
+        else:
+            fd = 0
+        sw_px, sw_py = cx_raw, cy_raw
+        sw_prev_present = True
+
+        if fd >= SWIPE_SPEED:
+            # 挥动中：累计位移（横向取反补偿镜像）
+            sw_active = True
+            sw_dx += -(cx_raw - sw_px)
+            sw_dy += cy_raw - sw_py
+            mute = True
+        elif sw_active:
+            # 挥动结束：累计位移达标则触发事件
+            if (abs(sw_dx) >= SWIPE_TOTAL or abs(sw_dy) >= SWIPE_TOTAL) and \
                (now2 - sw_cooldown) >= SWIPE_COOLDOWN_MS:
-                if abs(dxs) >= abs(dys):
-                    sg = G_RIGHT if dxs > 0 else G_LEFT
+                if abs(sw_dx) >= abs(sw_dy):
+                    sg = G_RIGHT if sw_dx > 0 else G_LEFT
                 else:
-                    sg = G_DOWN if dys > 0 else G_UP
+                    sg = G_DOWN if sw_dy > 0 else G_UP
                 names = {G_LEFT: "SWIPE_LEFT", G_RIGHT: "SWIPE_RIGHT",
                          G_UP: "SWIPE_UP", G_DOWN: "SWIPE_DOWN"}
                 print("[GESTURE] %s" % names[sg])
@@ -178,18 +192,18 @@ while True:
                     uart.write(pack(0x02, bytes([sg])))
                 sw_cooldown = now2
                 gesture_mute_until = now2 + SWIPE_MUTE_MS
-        # 挥动中（帧间位移大）或事件后屏蔽期：跳过 AI 手势判定
-        if len(sw_hist) >= 2:
-            fd = (abs(sw_hist[-1][0] - sw_hist[-2][0]) +
-                  abs(sw_hist[-1][1] - sw_hist[-2][1]))
-            if fd > SWIPE_FRAME_DISP:
-                mute = True
+            sw_active = False
+            sw_dx = sw_dy = 0
+        elif fd >= SWIPE_MUTE_SPEED:
+            # 中速移动：不判挥动但屏蔽 AI 判定
+            mute = True
+
         if now2 < gesture_mute_until:
             mute = True
-        sw_prev_present = True
     else:
         sw_prev_present = False
-        sw_hist.clear()
+        sw_active = False
+        sw_dx = sw_dy = 0
 
     if track_ok:
         x0 = max(0, cx - side // 2)
