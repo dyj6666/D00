@@ -28,9 +28,10 @@ SWITCH_CONFIRM = 3      # 新手势需连续 N 帧占优才切换（误判彻底
 
 # ---------- 挥手检测（运动分析，非 AI——时序动作用运动更可靠）----------
 # "一挥手" → SWIPE_LEFT/RIGHT 事件（协议 0x02）→ MCU 翻页
-SWIPE_DIST = 100        # 0.5s 窗口内位移 ≥ 此值判定挥动（px）
-SWIPE_WIN_MS = 500
-SWIPE_COOLDOWN_MS = 800 # 冷却防连发
+SWIPE_DIST = 55         # 3 帧窗口(~100ms)内位移 ≥ 此值判定挥动（快速挥也能检）
+SWIPE_COOLDOWN_MS = 700 # 冷却防连发
+SWIPE_MUTE_MS = 800     # 挥动事件后屏蔽 AI 手势判定的时长
+SWIPE_FRAME_DISP = 35   # 帧间位移 ≥ 此值视为"挥动中"（跳过 AI 判定）
 G_NONE, G_LEFT, G_RIGHT = 0x00, 0x01, 0x02
 G_UP, G_DOWN = 0x03, 0x04
 
@@ -76,10 +77,10 @@ vote_buf = []
 out_gid = -1            # 当前输出手势（切换确认状态）
 switch_pend = 0
 # 挥手检测状态
-sw_x0 = sw_y0 = 0
-sw_t0 = 0
+sw_hist = []            # 坐标历史（4 帧）
 sw_cooldown = 0
 sw_prev_present = False
+gesture_mute_until = 0  # AI 手势屏蔽截止时刻
 clock = time.clock()
 print("READY: AI 手势识别")
 while True:
@@ -153,15 +154,17 @@ while True:
 
     last_frame_t = time.ticks_ms()
 
-    # ---------- 挥手检测（运动分析）----------
+    # ---------- 挥手检测（3 帧短窗口：快速挥也能检到）----------
+    mute = False
     if track_ok:
         now2 = time.ticks_ms()
-        if not sw_prev_present:
-            sw_x0, sw_y0 = cx, cy
-            sw_t0 = now2
-        elif (now2 - sw_t0) >= SWIPE_WIN_MS:
-            dxs = cx - sw_x0
-            dys = cy - sw_y0
+        sw_hist.append((cx, cy))
+        if len(sw_hist) > 4:
+            sw_hist.pop(0)
+        if len(sw_hist) == 4:
+            # 横向取反：sensor 画面为镜像，用户向左挥时图像 x 增大
+            dxs = -(cx - sw_hist[0][0])
+            dys = cy - sw_hist[0][1]
             if (abs(dxs) >= SWIPE_DIST or abs(dys) >= SWIPE_DIST) and \
                (now2 - sw_cooldown) >= SWIPE_COOLDOWN_MS:
                 if abs(dxs) >= abs(dys):
@@ -174,11 +177,19 @@ while True:
                 if uart:
                     uart.write(pack(0x02, bytes([sg])))
                 sw_cooldown = now2
-            sw_x0, sw_y0 = cx, cy
-            sw_t0 = now2
+                gesture_mute_until = now2 + SWIPE_MUTE_MS
+        # 挥动中（帧间位移大）或事件后屏蔽期：跳过 AI 手势判定
+        if len(sw_hist) >= 2:
+            fd = (abs(sw_hist[-1][0] - sw_hist[-2][0]) +
+                  abs(sw_hist[-1][1] - sw_hist[-2][1]))
+            if fd > SWIPE_FRAME_DISP:
+                mute = True
+        if now2 < gesture_mute_until:
+            mute = True
         sw_prev_present = True
     else:
         sw_prev_present = False
+        sw_hist.clear()
 
     if track_ok:
         x0 = max(0, cx - side // 2)
@@ -192,42 +203,44 @@ while True:
         sc_y = 32.0 / roi.height()
         roi32 = roi.copy(scale_x=sc_x, scale_y=sc_y)
 
-        # 分类 + 多数投票平滑（VOTE_N 帧取众数，抑制帧间抖动）
+        # 分类 + 多数投票平滑（挥动中 mute 跳过，避免挥手被判成手势）
         gid = 0xFF      # 低置信度/无目标（协议 0x03 定义 0xFF）
         conf = 0.0
-        for obj in tf.classify(net, roi32):
-            out = sorted(zip(labels, obj.output()), key=lambda x: x[1], reverse=True)
-            conf = out[0][1]
-            if conf >= CONF_MIN:
-                gid = labels.index(out[0][0])
-        vote_buf.append(gid if gid != 0xFF else -1)
-        if len(vote_buf) > VOTE_N:
-            vote_buf.pop(0)
-        # 众数
-        vgid = -1
-        vconf = 0.0
-        if vote_buf:
-            vgid = max(set(vote_buf), key=vote_buf.count)
-            vconf = sum(1 for v in vote_buf if v == vgid) * 100.0 / len(vote_buf)
-        # 切换确认：新手势需连续 SWITCH_CONFIRM 帧占优才切换输出
-        # （偶发误判无法累积到确认阈值 → 几乎不可能误输出）
-        if vgid == out_gid:
-            switch_pend = 0
-        else:
-            switch_pend += 1
-            if switch_pend >= SWITCH_CONFIRM:
-                out_gid = vgid
+        if not mute:
+            for obj in tf.classify(net, roi32):
+                out = sorted(zip(labels, obj.output()), key=lambda x: x[1], reverse=True)
+                conf = out[0][1]
+                if conf >= CONF_MIN:
+                    gid = labels.index(out[0][0])
+            vote_buf.append(gid if gid != 0xFF else -1)
+            if len(vote_buf) > VOTE_N:
+                vote_buf.pop(0)
+            # 众数
+            vgid = -1
+            vconf = 0.0
+            if vote_buf:
+                vgid = max(set(vote_buf), key=vote_buf.count)
+                vconf = sum(1 for v in vote_buf if v == vgid) * 100.0 / len(vote_buf)
+            # 切换确认：新手势需连续 SWITCH_CONFIRM 帧占优才切换输出
+            # （偶发误判无法累积到确认阈值 → 几乎不可能误输出）
+            if vgid == out_gid:
                 switch_pend = 0
-        if out_gid >= 0:
-            label = labels[out_gid]
-            gid = out_gid
-            conf = vconf / 100.0
-        else:
-            label = "?"
-            gid = 0xFF
-        print("[AI] %s = %.0f%% fps=%.1f" % (label, conf * 100, clock.fps()))
-        if uart:
-            uart.write(pack_gesture_ai(gid, int(conf * 100)))
+            else:
+                switch_pend += 1
+                if switch_pend >= SWITCH_CONFIRM:
+                    out_gid = vgid
+                    switch_pend = 0
+            if out_gid >= 0:
+                label = labels[out_gid]
+                gid = out_gid
+                conf = vconf / 100.0
+            else:
+                label = "?"
+                gid = 0xFF
+            print("[AI] %s = %.0f%% fps=%.1f" % (label, conf * 100, clock.fps()))
+            if uart:
+                uart.write(pack_gesture_ai(gid, int(conf * 100)))
+        # else: 挥动中——跳过 AI 判定与输出（坐标帧照发）
         # 画框：手级画 blob 框；记忆模式画记忆位置框
         if not use_mem and best is not None:
             img.draw_rectangle(best.rect(), color=(255, 0, 0))
