@@ -39,7 +39,7 @@ except OSError:
 
 saved = 0
 last_save = 0
-prev_cx, prev_cy = None, None
+prev_cx, prev_cy, prev_size = None, None, 0
 clock = time.clock()
 print("COLLECT [%s] 目标 %d 张，请把手比好手势放镜头前（可缓慢微动）" % (CLASS, COUNT))
 while saved < COUNT:
@@ -49,8 +49,8 @@ while saved < COUNT:
 
     blobs = img.find_blobs(THRESHOLDS, pixels_threshold=150,
                            area_threshold=150, merge=False)
-    # merge=False + 运动跟踪：手与身体肤色有间隙时保持独立块，
-    # 选与上帧目标最近的候选（手移动目标，脸/身体静止不抢）
+    # 手位置记忆跟踪：手独立时记住位置/大小；手移到中间与身体连通
+    # （大块）时，用记忆位置继续框住手——解决"换位置就不采集"
     cands = []
     for b in blobs:
         w, h = b.w(), b.h()
@@ -65,18 +65,37 @@ while saved < COUNT:
         if prev_cx is not None:
             best = min(cands, key=lambda b: abs(b.cx() - prev_cx) + abs(b.cy() - prev_cy))
             d = abs(best.cx() - prev_cx) + abs(best.cy() - prev_cy)
-            if d > 120:
-                best = max(cands, key=lambda b: b.area())
+            if d > 300:
+                best = max(cands, key=lambda b: b.area())  # 记忆丢失：选最大
         else:
             best = max(cands, key=lambda b: b.area())
 
-    if best:
-        prev_cx, prev_cy = best.cx(), best.cy()
+    use_mem = False
+    if best is not None:
+        is_hand = best.area() < 20000 and max(best.w(), best.h()) < 160
+        if is_hand:
+            # 手级独立块：更新位置/大小记忆
+            prev_cx, prev_cy = best.cx(), best.cy()
+            prev_size = max(best.w(), best.h())
+        elif prev_cx is not None and prev_size > 0:
+            # 身体级大块（手与身体肤色连通）：用手记忆位置继续框/采
+            use_mem = True
+        else:
+            # 无记忆且只有大块：退化用块中心（并建立记忆）
+            prev_cx, prev_cy = best.cx(), best.cy()
+            prev_size = max(best.w(), best.h())
+    else:
+        # 无候选：短暂保留记忆（500ms 后清空）
+        if prev_cx is not None and (now - last_save) > 500:
+            prev_cx = prev_cy = None
+            prev_size = 0
 
-    if best and now - last_save >= SAVE_EVERY_MS:
-        # 端部定位裁剪（与 gesture_ai.py 部署侧一致）：质心偏向手(粗端)，
-        # 沿质心方向外推 0.6 + 0.9x 边长，聚焦手端少含胳膊
-        cx, cy = best.cx(), best.cy()
+    # 确定裁剪中心与边长
+    if use_mem:
+        cx, cy = prev_cx, prev_cy
+        side = int(prev_size * 1.1)
+    elif best is not None:
+        # 手级块：端部定位（质心偏手端 + 外推 0.6 + 0.9x）
         bw, bh = best.w(), best.h()
         box_cx = best.x() + bw / 2.0
         box_cy = best.y() + bh / 2.0
@@ -85,6 +104,10 @@ while saved < COUNT:
         cx = int(best.cx() + dx * 0.6)
         cy = int(best.cy() + dy * 0.6)
         side = int(max(bw, bh) * 0.9)
+    else:
+        cx = cy = side = 0
+
+    if side > 0 and now - last_save >= SAVE_EVERY_MS:
         # 多样化：裁剪框随机偏移/缩放（模拟手在画面不同位置/大小，
         # 提升模型对位置变化的鲁棒性）
         jx = random.randint(-int(side * 0.35), int(side * 0.35))

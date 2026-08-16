@@ -59,6 +59,8 @@ sensor.set_framesize(sensor.QVGA)
 sensor.skip_frames(time=1000)
 
 ex_prev, ey_prev = None, None
+prev_size = 0
+last_frame_t = 0
 vote_buf = []
 clock = time.clock()
 print("READY: AI 手势识别")
@@ -85,20 +87,39 @@ while True:
             # 跟踪：选离上帧目标最近的候选（距离阈值内），否则选最大
             best = min(cands, key=lambda b: abs(b.cx() - ex_prev) + abs(b.cy() - ey_prev))
             d = abs(best.cx() - ex_prev) + abs(best.cy() - ey_prev)
-            if d > 120:
+            if d > 300:
                 best = max(cands, key=lambda b: b.area())  # 目标丢失：重新选最大
         else:
             best = max(cands, key=lambda b: b.area())
 
-    if best:
+    # 手位置记忆：手独立时更新位置/大小；手与身体连通（大块）时用记忆
+    use_mem = False
+    if best is not None:
+        is_hand = best.area() < 20000 and max(best.w(), best.h()) < 160
+        if is_hand:
+            ex_prev, ey_prev = best.cx(), best.cy()
+            prev_size = max(best.w(), best.h())
+        elif ex_prev is not None and prev_size > 0:
+            use_mem = True
+        else:
+            ex_prev, ey_prev = best.cx(), best.cy()
+            prev_size = max(best.w(), best.h())
+    else:
+        if ex_prev is not None and (time.ticks_ms() - last_frame_t) > 500:
+            ex_prev = ey_prev = None
+            prev_size = 0
+
+    if use_mem:
+        # 身体级（手连通）：用记忆位置裁剪
+        cx, cy = ex_prev, ey_prev
+        side = int(prev_size * 1.1)
+        track_ok = True
+    elif best is not None:
+        # 手级块：EMA 平滑 + 端部定位
         cx, cy = best.cx(), best.cy()
         if ex_prev is not None:
             cx = int(ex_prev * (1 - EMA_ALPHA) + cx * EMA_ALPHA)
             cy = int(ey_prev * (1 - EMA_ALPHA) + cy * EMA_ALPHA)
-        ex_prev, ey_prev = cx, cy
-
-        # 端部定位裁剪：手是肤色块"最粗"的一端 → 质心偏向手；
-        # 裁剪中心沿质心方向外推 0.6 倍偏移 + 0.9x 边长，让框聚焦手端
         bw, bh = best.w(), best.h()
         box_cx = best.x() + bw / 2.0
         box_cy = best.y() + bh / 2.0
@@ -107,6 +128,14 @@ while True:
         cx = int(best.cx() + dx * 0.6)
         cy = int(best.cy() + dy * 0.6)
         side = int(max(bw, bh) * 0.9)
+        track_ok = True
+    else:
+        cx = cy = side = 0
+        track_ok = False
+
+    last_frame_t = time.ticks_ms()
+
+    if track_ok:
         x0 = max(0, cx - side // 2)
         y0 = max(0, cy - side // 2)
         x1 = min(img.width(), x0 + side)
@@ -144,12 +173,17 @@ while True:
         print("[AI] %s = %.0f%% fps=%.1f" % (label, conf * 100, clock.fps()))
         if uart:
             uart.write(pack_gesture_ai(gid, int(conf * 100)))
-        img.draw_rectangle(best.rect(), color=(255, 0, 0))
+        # 画框：手级画 blob 框；记忆模式画记忆位置框
+        if not use_mem and best is not None:
+            img.draw_rectangle(best.rect(), color=(255, 0, 0))
+        else:
+            img.draw_rectangle((x0, y0, x1 - x0, y1 - y0), color=(255, 128, 0))
         img.draw_cross(cx, cy, color=(0, 255, 0))
         if uart:
-            uart.write(pack_hand(True, cx, cy, best.w(), best.h()))
+            uart.write(pack_hand(True, cx, cy, x1 - x0, y1 - y0))
     else:
         ex_prev, ey_prev = None, None
+        prev_size = 0
         vote_buf.clear()
         if uart:
             uart.write(pack_hand(False, 0, 0, 0, 0))
