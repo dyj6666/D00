@@ -97,9 +97,16 @@ while True:
             cy = int(ey_prev * (1 - EMA_ALPHA) + cy * EMA_ALPHA)
         ex_prev, ey_prev = cx, cy
 
-        # 裁剪聚焦手部：blob 质心偏向"粗端"(手)，边长 1.1x 让胳膊少入框
-        # （原 1.5x 会把手+整条胳膊框进去，32x32 后手占比小导致识别偏）
-        side = int(max(best.w(), best.h()) * 1.1)
+        # 端部定位裁剪：手是肤色块"最粗"的一端 → 质心偏向手；
+        # 裁剪中心沿质心方向外推 0.6 倍偏移 + 0.9x 边长，让框聚焦手端
+        bw, bh = best.w(), best.h()
+        box_cx = best.x() + bw / 2.0
+        box_cy = best.y() + bh / 2.0
+        dx = best.cx() - box_cx
+        dy = best.cy() - box_cy
+        cx = int(best.cx() + dx * 0.6)
+        cy = int(best.cy() + dy * 0.6)
+        side = int(max(bw, bh) * 0.9)
         x0 = max(0, cx - side // 2)
         y0 = max(0, cy - side // 2)
         x1 = min(img.width(), x0 + side)

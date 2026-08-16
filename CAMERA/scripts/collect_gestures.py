@@ -74,9 +74,17 @@ while saved < COUNT:
         prev_cx, prev_cy = best.cx(), best.cy()
 
     if best and now - last_save >= SAVE_EVERY_MS:
-        # 裁剪聚焦手部：blob 质心偏向"粗端"(手)，边长 1.1x 让胳膊少入框
+        # 端部定位裁剪（与 gesture_ai.py 部署侧一致）：质心偏向手(粗端)，
+        # 沿质心方向外推 0.6 + 0.9x 边长，聚焦手端少含胳膊
         cx, cy = best.cx(), best.cy()
-        side = int(max(best.w(), best.h()) * 1.1)
+        bw, bh = best.w(), best.h()
+        box_cx = best.x() + bw / 2.0
+        box_cy = best.y() + bh / 2.0
+        dx = best.cx() - box_cx
+        dy = best.cy() - box_cy
+        cx = int(best.cx() + dx * 0.6)
+        cy = int(best.cy() + dy * 0.6)
+        side = int(max(bw, bh) * 0.9)
         # 多样化：裁剪框随机偏移/缩放（模拟手在画面不同位置/大小，
         # 提升模型对位置变化的鲁棒性）
         jx = random.randint(-int(side * 0.35), int(side * 0.35))
