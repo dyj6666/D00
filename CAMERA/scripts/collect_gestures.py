@@ -10,6 +10,7 @@ import sensor
 import image
 import time
 import os
+import random
 
 # ---------- 采集配置 ----------
 CLASS = "victory"          # ← 每次运行前改成当前手势名（英文小写）
@@ -61,8 +62,13 @@ while saved < COUNT:
         # 以手中心裁剪正方形区域（1.5 倍边长，留背景余量）
         cx, cy = best.cx(), best.cy()
         side = int(max(best.w(), best.h()) * 1.5)
-        x0 = max(0, cx - side // 2)
-        y0 = max(0, cy - side // 2)
+        # 多样化：裁剪框随机偏移/缩放（模拟手在画面不同位置/大小，
+        # 提升模型对位置变化的鲁棒性）
+        jx = random.randint(-int(side * 0.35), int(side * 0.35))
+        jy = random.randint(-int(side * 0.35), int(side * 0.35))
+        side = int(side * random.uniform(0.75, 1.25))
+        x0 = max(0, cx + jx - side // 2)
+        y0 = max(0, cy + jy - side // 2)
         x1 = min(img.width(), x0 + side)
         y1 = min(img.height(), y0 + side)
         roi = img.copy(roi=(x0, y0, x1 - x0, y1 - y0))

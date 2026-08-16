@@ -19,7 +19,8 @@ RATIO_MIN, RATIO_MAX = 0.5, 1.6
 EMA_ALPHA = 0.6
 MODEL = "/sd/model_gesture.tflite"
 LABELS = "/sd/labels_gesture.txt"
-CONF_MIN = 0.6          # 置信度低于此值输出 "?"
+CONF_MIN = 0.65         # 置信度低于此值输出 "?"
+VOTE_N = 5              # 分类结果多数投票帧数（抑制帧间抖动）
 
 # ---------- UART ----------
 uart = None
@@ -57,6 +58,7 @@ sensor.set_framesize(sensor.QVGA)
 sensor.skip_frames(time=1000)
 
 ex_prev, ey_prev = None, None
+vote_buf = []
 clock = time.clock()
 print("READY: AI 手势识别")
 while True:
@@ -92,7 +94,7 @@ while True:
         sc = 32.0 / max(roi.width(), roi.height())
         roi32 = roi.copy(scale_x=sc, scale_y=sc)
 
-        # 分类
+        # 分类 + 多数投票平滑（VOTE_N 帧取众数，抑制帧间抖动）
         gid = 0xFF      # 低置信度/无目标（协议 0x03 定义 0xFF）
         conf = 0.0
         for obj in tf.classify(net, roi32):
@@ -100,16 +102,31 @@ while True:
             conf = out[0][1]
             if conf >= CONF_MIN:
                 gid = labels.index(out[0][0])
-            label = out[0][0] if conf >= CONF_MIN else "?"
-            print("[AI] %s = %.0f%% fps=%.1f" % (label, conf * 100, clock.fps()))
-            if uart:
-                uart.write(pack_gesture_ai(gid, int(conf * 100)))
+        vote_buf.append(gid if gid != 0xFF else -1)
+        if len(vote_buf) > VOTE_N:
+            vote_buf.pop(0)
+        # 众数
+        if vote_buf:
+            vgid = max(set(vote_buf), key=vote_buf.count)
+            vconf = sum(1 for v in vote_buf if v == vgid) * 100.0 / len(vote_buf)
+            if vgid >= 0:
+                label = labels[vgid]
+                gid = vgid
+                conf = vconf / 100.0
+            else:
+                label = "?"
+        else:
+            label = "?"
+        print("[AI] %s = %.0f%% fps=%.1f" % (label, conf * 100, clock.fps()))
+        if uart:
+            uart.write(pack_gesture_ai(gid, int(conf * 100)))
         img.draw_rectangle(best.rect(), color=(255, 0, 0))
         img.draw_cross(cx, cy, color=(0, 255, 0))
         if uart:
             uart.write(pack_hand(True, cx, cy, best.w(), best.h()))
     else:
         ex_prev, ey_prev = None, None
+        vote_buf.clear()
         if uart:
             uart.write(pack_hand(False, 0, 0, 0, 0))
             uart.write(pack_gesture_ai(0xFF, 0))

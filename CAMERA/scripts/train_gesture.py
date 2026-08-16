@@ -38,19 +38,16 @@ xs = np.array(xs)
 ys = np.array(ys)
 print("总样本:", len(xs), "形状:", xs.shape)
 
-# ---------- 数据增强（小数据集必需）----------
-da = keras.Sequential([
-    layers.RandomRotation(0.12),
-    layers.RandomTranslation(0.08, 0.08),
-    layers.RandomZoom(0.1),
-    layers.RandomFlip("horizontal"),
-])
+# ---------- 数据增强 ----------
+# 注：tf.keras 增强层在此环境验证阶段异常（val_acc=0）且转换 tflite 时
+# 产生 Captures 警告——弃用。位置/大小鲁棒性改由"采集侧多样化"保证
+# （collect_gestures.py 保存时随机偏移/缩放裁剪框）。
+da = None
 
 # ---------- 模型（轻量 CNN，OpenMV 可跑）----------
 model = keras.Sequential([
     keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3)),
     layers.Rescaling(1.0),  # 已归一化
-    da,
     layers.Conv2D(16, 3, activation="relu", padding="same"),
     layers.MaxPooling2D(),
     layers.Conv2D(32, 3, activation="relu", padding="same"),
