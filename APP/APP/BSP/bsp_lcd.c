@@ -182,6 +182,60 @@ void BSP_LCD_DirTest(void)
     LOG_Printf("[LCD] dirtest done (dir restored=%u)\r\n", (unsigned)saved);
 }
 
+/* DMA M2M 直写（F407 正确配置）：
+ * 关键配置（DAP 寄存器级实验确证，见 ENGINEERING_LOG 10.57）：
+ *   DIR 位为 2 比特编码：00=P2M、01=M2P、10=M2M——M2M 必须 DIR_1；
+ *   M2M 数据流：PAR=源（PINC 递增）、M0AR=目的（MINC 固定）；
+ *   与 CPU 写路径完全同构（逐行单行窗口 + 行数据）。 */
+bool BSP_LCD_WritePixelsDma(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                            const uint16_t *buf)
+{
+    if (w == 0u || h == 0u || buf == NULL) {
+        return false;
+    }
+    if ((uint32_t)x + w > BSP_LCD_GetWidth() ||
+        (uint32_t)y + h > BSP_LCD_GetHeight()) {
+        return false;
+    }
+    __HAL_RCC_DMA2_CLK_ENABLE();
+
+    for (uint16_t row = 0; row < h; row++) {
+        if (row == 0u) {
+            lcd_set_window(x, y, w, 1);
+        } else {
+            uint16_t yy = (uint16_t)(y + row);
+            lcd_wr_regno(lcddev.setycmd);
+            lcd_wr_data(yy >> 8);
+            lcd_wr_data(yy & 0xFF);
+            lcd_wr_data(yy >> 8);
+            lcd_wr_data(yy & 0xFF);
+        }
+        lcd_write_ram_prepare();
+
+        DMA2_Stream4->CR = 0u;
+        DMA2->HIFCR = DMA_HIFCR_CTCIF4;
+        DMA2_Stream4->PAR  = (uint32_t)(buf + (uint32_t)row * w);  /* 源 */
+        DMA2_Stream4->M0AR = BSP_LCD_GetRamAddr();                /* 目的 */
+        DMA2_Stream4->NDTR = w;
+        DMA2_Stream4->FCR  = DMA_SxFCR_DMDIS;
+        DMA2_Stream4->CR = DMA_SxCR_CHSEL_0 |   /* M2M 通道位无意义 */
+                           DMA_SxCR_PINC |      /* 源递增 */
+                           DMA_SxCR_MSIZE_1 | DMA_SxCR_PSIZE_1 |  /* 16bit */
+                           DMA_SxCR_PL_1 |
+                           DMA_SxCR_DIR_1;      /* 10 = M2M（关键！） */
+        DMA2_Stream4->CR |= DMA_SxCR_EN;        /* EN 最后单独置位 */
+        uint32_t guard = 0;
+        while (DMA2_Stream4->CR & DMA_SxCR_EN) {
+            if (++guard > 40000000u) {          /* ~240ms 超时 */
+                DMA2_Stream4->CR = 0u;
+                return false;
+            }
+        }
+        DMA2_Stream4->CR = 0u;
+    }
+    return true;
+}
+
 /* 批量写入矩形像素（逐行"单行多列窗口"写：
  * ST7789 实测：单点窗口只收 1 像素（超窗丢弃）；多行窗口 RAMWR
  * 行递增异常（第二行起错位）。唯一正确路径 = 每行设 (x, y+row, w, 1)

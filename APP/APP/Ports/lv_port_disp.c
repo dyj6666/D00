@@ -69,6 +69,8 @@ static void disp_flush(lv_disp_drv_t *drv, const lv_area_t *area,
     uint16_t y0 = (uint16_t)(area->y1 < area->y2 ? area->y1 : area->y2);
     uint16_t y1 = (uint16_t)(area->y1 < area->y2 ? area->y2 : area->y1);
 
+    /* CPU 写（实测最优：逐行窗口下 DMA 每行配置开销 > CPU 搬运；
+     * DMA 直写可用但 flush 10 vs 18 MPix/s 更慢，见 ENGINEERING_LOG 10.57） */
     BSP_LCD_WritePixels(x0, y0, (uint16_t)(x1 - x0 + 1u),
                         (uint16_t)(y1 - y0 + 1u),
                         (const uint16_t *)color_p);

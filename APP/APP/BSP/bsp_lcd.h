@@ -72,6 +72,12 @@ void BSP_LCD_ReadPixels(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 void BSP_LCD_WritePixels(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                          const uint16_t *buf);
 
+/* DMA M2M 直写（F407 正确配置：DIR=10(M2M) 两比特编码、PAR=源递增、
+ * M0AR=LCD_RAM 固定、16bit）。逐行窗口 + DMA 行传输，同步等待完成。
+ * 返回 false = DMA 超时/失败（调用方可回退 CPU 写）。 */
+bool BSP_LCD_WritePixelsDma(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                            const uint16_t *buf);
+
 /* 仅设置写窗口（CASET/PASET + RAM 写就绪），不写像素数据。
  * 供 DMA 异步 flush 使用：CPU 设窗口后由 DMA 直接打像素到 LCD_RAM。 */
 void BSP_LCD_SetWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
