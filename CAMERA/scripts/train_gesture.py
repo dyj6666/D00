@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-# train_gesture.py —— 手势分类模型训练（电脑端，TensorFlow）
+# train_gesture.py —— 手势分类模型训练 v4（离线数据增强版）
 # 输入：CAMERA/train/dataset/<CLASS>/*.jpg（OpenART 采集）
 # 输出：CAMERA/train/model_gesture.tflite（float32）+ labels_gesture.txt
+# v4 变化：PIL 离线增强（旋转/平移/缩放/翻转，仅训练集）——解决
+#   手位置偏移/角度倾斜识别错误；tf.keras 增强层弃用（验证阶段异常）。
 # 运行：CAMERA/train/.venv/Scripts/python.exe CAMERA/scripts/train_gesture.py
 import os
+import random
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 import tensorflow as tf
 from tensorflow import keras
@@ -14,16 +17,51 @@ from tensorflow.keras import layers
 DATASET = r"D:\GIT-SPACE\D00\CAMERA\train\dataset"
 OUT_MODEL = r"D:\GIT-SPACE\D00\CAMERA\train\model_gesture.tflite"
 OUT_LABELS = r"D:\GIT-SPACE\D00\CAMERA\train\labels_gesture.txt"
-IMG_SIZE = 32          # 模型输入（OpenMV tflite 兼容小尺寸）
+IMG_SIZE = 32
 EPOCHS = 40
-BATCH = 32
+BATCH = 64
 VAL_SPLIT = 0.15
+AUG_PER_IMG = 10       # 每张训练图生成增强副本数（不含原图）
+
+random.seed(42)
+np.random.seed(42)
+
+
+def augment(img, size):
+    """PIL 离线增强：旋转/平移/缩放/翻转/亮度，返回副本列表（尺寸不变）"""
+    outs = []
+    w, h = size
+    # 1. 旋转
+    for ang in (-15, -8, 8, 15):
+        outs.append(img.rotate(ang, resample=Image.BILINEAR, fillcolor=(0, 0, 0)))
+    # 2. 平移（±10%）
+    for dx, dy in ((-int(w * 0.1), 0), (int(w * 0.1), 0),
+                   (0, -int(h * 0.1)), (0, int(h * 0.1))):
+        t = Image.new("RGB", (w, h), (0, 0, 0))
+        t.paste(img, (dx, dy))
+        outs.append(t)
+    # 3. 缩放（85% / 115%，居中）
+    for s in (0.85, 1.15):
+        nw, nh = max(1, int(w * s)), max(1, int(h * s))
+        z = img.resize((nw, nh))
+        t = Image.new("RGB", (w, h), (0, 0, 0))
+        t.paste(z, ((w - nw) // 2, (h - nh) // 2))
+        outs.append(t)
+    # 4. 水平翻转
+    outs.append(img.transpose(Image.FLIP_LEFT_RIGHT))
+    # 5. 亮度 0.85 / 1.15
+    outs.append(ImageEnhance.Brightness(img).enhance(0.85))
+    outs.append(ImageEnhance.Brightness(img).enhance(1.15))
+    # 截取前 AUG_PER_IMG 个
+    return outs[:AUG_PER_IMG]
+
 
 # ---------- 加载数据 ----------
 classes = sorted([d for d in os.listdir(DATASET)
                   if os.path.isdir(os.path.join(DATASET, d))])
 print("类别:", classes)
-xs, ys = [], []
+
+xs, ys, augs = [], [], []
 for ci, c in enumerate(classes):
     files = [f for f in os.listdir(os.path.join(DATASET, c))
              if f.lower().endswith((".jpg", ".jpeg", ".png"))]
@@ -32,22 +70,34 @@ for ci, c in enumerate(classes):
         img = img.resize((IMG_SIZE, IMG_SIZE))
         xs.append(np.array(img, dtype=np.float32) / 255.0)
         ys.append(ci)
+        augs.append(augment(img, (IMG_SIZE, IMG_SIZE)))
     print("  %s: %d 张" % (c, len(files)))
 
 xs = np.array(xs)
 ys = np.array(ys)
-print("总样本:", len(xs), "形状:", xs.shape)
+print("原始样本:", len(xs))
 
-# ---------- 数据增强 ----------
-# 注：tf.keras 增强层在此环境验证阶段异常（val_acc=0）且转换 tflite 时
-# 产生 Captures 警告——弃用。位置/大小鲁棒性改由"采集侧多样化"保证
-# （collect_gestures.py 保存时随机偏移/缩放裁剪框）。
-da = None
+# ---------- 手动划分：验证集只用原图；训练集 = 原图 + 增强副本 ----------
+idx = np.random.permutation(len(xs))
+n_val = int(len(xs) * VAL_SPLIT)
+val_idx, train_idx = idx[:n_val], idx[n_val:]
 
-# ---------- 模型（轻量 CNN，OpenMV 可跑）----------
+x_train, y_train = [], []
+for i in train_idx:
+    x_train.append(xs[i])
+    y_train.append(ys[i])
+    for a in augs[i]:
+        x_train.append(np.array(a, dtype=np.float32) / 255.0)
+        y_train.append(ys[i])
+x_train = np.array(x_train)
+y_train = np.array(y_train)
+x_val = xs[val_idx]
+y_val = ys[val_idx]
+print("训练集(含增强):", len(x_train), " 验证集:", len(x_val))
+
+# ---------- 模型（轻量 CNN）----------
 model = keras.Sequential([
     keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3)),
-    layers.Rescaling(1.0),  # 已归一化
     layers.Conv2D(16, 3, activation="relu", padding="same"),
     layers.MaxPooling2D(),
     layers.Conv2D(32, 3, activation="relu", padding="same"),
@@ -61,16 +111,13 @@ model = keras.Sequential([
 ])
 model.compile(optimizer="adam", loss="sparse_categorical_crossentropy",
               metrics=["accuracy"])
-model.summary()
 
-# ---------- 训练 ----------
-history = model.fit(xs, ys, epochs=EPOCHS, batch_size=BATCH,
-                    validation_split=VAL_SPLIT, verbose=1)
-acc = history.history["accuracy"][-1]
-val_acc = history.history["val_accuracy"][-1]
-print("训练完成: acc=%.3f val_acc=%.3f" % (acc, val_acc))
+model.fit(x_train, y_train, epochs=EPOCHS, batch_size=BATCH,
+          validation_data=(x_val, y_val), verbose=1)
+loss, acc = model.evaluate(x_val, y_val, verbose=0)
+print("训练完成: val_acc=%.3f" % acc)
 
-# ---------- 导出 tflite（float32，OpenMV 兼容）----------
+# ---------- 导出 tflite ----------
 converter = tf.lite.TFLiteConverter.from_keras_model(model)
 tflite_model = converter.convert()
 with open(OUT_MODEL, "wb") as f:
@@ -78,18 +125,16 @@ with open(OUT_MODEL, "wb") as f:
 with open(OUT_LABELS, "w") as f:
     f.write("\n".join(classes) + "\n")
 print("模型已导出:", OUT_MODEL, os.path.getsize(OUT_MODEL), "B")
-print("标签已导出:", OUT_LABELS)
 
-# ---------- 自检：训练集/验证集抽样推理 ----------
+# ---------- 自检 ----------
 interp = tf.lite.Interpreter(model_path=OUT_MODEL)
 interp.allocate_tensors()
 in_d = interp.get_input_details()[0]
 out_d = interp.get_output_details()[0]
 ok = 0
-for i in range(min(30, len(xs))):
-    interp.set_tensor(in_d["index"], xs[i:i + 1])
+for i in range(min(60, len(x_val))):
+    interp.set_tensor(in_d["index"], x_val[i:i + 1])
     interp.invoke()
-    pred = int(np.argmax(interp.get_tensor(out_d["index"])[0]))
-    if pred == ys[i]:
+    if int(np.argmax(interp.get_tensor(out_d["index"])[0])) == y_val[i]:
         ok += 1
-print("tflite 自检（前 30 张）: %d/30 正确" % ok)
+print("tflite 验证集自检: %d/%d 正确" % (ok, min(60, len(x_val))))
