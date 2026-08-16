@@ -14,9 +14,11 @@ from machine import UART
 
 # ---------- 配置 ----------
 THRESHOLDS = [(35, 88, 0, 30, 5, 35)]
-MIN_SIZE, MAX_SIZE = 25, 260           # 放宽上限（手近景可大于 220）
-RATIO_MIN, RATIO_MAX = 0.5, 1.6
-TRACK_DIST = 120        # 跟踪匹配距离（px），超过则重新选最大块
+MIN_SIZE, MAX_SIZE = 20, 320            # 上限放宽到全幅（胳膊伸直也放行）
+RATIO_MIN, RATIO_MAX = 0.4, 2.5         # 宽高比放宽（长条手臂+手也能通过）
+HAND_MAX_SIZE = 150                     # 端部裁剪边长上限（聚焦手，防整臂入框）
+IS_HAND_AREA = 60000                    # 手级块面积上限（黑色桌面无身体干扰）
+TRACK_DIST = 300        # 跟踪匹配距离（px），超过则重新选最大块
 EMA_ALPHA = 0.6
 MODEL = "/sd/model_gesture.tflite"
 LABELS = "/sd/labels_gesture.txt"
@@ -92,10 +94,10 @@ while True:
         else:
             best = max(cands, key=lambda b: b.area())
 
-    # 手位置记忆：手独立时更新位置/大小；手与身体连通（大块）时用记忆
+    # 手位置记忆：手独立时更新位置/大小；超大块时用记忆（黑色桌面下罕见）
     use_mem = False
     if best is not None:
-        is_hand = best.area() < 20000 and max(best.w(), best.h()) < 160
+        is_hand = best.area() < IS_HAND_AREA and max(best.w(), best.h()) < 300
         if is_hand:
             ex_prev, ey_prev = best.cx(), best.cy()
             prev_size = max(best.w(), best.h())
@@ -127,7 +129,7 @@ while True:
         dy = best.cy() - box_cy
         cx = int(best.cx() + dx * 0.6)
         cy = int(best.cy() + dy * 0.6)
-        side = int(max(bw, bh) * 0.9)
+        side = min(int(max(bw, bh) * 0.9), HAND_MAX_SIZE)
         track_ok = True
     else:
         cx = cy = side = 0

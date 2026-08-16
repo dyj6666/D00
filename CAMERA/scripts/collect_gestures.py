@@ -18,8 +18,10 @@ COUNT = 60              # 采集张数（每 0.25s 一张，约 15 秒）
 SAVE_EVERY_MS = 250
 
 THRESHOLDS = [(35, 88, 0, 30, 5, 35)]
-MIN_SIZE, MAX_SIZE = 30, 220
-RATIO_MIN, RATIO_MAX = 0.5, 1.6
+MIN_SIZE, MAX_SIZE = 20, 320            # 上限放宽到全幅（胳膊伸直也放行）
+RATIO_MIN, RATIO_MAX = 0.4, 2.5         # 宽高比放宽（长条手臂+手也能通过）
+HAND_MAX_SIZE = 150                     # 端部裁剪边长上限（聚焦手，防整臂入框）
+IS_HAND_AREA = 60000                    # 手级块面积上限（黑色桌面无身体干扰）
 
 # ---------- 初始化 ----------
 sensor.reset()
@@ -72,16 +74,15 @@ while saved < COUNT:
 
     use_mem = False
     if best is not None:
-        is_hand = best.area() < 20000 and max(best.w(), best.h()) < 160
+        is_hand = best.area() < IS_HAND_AREA and max(best.w(), best.h()) < 300
         if is_hand:
-            # 手级独立块：更新位置/大小记忆
+            # 手级块（含手+胳膊长条）：更新位置/大小记忆
             prev_cx, prev_cy = best.cx(), best.cy()
             prev_size = max(best.w(), best.h())
         elif prev_cx is not None and prev_size > 0:
-            # 身体级大块（手与身体肤色连通）：用手记忆位置继续框/采
+            # 超大块（罕见）：用手记忆位置继续框/采
             use_mem = True
         else:
-            # 无记忆且只有大块：退化用块中心（并建立记忆）
             prev_cx, prev_cy = best.cx(), best.cy()
             prev_size = max(best.w(), best.h())
     else:
@@ -95,7 +96,7 @@ while saved < COUNT:
         cx, cy = prev_cx, prev_cy
         side = int(prev_size * 1.1)
     elif best is not None:
-        # 手级块：端部定位（质心偏手端 + 外推 0.6 + 0.9x）
+        # 手级块：端部定位（质心偏手端 + 外推 0.6），边长限 150 聚焦手
         bw, bh = best.w(), best.h()
         box_cx = best.x() + bw / 2.0
         box_cy = best.y() + bh / 2.0
@@ -103,7 +104,7 @@ while saved < COUNT:
         dy = best.cy() - box_cy
         cx = int(best.cx() + dx * 0.6)
         cy = int(best.cy() + dy * 0.6)
-        side = int(max(bw, bh) * 0.9)
+        side = min(int(max(bw, bh) * 0.9), HAND_MAX_SIZE)
     else:
         cx = cy = side = 0
 
