@@ -1,11 +1,11 @@
-# 摄像头大体积资料/数据集/工具为本地资产（约 1GB），不入库；
-# 保留：README 索引、开发脚本(scripts/)、教程与笔记文档
+﻿# 鎽勫儚澶村ぇ浣撶Н璧勬枡/鏁版嵁闆?宸ュ叿涓烘湰鍦拌祫浜э紙绾?1GB锛夛紝涓嶅叆搴擄紱
+# 淇濈暀锛歊EADME 绱㈠紩銆佸紑鍙戣剼鏈?scripts/)銆佹暀绋嬩笌绗旇鏂囨。
 *
 !README.md
 !.gitignore
 !scripts/
 !scripts/**
 !docs/
-!docs/IDE_使用教程.md
+!docs/IDE_浣跨敤鏁欑▼.md
 !notes/
 !notes/DEV_NOTES.md
