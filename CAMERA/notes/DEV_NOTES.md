@@ -2,6 +2,20 @@
 
 > 随开发补充；本文件入库（CAMERA/.gitignore 白名单）。
 
+## 2026-08-16 人脸检测排查结论（重要）
+
+- **OpenART mini V4.3 固件的 Haar 人脸检测失效**：
+  - 级联加载正常（frontalface 25 级 / 2913 特征 / 6383 矩形，数据完整）
+  - 但实时画面（含 2x 放大预处理）与离线标准正脸 BMP（320x240 灰度，
+    多阈值 0.75~0.2）**全部 0 检出** → 逐飞定制固件的 Haar 检测引擎移植缺陷
+    （OpenMV 标准 STM32 板上该功能正常），用户侧无法修复，需固件升级才能用
+  - OpenMV 图像可变性（mutable）规则实测：`find_features` 只接受帧缓冲图像；
+    文件加载的图（JPEG/BMP 均）只读，需 `sensor.snapshot()` 后 `draw_image` 画入
+  - 文件加载：JPEG 在 OpenART 上有兼容问题（大图报 too big、draw 报错），
+    **BMP 最可靠**（320x240 灰度 BMP 78KB 加载正常）
+- **替代方案（已跑通方向）**：LAB 肤色检测 `find_blobs`（V4.3 核心功能可靠）——
+  `scripts/skin_detect.py`，需按环境校准阈值（脚本会打印 LAB 统计）
+
 ## 2026-08-16 硬件与环境确认
 
 - **固件版本**：MicroPython v1.18 / OpenMV **V4.3** / HAL v1.1.0 / BOARD: OpenART mini-MIMXRT1060
