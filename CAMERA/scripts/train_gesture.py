@@ -21,38 +21,46 @@ IMG_SIZE = 32
 EPOCHS = 40
 BATCH = 64
 VAL_SPLIT = 0.15
-AUG_PER_IMG = 10       # 每张训练图生成增强副本数（不含原图）
+AUG_PER_IMG = 13       # 每张训练图生成增强副本数（不含原图）
 
 random.seed(42)
 np.random.seed(42)
 
 
+def rot_crop(img, ang):
+    """旋转后中心裁剪回原尺寸（去黑边）——模拟手在画面中倾斜的真实效果"""
+    w, h = img.size
+    r = img.rotate(ang, resample=Image.BILINEAR, expand=True)
+    rw, rh = r.size
+    x0 = (rw - w) // 2
+    y0 = (rh - h) // 2
+    return r.crop((x0, y0, x0 + w, y0 + h))
+
+
 def augment(img, size):
-    """PIL 离线增强：旋转/平移/缩放/翻转/亮度，返回副本列表（尺寸不变）"""
+    """PIL 离线增强：旋转(去黑边)/平移/缩放/翻转/亮度，返回副本列表"""
     outs = []
     w, h = size
-    # 1. 旋转
-    for ang in (-15, -8, 8, 15):
-        outs.append(img.rotate(ang, resample=Image.BILINEAR, fillcolor=(0, 0, 0)))
-    # 2. 平移（±10%）
-    for dx, dy in ((-int(w * 0.1), 0), (int(w * 0.1), 0),
-                   (0, -int(h * 0.1)), (0, int(h * 0.1))):
+    # 1. 旋转 ±12 / ±25（去黑边）
+    for ang in (-25, -12, 12, 25):
+        outs.append(rot_crop(img, ang))
+    # 2. 平移 ±15%
+    for dx, dy in ((-int(w * 0.15), 0), (int(w * 0.15), 0),
+                   (0, -int(h * 0.15)), (0, int(h * 0.15))):
         t = Image.new("RGB", (w, h), (0, 0, 0))
         t.paste(img, (dx, dy))
         outs.append(t)
-    # 3. 缩放（85% / 115%，居中）
-    for s in (0.85, 1.15):
+    # 3. 缩放 0.75 / 1.3（居中）
+    for s in (0.75, 1.3):
         nw, nh = max(1, int(w * s)), max(1, int(h * s))
         z = img.resize((nw, nh))
         t = Image.new("RGB", (w, h), (0, 0, 0))
         t.paste(z, ((w - nw) // 2, (h - nh) // 2))
         outs.append(t)
-    # 4. 水平翻转
+    # 4. 水平翻转 + 亮度变化
     outs.append(img.transpose(Image.FLIP_LEFT_RIGHT))
-    # 5. 亮度 0.85 / 1.15
     outs.append(ImageEnhance.Brightness(img).enhance(0.85))
     outs.append(ImageEnhance.Brightness(img).enhance(1.15))
-    # 截取前 AUG_PER_IMG 个
     return outs[:AUG_PER_IMG]
 
 
