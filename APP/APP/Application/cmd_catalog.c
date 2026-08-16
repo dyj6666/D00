@@ -33,6 +33,7 @@
 #include "ota_transport.h"
 #include "ota_tcp_svc.h"
 #include "ota_http_svc.h"
+#include "cam_link.h"
 #include "cmd_shell.h"
 #include "usr_store.h"
 #include "bsp_eeprom.h"
@@ -256,6 +257,7 @@ static void cmd_net(const char *args)
 static void cmd_lcd(const char *args);
 static void cmd_gui(const char *args);
 static void cmd_touch(const char *args);
+static void cmd_cam(const char *args);
 static void cmd_beep(const char *args);
 static void cmd_power(const char *args);
 static void cmd_mpu(const char *args);
@@ -629,6 +631,7 @@ static const cmd_entry_t cmd_table[] = {
     {"lcd",          "LCD <info|bl <0|1>> (LVGL master)", CMD_TRANSPORT_ALL, cmd_lcd},
     {"gui",          "GUI bench (LVGL performance)", CMD_TRANSPORT_ALL, cmd_gui},
     {"touch",        "Touch <info|cal|test>", CMD_TRANSPORT_ALL, cmd_touch},
+    {"cam",          "Camera link <info> (OpenART UART5)", CMD_TRANSPORT_ALL, cmd_cam},
     {"usr",          "User storage <info|scan|get|set|erase|reset>", CMD_TRANSPORT_ALL, cmd_usr},
     {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
     {"power",        "Power <on|off|info> (STOP tickless)", CMD_TRANSPORT_ALL, cmd_power},
@@ -1354,6 +1357,46 @@ static void cmd_touch(const char *args)
         return;
     }
     LOG_Printf("Usage: touch <info|cal|nudge <dx> <dy>|test>\r\n");
+}
+
+/* ================== 摄像头链路命令 ==================
+ * 用法：cam <info>
+ * 显示 UART5 收到的 OpenART 帧统计与最近状态 */
+static void cmd_cam(const char *args)
+{
+    (void)args;
+    /* 快照拷贝：避免 ISR 写与打印竞争（volatile 源需逐字节拷） */
+    cam_link_state_t cs;
+    const volatile cam_link_state_t *p = CamLink_GetState();
+    memcpy(&cs, (const void *)p, sizeof(cs));
+    const char *gname = "?";
+    if (cs.gesture_id == 0u) gname = "fist";
+    else if (cs.gesture_id == 1u) gname = "ok";
+    else if (cs.gesture_id == 2u) gname = "one";
+    else if (cs.gesture_id == 3u) gname = "palm";
+    else if (cs.gesture_id == 4u) gname = "two";
+    else if (cs.gesture_id == 5u) gname = "victory";
+    else if (cs.gesture_id == 0xFFu) gname = "none";
+    LOG_Printf("CAM : frames=%lu err=%lu swipe=%lu idle=%lu last=%lums\r\n",
+               (unsigned long)cs.frame_count, (unsigned long)cs.err_count,
+               (unsigned long)cs.swipe_count, (unsigned long)cs.idle_count,
+               (unsigned long)cs.last_rx_ms);
+    LOG_Printf("CAM : hand=%u pos=%u,%u size=%ux%u\r\n",
+               (unsigned)cs.hand_present, (unsigned)cs.hand_x,
+               (unsigned)cs.hand_y, (unsigned)cs.hand_w, (unsigned)cs.hand_h);
+    LOG_Printf("CAM : gesture=%s conf=%u%% swipeL=%u swipeR=%u\r\n",
+               gname, (unsigned)cs.gesture_conf,
+               (unsigned)cs.swipe_left, (unsigned)cs.swipe_right);
+    /* DMA 诊断：剩余计数/控制寄存器/缓冲头字节（定位接收链路） */
+    extern DMA_HandleTypeDef hdma_usart5_rx;
+    extern uint8_t s_rx_dma_buf[256];
+    uint32_t ndtr = (uint32_t)__HAL_DMA_GET_COUNTER(&hdma_usart5_rx);
+    LOG_Printf("CAM : dma ndtr=%lu cr=0x%lX buf=",
+               (unsigned long)ndtr, (unsigned long)DMA1_Stream0->CR);
+    for (int i = 0; i < 8; i++) {
+        LOG_Printf("%02X ", (unsigned)s_rx_dma_buf[i]);
+    }
+    LOG_Printf("\r\n");
 }
 /* ================== LCD 命令（LVGL 接管显示） ==================
  * 用法：lcd <info|bl <0|1>>

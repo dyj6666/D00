@@ -86,12 +86,6 @@ static void state_off(const message_t *msg)
     }
 
     switch (msg->hdr.type) {
-        case MSG_KEY_SHORT:
-            led_switch_state(LED_STATE_ON);
-            break;
-        case MSG_KEY_LONG:
-            led_switch_state(LED_STATE_SLOW_BLINK);
-            break;
         default:
             break;
     }
@@ -106,12 +100,6 @@ static void state_on(const message_t *msg)
     }
 
     switch (msg->hdr.type) {
-        case MSG_KEY_SHORT:
-            led_switch_state(LED_STATE_OFF);
-            break;
-        case MSG_KEY_LONG:
-            led_switch_state(LED_STATE_FAST_BLINK);
-            break;
         default:
             break;
     }
@@ -127,12 +115,6 @@ static void state_slow_blink(const message_t *msg)
     switch (msg->hdr.type) {
         case MSG_TICK_1S:
             BSP_LED_Toggle(0);
-            break;
-        case MSG_KEY_SHORT:
-            led_switch_state(LED_STATE_FAST_BLINK);
-            break;
-        case MSG_KEY_LONG:
-            led_switch_state(LED_STATE_OFF);
             break;
         default:
             break;
@@ -150,12 +132,6 @@ static void state_fast_blink(const message_t *msg)
         case MSG_TICK_200MS:
             BSP_LED_Toggle(0);
             break;
-        case MSG_KEY_SHORT:
-            led_switch_state(LED_STATE_OFF);
-            break;
-        case MSG_KEY_LONG:
-            led_switch_state(LED_STATE_SLOW_BLINK);
-            break;
         default:
             break;
     }
@@ -166,8 +142,6 @@ void LedApp_Init(void)
 {
     EventBus_Subscribe(MSG_TICK_1S,     led_msg_handler);
     EventBus_Subscribe(MSG_TICK_200MS,  led_msg_handler);
-    EventBus_Subscribe(MSG_KEY_SHORT,   led_msg_handler);
-    EventBus_Subscribe(MSG_KEY_LONG,    led_msg_handler);
     EventBus_Subscribe(MSG_CMD_LED,     led_msg_handler);
 
     led_switch_state(LED_STATE_OFF);

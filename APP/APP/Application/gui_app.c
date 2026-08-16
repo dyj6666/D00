@@ -24,6 +24,8 @@
 #include "logger.h"
 #include "event_bus.h"
 #include "msg_types.h"
+#include "cam_link.h"
+#include "buzzer_app.h"
 #include "stm32f4xx.h"   /* DWT 周期计数器 */
 
 #include <string.h>
@@ -76,6 +78,13 @@ static void gui_task(void *arg)
         if (s_key_home) {
             s_key_home = 0;
             GuiPages_ShowHome();
+        }
+        /* 摄像头挥手翻页（cam_link 服务层事件标志，250ms 节拍内消费）：
+         * 挥手 SWIPE_LEFT/RIGHT → 页面轮换 + 蜂鸣提示，与 KEY0 短按等效 */
+        uint8_t swipe_dir = 0;
+        if (CamLink_ConsumeSwipe(&swipe_dir) && swipe_dir != 0u) {
+            GuiPages_PageNext();
+            Buzzer_Beep(30);   /* 换页提示音 */
         }
         /* 性能基准请求（命令上下文置位，本任务上下文串行执行） */
         if (s_bench_request) {

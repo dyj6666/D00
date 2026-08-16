@@ -29,6 +29,7 @@
 /* USER CODE BEGIN Includes */
 #include "bsp.h"
 #include "pinout.h"
+#include "cam_link.h"
 #include <stdio.h>
 #include <string.h>
 #include "stdint.h"
@@ -205,6 +206,14 @@ void DMA1_Stream1_IRQHandler(void)
 }
 
 /**
+  * @brief This function handles DMA1 stream0 global interrupt（摄像头 UART5 RX）.
+  */
+void DMA1_Stream0_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(&hdma_usart5_rx);
+}
+
+/**
   * @brief This function handles DMA1 stream2 global interrupt.
   */
 void DMA1_Stream2_IRQHandler(void)
@@ -312,6 +321,15 @@ void USART3_IRQHandler(void)
   /* USER CODE BEGIN USART3_IRQn 1 */
   BSP_UART_IdleISR(BSP_UART_DBG);
   /* USER CODE END USART3_IRQn 1 */
+}
+
+/**
+  * @brief This function handles UART5 global interrupt（摄像头链路）.
+  */
+void UART5_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart5);
+  CamLink_IdleISR();   /* IDLE：一帧接收完成，消费 DMA 环形缓冲 */
 }
 
 /**

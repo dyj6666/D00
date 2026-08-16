@@ -20,6 +20,7 @@
 #include "bsp_rtc.h"
 #include "bsp_system.h"
 #include "bsp_w25q128.h"
+#include "cam_link.h"
 #include "data_link.h"
 #include "err_mgr.h"
 #include "eth_app.h"
@@ -98,7 +99,13 @@ static gui_data_t s_data
     __attribute__((section(".ccmram"), zero_init));   /* 仅 GUI 任务访问，放 CCM 省主 RAM */
 
 /* ---------------- 页面与控件句柄 ---------------- */
-static lv_obj_t *s_scr_home, *s_scr_net, *s_scr_sys;
+static lv_obj_t *s_scr_home, *s_scr_net, *s_scr_sys, *s_scr_cam;
+
+/* CAM 页（摄像头链路状态） */
+static lv_obj_t *s_c_dot;                  /* 链路状态点 */
+static lv_obj_t *s_c_frames, *s_c_err, *s_c_swipe, *s_c_last;  /* 统计 */
+static lv_obj_t *s_c_hand, *s_c_pos, *s_c_size;
+static lv_obj_t *s_c_gesture, *s_c_conf, *s_c_swl, *s_c_swr;
 
 /* 主页 */
 static lv_obj_t *s_h_sub;                 /* 标题栏副文本（时钟） */
@@ -265,6 +272,7 @@ typedef struct {
 static const nav_item_t s_nav_items[] = {
     { LV_SYMBOL_HOME " HOME",  GuiPages_ShowHome },
     { LV_SYMBOL_WIFI " NET",   GuiPages_ShowNet },
+    { LV_SYMBOL_IMAGE " CAM",  GuiPages_ShowCam },
     { LV_SYMBOL_SETTINGS " SYS", GuiPages_ShowSys },
 };
 
@@ -279,11 +287,15 @@ static void nav_click(lv_event_t *e)
 
 static void nav_build(lv_obj_t *parent)
 {
-    for (uint32_t i = 0; i < 3u; i++) {
+    const uint32_t n = (uint32_t)(sizeof(s_nav_items) / sizeof(s_nav_items[0]));
+    const lv_coord_t bw = 52;                 /* 4 按钮适配 240 宽 */
+    const lv_coord_t gap = 6;
+    lv_coord_t x0 = 8;
+    for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *btn = lv_btn_create(parent);
         lv_obj_remove_style_all(btn);
-        lv_obj_set_size(btn, 76, GUI_NAV_H);
-        lv_obj_set_pos(btn, (lv_coord_t)(8 + (lv_coord_t)i * 78), GUI_NAV_Y);
+        lv_obj_set_size(btn, bw, GUI_NAV_H);
+        lv_obj_set_pos(btn, x0 + (lv_coord_t)i * (bw + gap), GUI_NAV_Y);
         lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
         lv_obj_set_style_bg_color(btn, GUI_COL_CARD, LV_PART_MAIN);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
@@ -805,6 +817,124 @@ static void page_sys_refresh(void)
 }
 
 /* ================================================================
+ * CAM 页：摄像头链路（UART5）实时状态——帧统计 / 手部 / 手势 / 挥手
+ * 数据源：cam_link 服务层（ISR 解析帧协议，本页 250ms 刷新读取）
+ * ================================================================ */
+static void page_cam_build(void)
+{
+    s_scr_cam = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_cam, GUI_COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_scr_cam, LV_OPA_COVER, 0);
+
+    /* 页眉（与其它页一致：标题 + 副文本） */
+    GuiTheme_Label(s_scr_cam, LV_SYMBOL_IMAGE " CAM",
+                   &lv_font_montserrat_16, GUI_COL_PRIMARY);
+    lv_obj_align(lv_obj_get_child(s_scr_cam, lv_obj_get_child_cnt(s_scr_cam) - 1u),
+                 LV_ALIGN_TOP_LEFT, 10, 6);
+    GuiTheme_Label(s_scr_cam, "OpenART UART5 link",
+                   &lv_font_montserrat_12, GUI_COL_ACCENT);
+    lv_obj_align(lv_obj_get_child(s_scr_cam, lv_obj_get_child_cnt(s_scr_cam) - 1u),
+                 LV_ALIGN_TOP_RIGHT, -10, 6);
+
+    /* 链路统计卡 */
+    lv_obj_t *st = GuiTheme_Card(s_scr_cam, 224, 76);
+    lv_obj_set_pos(st, 8, 40);
+    GuiTheme_Label(st, "LINK", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_align(lv_obj_get_child(st, lv_obj_get_child_cnt(st) - 1u),
+                 LV_ALIGN_TOP_LEFT, 10, 6);
+    s_c_dot = lv_obj_create(st);
+    lv_obj_remove_style_all(s_c_dot);
+    lv_obj_set_size(s_c_dot, 10, 10);
+    lv_obj_align(s_c_dot, LV_ALIGN_TOP_LEFT, 56, 10);
+    lv_obj_set_style_bg_color(s_c_dot, GUI_COL_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_c_dot, 5, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_c_dot, LV_OPA_COVER, LV_PART_MAIN);
+    s_c_frames = GuiTheme_Label(st, "frames --", &lv_font_montserrat_12,
+                                GUI_COL_TEXT);
+    lv_obj_set_pos(s_c_frames, 10, 28);
+    s_c_err = GuiTheme_Label(st, "err --", &lv_font_montserrat_12,
+                             GUI_COL_TEXT);
+    lv_obj_set_pos(s_c_err, 118, 28);
+    s_c_swipe = GuiTheme_Label(st, "swipe --", &lv_font_montserrat_12,
+                               GUI_COL_TEXT);
+    lv_obj_set_pos(s_c_swipe, 10, 52);
+    s_c_last = GuiTheme_Label(st, "last --ms", &lv_font_montserrat_12,
+                              GUI_COL_TEXT);
+    lv_obj_set_pos(s_c_last, 118, 52);
+
+    /* 手部卡 */
+    lv_obj_t *hd = GuiTheme_Card(s_scr_cam, 224, 76);
+    lv_obj_set_pos(hd, 8, 124);
+    GuiTheme_Label(hd, "HAND", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_align(lv_obj_get_child(hd, lv_obj_get_child_cnt(hd) - 1u),
+                 LV_ALIGN_TOP_LEFT, 10, 6);
+    s_c_hand = GuiTheme_Label(hd, "state --", &lv_font_montserrat_12,
+                              GUI_COL_TEXT);
+    lv_obj_set_pos(s_c_hand, 10, 28);
+    s_c_pos = GuiTheme_Label(hd, "pos --", &lv_font_montserrat_12,
+                             GUI_COL_TEXT);
+    lv_obj_set_pos(s_c_pos, 118, 28);
+    s_c_size = GuiTheme_Label(hd, "size --", &lv_font_montserrat_12,
+                              GUI_COL_TEXT);
+    lv_obj_set_pos(s_c_pos, 10, 52);
+    s_c_size = GuiTheme_Label(hd, "size --", &lv_font_montserrat_12,
+                              GUI_COL_TEXT);
+    lv_obj_set_pos(s_c_size, 118, 52);
+
+    /* 手势卡 */
+    lv_obj_t *gs = GuiTheme_Card(s_scr_cam, 224, 76);
+    lv_obj_set_pos(gs, 8, 208);
+    GuiTheme_Label(gs, "GESTURE", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_align(lv_obj_get_child(gs, lv_obj_get_child_cnt(gs) - 1u),
+                 LV_ALIGN_TOP_LEFT, 10, 6);
+    s_c_gesture = GuiTheme_Label(gs, "--", &lv_font_montserrat_16,
+                                 GUI_COL_PRIMARY);
+    lv_obj_set_pos(s_c_gesture, 10, 26);
+    s_c_conf = GuiTheme_Label(gs, "conf --%", &lv_font_montserrat_12,
+                              GUI_COL_TEXT);
+    lv_obj_set_pos(s_c_conf, 120, 30);
+    s_c_swl = GuiTheme_Label(gs, "L:-", &lv_font_montserrat_12,
+                             GUI_COL_WARN);
+    lv_obj_set_pos(s_c_swl, 10, 54);
+    s_c_swr = GuiTheme_Label(gs, "R:-", &lv_font_montserrat_12,
+                             GUI_COL_WARN);
+    lv_obj_set_pos(s_c_swr, 60, 54);
+
+    nav_build(s_scr_cam);
+}
+
+/* 250ms 刷新（仅 CAM 页可见时由 RefreshFast 调用） */
+static void page_cam_refresh(void)
+{
+    cam_link_state_t cs;
+    const volatile cam_link_state_t *p = CamLink_GetState();
+    memcpy(&cs, (const void *)p, sizeof(cs));
+
+    /* 链路状态：有帧且 <1s 前 → 绿，否则灰 */
+    uint32_t now = BSP_GetTick();
+    uint8_t alive = (cs.frame_count > 0u) &&
+                    ((now - cs.last_rx_ms) < 1000u);
+    lv_obj_set_style_bg_color(s_c_dot, alive ? GUI_COL_OK : GUI_COL_BORDER, 0);
+
+    lv_label_set_text_fmt(s_c_frames, "frames %lu", (unsigned long)cs.frame_count);
+    lv_label_set_text_fmt(s_c_err, "err %lu", (unsigned long)cs.err_count);
+    lv_label_set_text_fmt(s_c_swipe, "swipe %lu", (unsigned long)cs.swipe_count);
+    lv_label_set_text_fmt(s_c_last, "last %lums",
+                          (unsigned long)((now >= cs.last_rx_ms) ? (now - cs.last_rx_ms) : 0u));
+
+    lv_label_set_text(s_c_hand, cs.hand_present ? "state ON " : "state OFF");
+    lv_label_set_text_fmt(s_c_pos, "pos %u,%u",
+                          (unsigned)cs.hand_x, (unsigned)cs.hand_y);
+    lv_label_set_text_fmt(s_c_size, "size %ux%u",
+                          (unsigned)cs.hand_w, (unsigned)cs.hand_h);
+
+    lv_label_set_text(s_c_gesture, CamLink_GestureName(cs.gesture_id));
+    lv_label_set_text_fmt(s_c_conf, "conf %u%%", (unsigned)cs.gesture_conf);
+    lv_label_set_text_fmt(s_c_swl, "L:%s", cs.swipe_left ? "!" : "-");
+    lv_label_set_text_fmt(s_c_swr, "R:%s", cs.swipe_right ? "!" : "-");
+}
+
+/* ================================================================
  * 页面切换（方向动画：向右导航 MOVE_LEFT，向左 MOVE_RIGHT）
  * ================================================================ */
 /* ---------------- 页面切换（方向动画：向右导航 MOVE_LEFT，向左 MOVE_RIGHT） ----------------
@@ -838,14 +968,17 @@ static void page_show(lv_obj_t *scr, lv_scr_load_anim_t dir)
 
 void GuiPages_ShowHome(void) { page_show(s_scr_home, LV_SCR_LOAD_ANIM_MOVE_RIGHT); }
 void GuiPages_ShowNet(void)  { page_show(s_scr_net,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
+void GuiPages_ShowCam(void)  { page_show(s_scr_cam,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 void GuiPages_ShowSys(void)  { page_show(s_scr_sys,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 
-/* 单按键翻页（KEY0 短按）：按当前活动页轮换，动画方向跟随导航语义 */
+/* 单按键/挥手翻页：按当前活动页轮换（含 CAM 页） */
 void GuiPages_PageNext(void)
 {
     if (s_active == s_scr_home) {
         page_show(s_scr_net, LV_SCR_LOAD_ANIM_MOVE_LEFT);
     } else if (s_active == s_scr_net) {
+        page_show(s_scr_cam, LV_SCR_LOAD_ANIM_MOVE_LEFT);
+    } else if (s_active == s_scr_cam) {
         page_show(s_scr_sys, LV_SCR_LOAD_ANIM_MOVE_LEFT);
     } else {
         page_show(s_scr_home, LV_SCR_LOAD_ANIM_MOVE_RIGHT);
@@ -864,6 +997,7 @@ void GuiPages_Init(void)
     page_home_build();
     page_net_build();
     page_sys_build();
+    page_cam_build();
     s_active = s_scr_home;
     lv_scr_load(s_scr_home);
     gui_data_collect();   /* 首窗立即采集（CPU 基线等） */
@@ -894,6 +1028,10 @@ void GuiPages_RefreshFast(void)
         page_home_refresh_cards(1);
         page_sys_refresh();
         break;
+    }
+    /* CAM 页 250ms 实时刷新（仅可见时；标签开销小，保证验证跟手） */
+    if (s_active == s_scr_cam) {
+        page_cam_refresh();
     }
     s_refr_phase = (uint8_t)((s_refr_phase + 1u) % 3u);
 }

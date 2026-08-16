@@ -123,6 +123,7 @@ int main(void)
   MX_TIM8_Init();
   MX_TIM1_Init();
   MX_USART3_UART_Init();
+  MX_UART5_UART_Init();             /* 摄像头链路（OpenART mini，115200） */
     MX_I2C1_Init();               /* MPU6050 + AT24C02（I2C1，PB6/PB7） */
     MX_I2C2_Init();               /* 备用 I2C2（PB10/PB11）：EEPROM/外设扩展 */
   /* USER CODE BEGIN 2 */

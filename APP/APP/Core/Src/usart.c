@@ -27,10 +27,12 @@
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart3;
+UART_HandleTypeDef huart5;
 DMA_HandleTypeDef hdma_usart1_rx;
 DMA_HandleTypeDef hdma_usart1_tx;
 DMA_HandleTypeDef hdma_usart3_rx;
 DMA_HandleTypeDef hdma_usart3_tx;
+DMA_HandleTypeDef hdma_usart5_rx;
 
 /* USART1 init function */
 
@@ -89,6 +91,24 @@ void MX_USART3_UART_Init(void)
 
   /* USER CODE END USART3_Init 2 */
 
+}
+
+/* UART5 init function —— OpenART mini 摄像头链路（PC12=TX PD2=RX @115200） */
+
+void MX_UART5_UART_Init(void)
+{
+  huart5.Instance = UART5;
+  huart5.Init.BaudRate = 115200;
+  huart5.Init.WordLength = UART_WORDLENGTH_8B;
+  huart5.Init.StopBits = UART_STOPBITS_1;
+  huart5.Init.Parity = UART_PARITY_NONE;
+  huart5.Init.Mode = UART_MODE_TX_RX;
+  huart5.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart5.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart5) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
@@ -222,6 +242,57 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
   /* USER CODE BEGIN USART3_MspInit 1 */
 
   /* USER CODE END USART3_MspInit 1 */
+  }
+  else if(uartHandle->Instance==UART5)
+  {
+    /* UART5 clock enable（APB1）*/
+    __HAL_RCC_UART5_CLK_ENABLE();
+
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_GPIOD_CLK_ENABLE();
+    /**UART5 GPIO Configuration
+    PC12     ------> UART5_TX（接 OpenART B13）
+    PD2      ------> UART5_RX（接 OpenART B12）
+    */
+    GPIO_InitStruct.Pin = GPIO_PIN_12;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF8_UART5;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    GPIO_InitStruct.Pin = GPIO_PIN_2;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF8_UART5;
+    HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
+
+    /* UART5 interrupt Init（优先级高于调试口：摄像头帧实时性优先） */
+    HAL_NVIC_SetPriority(UART5_IRQn, 4, 0);
+    HAL_NVIC_EnableIRQ(UART5_IRQn);
+
+    /* UART5 RX DMA：DMA1_Stream0/CH4，循环模式（cam_link 环形缓冲消费，
+     * IDLE 中断每帧取数——零字节中断、零丢帧） */
+    hdma_usart5_rx.Instance = DMA1_Stream0;
+    hdma_usart5_rx.Init.Channel = DMA_CHANNEL_4;
+    hdma_usart5_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
+    hdma_usart5_rx.Init.PeriphInc = DMA_PINC_DISABLE;
+    hdma_usart5_rx.Init.MemInc = DMA_MINC_ENABLE;
+    hdma_usart5_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+    hdma_usart5_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
+    hdma_usart5_rx.Init.Mode = DMA_CIRCULAR;
+    hdma_usart5_rx.Init.Priority = DMA_PRIORITY_HIGH;
+    hdma_usart5_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
+    if (HAL_DMA_Init(&hdma_usart5_rx) != HAL_OK)
+    {
+      Error_Handler();
+    }
+    __HAL_LINKDMA(uartHandle, hdmarx, hdma_usart5_rx);
+
+    /* DMA 满回调防御（循环缓冲足够大，正常由 IDLE 消费） */
+    HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 4, 0);
+    HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
   }
 }
 

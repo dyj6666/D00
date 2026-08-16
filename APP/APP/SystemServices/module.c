@@ -39,6 +39,7 @@
 #include "cmd_can.h"
 #include "ota_can_svc.h"
 #include "ext_store.h"
+#include "cam_link.h"
 
 #include <string.h>
 
@@ -63,6 +64,7 @@ MODULE_INIT("ExtStore",4,  ExtStore_Init),
     MODULE_INIT("LA_Sample",30,  LA_Sample_Init),
     MODULE_INIT("KeyApp",   40,  KeyApp_Init),
     MODULE_INIT("BuzzerApp",42,  BuzzerApp_Init),
+    MODULE_INIT("CamLink",  44,  CamLink_Init),
     MODULE_INIT("TouchSvc", 45,  TouchSvc_Init),
     MODULE_INIT("LedApp",   50,  LedApp_Init),
     MODULE_INIT("ImuSvc",   52,  ImuSvc_Init),
