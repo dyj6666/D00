@@ -91,8 +91,11 @@ while True:
         x1 = min(img.width(), x0 + side)
         y1 = min(img.height(), y0 + side)
         roi = img.copy(roi=(x0, y0, x1 - x0, y1 - y0))
-        sc = 32.0 / max(roi.width(), roi.height())
-        roi32 = roi.copy(scale_x=sc, scale_y=sc)
+        # 非等比拉伸到精确 32x32（与训练端 PIL resize 一致——等比缩放会
+        # 得到非 32x32 尺寸，classify 内部再处理导致分布偏移、恒出某类）
+        sc_x = 32.0 / roi.width()
+        sc_y = 32.0 / roi.height()
+        roi32 = roi.copy(scale_x=sc_x, scale_y=sc_y)
 
         # 分类 + 多数投票平滑（VOTE_N 帧取众数，抑制帧间抖动）
         gid = 0xFF      # 低置信度/无目标（协议 0x03 定义 0xFF）
