@@ -2,6 +2,22 @@
 
 > 随开发补充；本文件入库（CAMERA/.gitignore 白名单）。
 
+## 2026-08-16 手势识别系统（已完成 ✅ 用户确认基本零失误）
+
+- **方案**：LAB 肤色检测（黑色桌面场景，放宽形状过滤 0.4-2.5/MAX 320）
+  + 端部定位裁剪（质心外推 0.6 + 边长限 150px 聚焦手）
+  + tflite CNN 分类（32x32，6 类：fist/ok/one/palm/two/victory）
+  + 7 帧多数投票 + 3 帧切换确认（误切概率 ~1.4%）
+- **模型**：train/dataset（360 张多样化采集）+ train_gesture.py 离线增强
+  （旋转±25°去黑边/平移±15%/缩放0.75-1.3/翻转/亮度）80 epochs
+  + 调度+早停；单帧 val~76-80%，部署投票后实际基本无误判
+- **协议**：0x01 坐标帧 + 0x03 AI 手势帧（30Hz，见 串口协议.md）
+- **易混类**：one/two、palm/victory（视觉相似，靠采集姿势差异化缓解）
+- **关键脚本**：collect_gestures.py / train_gesture.py / gesture_ai.py
+- **训练环境**：uv venv Python 3.12.13 + tensorflow 2.21（CAMERA/train/.venv）
+- **遗留**：UART 输出需匹配 V4.3 固件的 cmm 文件才能真正从 B12/B13 发出
+  （当前 print 验证通路；MCU 对接时向逐飞要 cmm 或改用 debug UART 方案）
+
 ## 2026-08-16 人脸检测排查结论（重要）
 
 - **OpenART mini V4.3 固件的 Haar 人脸检测失效**：
