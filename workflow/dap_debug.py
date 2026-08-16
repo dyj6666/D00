@@ -146,7 +146,11 @@ def run_ocd(commands, timeout=30):
     elif "init" in cmds:
         i = cmds.index("init")
         cmds = cmds[:i + 1] + [f"mww 0x{DBGMCU_CR:X} {DBG_FREEZE_ALL}"] + cmds[i + 1:]
-    args = ["-s", str(SCRIPTS),
+    # 搜索路径：项目内 tcl 垫片目录优先（mem2array/array2mem 兼容垫片，
+    # 0.12 原生实现无效），随后才是 OpenOCD 自带脚本。垫片只允许放项目
+    # 空间（workflow/tcl/），禁止散落到用户目录（历史教训见 DAP_DEBUG.md）。
+    args = ["-s", str(REPO / "workflow" / "tcl"),
+            "-s", str(SCRIPTS),
             "-f", "interface/cmsis-dap.cfg",
             "-f", "target/stm32f4x.cfg",
             "-c", "adapter speed 500"]
@@ -171,7 +175,10 @@ def run_ocd_safe(commands, timeout=30):
     on STM32F4, so inspection commands always hand control back to the
     running firmware once their data is captured.
     """
-    return run_ocd(commands + ["resume", "shutdown"], timeout)
+    # resume 前恢复 DBGMCU_CR：halt 时注入的 IWDG/TIM 冻结位不能残留到
+    # 运行态（曾长期以 0x7F 运行，干扰 TIM2/TIM3 等在用定时器）。
+    return run_ocd(commands + ["mww 0xE0042004 0x00000000", "resume", "shutdown"],
+                   timeout)
 
 
 def parse_reg(output, name):
