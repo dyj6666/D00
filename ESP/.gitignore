@@ -3,6 +3,7 @@
 *
 !README.md
 !.gitignore
+!docs/
 !docs/ESP-IDF开发流程.md
 !notes/
 !notes/DEV_NOTES.md
