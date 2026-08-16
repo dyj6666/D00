@@ -93,7 +93,7 @@ while True:
         roi32 = roi.copy(scale_x=sc, scale_y=sc)
 
         # 分类
-        gid = -1
+        gid = 0xFF      # 低置信度/无目标（协议 0x03 定义 0xFF）
         conf = 0.0
         for obj in tf.classify(net, roi32):
             out = sorted(zip(labels, obj.output()), key=lambda x: x[1], reverse=True)
