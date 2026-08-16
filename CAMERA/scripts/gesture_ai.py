@@ -14,8 +14,9 @@ from machine import UART
 
 # ---------- 配置 ----------
 THRESHOLDS = [(35, 88, 0, 30, 5, 35)]
-MIN_SIZE, MAX_SIZE = 25, 220
+MIN_SIZE, MAX_SIZE = 25, 260           # 放宽上限（手近景可大于 220）
 RATIO_MIN, RATIO_MAX = 0.5, 1.6
+TRACK_DIST = 120        # 跟踪匹配距离（px），超过则重新选最大块
 EMA_ALPHA = 0.6
 MODEL = "/sd/model_gesture.tflite"
 LABELS = "/sd/labels_gesture.txt"
@@ -66,16 +67,28 @@ while True:
     img = sensor.snapshot()
 
     blobs = img.find_blobs(THRESHOLDS, pixels_threshold=150,
-                           area_threshold=150, merge=True)
-    best, best_area = None, 0
+                           area_threshold=150, merge=False)
+    # 候选：不合并（merge=False 让手与身体肤色有间隙时保持独立块）；
+    # 运动锁定优先（手是移动目标，脸/身体静止）：选与上帧目标最近的候选
+    cands = []
     for b in blobs:
         w, h = b.w(), b.h()
         if not (MIN_SIZE <= w <= MAX_SIZE and MIN_SIZE <= h <= MAX_SIZE):
             continue
         if not (RATIO_MIN < w / h < RATIO_MAX):
             continue
-        if b.area() > best_area:
-            best, best_area = b, b.area()
+        cands.append(b)
+
+    best = None
+    if cands:
+        if ex_prev is not None:
+            # 跟踪：选离上帧目标最近的候选（距离阈值内），否则选最大
+            best = min(cands, key=lambda b: abs(b.cx() - ex_prev) + abs(b.cy() - ey_prev))
+            d = abs(best.cx() - ex_prev) + abs(best.cy() - ey_prev)
+            if d > 120:
+                best = max(cands, key=lambda b: b.area())  # 目标丢失：重新选最大
+        else:
+            best = max(cands, key=lambda b: b.area())
 
     if best:
         cx, cy = best.cx(), best.cy()

@@ -39,6 +39,7 @@ except OSError:
 
 saved = 0
 last_save = 0
+prev_cx, prev_cy = None, None
 clock = time.clock()
 print("COLLECT [%s] 目标 %d 张，请把手比好手势放镜头前（可缓慢微动）" % (CLASS, COUNT))
 while saved < COUNT:
@@ -47,16 +48,30 @@ while saved < COUNT:
     img = sensor.snapshot()
 
     blobs = img.find_blobs(THRESHOLDS, pixels_threshold=150,
-                           area_threshold=150, merge=True)
-    best, best_area = None, 0
+                           area_threshold=150, merge=False)
+    # merge=False + 运动跟踪：手与身体肤色有间隙时保持独立块，
+    # 选与上帧目标最近的候选（手移动目标，脸/身体静止不抢）
+    cands = []
     for b in blobs:
         w, h = b.w(), b.h()
         if not (MIN_SIZE <= w <= MAX_SIZE and MIN_SIZE <= h <= MAX_SIZE):
             continue
         if not (RATIO_MIN < w / h < RATIO_MAX):
             continue
-        if b.area() > best_area:
-            best, best_area = b, b.area()
+        cands.append(b)
+
+    best = None
+    if cands:
+        if prev_cx is not None:
+            best = min(cands, key=lambda b: abs(b.cx() - prev_cx) + abs(b.cy() - prev_cy))
+            d = abs(best.cx() - prev_cx) + abs(best.cy() - prev_cy)
+            if d > 120:
+                best = max(cands, key=lambda b: b.area())
+        else:
+            best = max(cands, key=lambda b: b.area())
+
+    if best:
+        prev_cx, prev_cy = best.cx(), best.cy()
 
     if best and now - last_save >= SAVE_EVERY_MS:
         # 以手中心裁剪正方形区域（1.5 倍边长，留背景余量）
