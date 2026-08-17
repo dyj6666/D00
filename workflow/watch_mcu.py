@@ -150,7 +150,7 @@ def main():
                 if b"Boot complete" in pending:
                     tl.write(f"[{stamp()}] *** BOOT DETECTED（重启）***\n")
                     tl.flush()
-                    pending = pending[-128:]
+                    pending = b""   # 清空防重复检测（"Boot complete" 残留会每轮误报）
                 if b"[CRASH]" in pending:
                     tl.write(f"[{stamp()}] *** CRASH REPORT in log ***\n")
                     tl.flush()
@@ -167,11 +167,18 @@ def main():
                 stall_count += 1
             else:
                 stall_count = 0
-                if alive is False:
-                    tl.write(f"[{stamp()}] RECOVERED（uwTick 恢复递增，死机持续 {int(time.time()-dead_since)}s）\n")
-                    tl.flush()
-                    alive = True
-                    dap_done = False
+                # RECOVERED 判定：uwTick 必须超过阈值（系统真正运行）——
+                # 避免"取证后 resume 造成 86→88 假递增"误判恢复（无限取证循环）
+                if tick > 1000:
+                    if alive is False:
+                        tl.write(f"[{stamp()}] RECOVERED（uwTick={tick} 真正运行，死机持续 {int(time.time()-dead_since)}s）\n")
+                        tl.flush()
+                        alive = True
+                        dap_done = False
+                    elif alive is None:
+                        tl.write(f"[{stamp()}] MCU ALIVE (uwTick={tick})\n")
+                        tl.flush()
+                        alive = True
                 elif alive is None:
                     tl.write(f"[{stamp()}] MCU ALIVE (uwTick={tick})\n")
                     tl.flush()
