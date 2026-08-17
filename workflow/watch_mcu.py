@@ -155,6 +155,7 @@ def main():
                 if b"[CRASH]" in pending:
                     tl.write(f"[{stamp()}] *** CRASH REPORT in log ***\n")
                     tl.flush()
+                    pending = b""   # 清除已检测内容，防止重复报警
                 if len(pending) > 4096:
                     pending = pending[-4096:]
         except Exception:
