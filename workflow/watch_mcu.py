@@ -1,21 +1,12 @@
 # -*- coding: utf-8 -*-
-"""watch_mcu.py —— MCU 死机监控 v3（调试构建取证版）
+"""watch_mcu.py —— MCU 死机监控 v4（DAP 直读 uwTick 精确检测版）
 
-用法：python workflow/watch_mcu.py [--port COM5] [--interval 1.0]
-功能：
-  1. 每 interval 秒通过 COM5 发送空命令（\r\n），判断 MCU 是否响应
-  2. 死机检测（连续 3 次无响应）后立即 DAP 取证（halt 保持模式）：
-     - 全套寄存器（PC/SP/LR/XPSR/屏蔽位/MSP/PSP）
-     - 故障寄存器（ICSR/CFSR/HFSR/MMFAR/BFAR/优先级）
-     - 中断全貌（NVIC ISER0-2/ISPR0-2）
-     - 时钟（RCC CR/PLLCFGR/CFGR/CSR）+ TIM7 + SysTick
-     - UART5 + DMA1_Stream0（cam_link 链路）
-     - FreeRTOS（xTickCount/uwTick/pxCurrentTCB/TCB/任务名）
-     - RTC BKP（err_mgr 崩溃摘要——复位后保留）
-     - PSP + MSP 栈内容（64 字各，供回溯）
-  3. 取证输出：logs/forensic_<时间戳>.txt（不覆盖）+ 时间线记录
-  4. 调试构建（APP_DEBUG_MODE=1 关 IWDG/WDOG/ERR 复位）下死机后
-     系统不复位——现场永久保留，随时可补取证
+用法：python workflow/watch_mcu.py [--port COM5] [--interval 2.0]
+检测：OpenOCD 不 halt 直读 uwTick（每 interval 秒，零干扰）——
+      uwTick 连续 2 次不变 → 死机确认（tick 停止 = 中断系统瘫痪）
+辅助：COM5 抓取启动日志 / [CRASH] 报告
+取证：halt 保持全套（寄存器/中断全貌/时钟/BKP/双栈）→ 时间戳存档
+      （16.4s IWDG 窗口内完成；调试构建下 ERR/WDOG 软复位已关）
 """
 import argparse
 import serial
@@ -26,7 +17,7 @@ import sys
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default="COM5")
-    ap.add_argument("--interval", type=float, default=1.0)
+    ap.add_argument("--interval", type=float, default=2.0)
     args = ap.parse_args()
 
     logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
@@ -40,9 +31,25 @@ def main():
     def ts_name():
         return time.strftime("forensic_%Y%m%d_%H%M%S.txt")
 
+    def dap_read_tick():
+        """不 halt 直读 uwTick（运行态零干扰）；失败返回 None（不误判死机）"""
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import dap_debug
+            rc, out = dap_debug.run_ocd(["init", "mdw 0x20000048 1", "shutdown"], 15)
+            if rc != 0:
+                return None
+            for line in out.splitlines():
+                if "0x20000048" in line:
+                    m = __import__("re").search(r":\s*([0-9a-fA-F]{8})", line)
+                    if m:
+                        return int(m.group(1), 16)
+            return None
+        except Exception:
+            return None
+
     def dap_forensic():
-        """死机瞬间 DAP 取证（halt 保持：不 resume 不清 DBGMCU，IWDG 冻结，
-        现场永久保留；调试构建下 IWDG 本已关闭，双保险）。"""
+        """死机瞬间 DAP 取证（halt 保持：不 resume 不清 DBGMCU，IWDG 冻结）。"""
         tl.write(f"[{stamp()}] >>> DAP 取证开始（halt 保持模式）<<<\n")
         tl.flush()
         try:
@@ -51,41 +58,34 @@ def main():
             out = os.path.join(logdir, ts_name())
             cmds = [
                 "init", "halt",
-                # ---- 核心寄存器 ----
                 "reg pc", "reg sp", "reg lr", "reg xpsr",
                 "reg primask", "reg basepri", "reg control", "reg faultmask",
                 "reg msp", "reg psp",
-                # ---- 故障/中断状态 ----
                 "mdw 0xE000ED04 1",   # ICSR
                 "mdw 0xE000ED28 4",   # CFSR + HFSR + MMFAR + BFAR
-                "mdw 0xE000ED20 2",   # SHPR2 + SHPR3（SVC/PendSV/SysTick 优先级）
-                "mdw 0xE000E100 3",   # NVIC ISER0-2（中断使能全貌）
-                "mdw 0xE000E200 3",   # NVIC ISPR0-2（中断挂起全貌）
-                "mdw 0xE000ED0C 1",   # AIRCR（优先级分组）
-                "mdw 0xE0042004 1",   # DBGMCU_CR（冻结残留）
-                # ---- 时钟 ----
+                "mdw 0xE000ED20 2",   # SHPR2 + SHPR3
+                "mdw 0xE000E100 3",   # NVIC ISER0-2
+                "mdw 0xE000E200 3",   # NVIC ISPR0-2
+                "mdw 0xE000ED0C 1",   # AIRCR
+                "mdw 0xE0042004 1",   # DBGMCU_CR
                 "mdw 0x40023800 4",   # RCC_CR/PLLCFGR/CFGR/CIR
-                "mdw 0x40023874 1",   # RCC_CSR（复位源）
-                # ---- 定时器（HAL timebase = TIM7）+ SysTick ----
+                "mdw 0x40023874 1",   # RCC_CSR
                 "mdw 0x40001400 8",   # TIM7 CR1..CCMR2
                 "mdw 0x40001420 4",   # TIM7 CCER/CNT/PSC/ARR
                 "mdw 0xE000E010 3",   # SYST_CSR/RVR/CVR
-                # ---- UART5（cam_link）+ DMA1_Stream0 ----
                 "mdw 0x40005000 4",   # UART5 SR/DR/BRR/CR1
                 "mdw 0x40026010 6",   # DMA1_Stream0 CR/NDTR/PAR/M0AR/M1AR/FCR
-                # ---- FreeRTOS 核心 ----
+                "mdw 0x40026034 2",   # DMA1_Stream3（USART3 TX）CR/NDTR
                 "mdw 0x20000048 2",   # uwTick + uwTickFreq
                 "mdw 0x2000005C 2",   # xTickCount + uxCurrentNumberOfTasks
                 "mdw 0x20000050 1",   # pxCurrentTCB
                 "mdw 0x20000080 1",   # uxSchedulerSuspended
                 "mdw 0x20000064 1",   # xSchedulerRunning
-                # ---- RTC BKP（err_mgr 崩溃摘要，复位后保留）----
-                "mdw 0x40002850 16",  # BKP0R-BKP15R
-                # ---- 栈内容（回溯用）----
+                "mdw 0x40002850 16",  # RTC BKP（err_mgr 崩溃摘要）
                 "shutdown",
             ]
             rc, text = dap_debug.run_ocd(cmds, timeout=60)
-            # 追加 PSP 栈读取（需要 SP 值——第二次会话）
+            # PSP/MSP 栈读取（第二/三次会话）
             sp = None
             for line in text.splitlines():
                 m = __import__("re").search(r"sp\s*\(/32\):\s*(0x[0-9a-fA-F]+)", line)
@@ -122,9 +122,9 @@ def main():
             tl.write(f"[{stamp()}] DAP forensic error: {e}\n")
             tl.flush()
 
-    alive = None          # None=未知 True=活 False=死
-    dead_since = 0
-    no_resp_count = 0
+    alive = None
+    last_tick = None
+    stall_count = 0
     pending = b""
     dap_done = False
 
@@ -135,11 +135,11 @@ def main():
         print(f"打开 {args.port} 失败: {e}")
         sys.exit(1)
 
-    tl.write(f"=== watch start {stamp()} (interval={args.interval}s, 调试构建取证版) ===\n")
+    tl.write(f"=== watch start {stamp()} (interval={args.interval}s, v4 DAP-tick 检测) ===\n")
     tl.flush()
 
     while True:
-        # 1) 收串口数据（日志/启动序列）
+        # 1) COM5 收串口数据（日志/启动序列/CRASH）
         try:
             n = ser.in_waiting
             if n > 0:
@@ -147,59 +147,47 @@ def main():
                 raw.write(data)
                 raw.flush()
                 pending += data
-                if b"Boot complete" in pending or b"Module registry" in pending:
-                    now = time.time()
-                    if alive is not True:
-                        tl.write(f"[{stamp()}] *** BOOT DETECTED（死机后重启）***\n")
-                        tl.flush()
+                if b"Boot complete" in pending:
+                    tl.write(f"[{stamp()}] *** BOOT DETECTED（重启）***\n")
+                    tl.flush()
+                    pending = pending[-128:]
                 if b"[CRASH]" in pending:
                     tl.write(f"[{stamp()}] *** CRASH REPORT in log ***\n")
                     tl.flush()
-                    pending = b""   # 清除已检测内容，防止重复报警
+                    pending = b""
                 if len(pending) > 4096:
                     pending = pending[-4096:]
         except Exception:
             pass
 
-        # 2) 心跳探测：发 \r\n（空命令，无害）
-        try:
-            ser.reset_input_buffer()
-            ser.write(b"\r\n")
-            time.sleep(0.3)
-            resp = ser.in_waiting
-            if resp > 0:
-                data = ser.read(resp)
-                raw.write(data)
-                raw.flush()
-                no_resp_count = 0
+        # 2) DAP 直读 uwTick（主检测——零干扰）
+        tick = dap_read_tick()
+        if tick is not None:
+            if last_tick is not None and tick == last_tick:
+                stall_count += 1
+            else:
+                stall_count = 0
                 if alive is False:
-                    tl.write(f"[{stamp()}] RECOVERED（恢复响应，死机持续 {int(time.time()-dead_since)}s）\n")
+                    tl.write(f"[{stamp()}] RECOVERED（uwTick 恢复递增，死机持续 {int(time.time()-dead_since)}s）\n")
                     tl.flush()
                     alive = True
                     dap_done = False
                 elif alive is None:
-                    tl.write(f"[{stamp()}] MCU ALIVE\n")
+                    tl.write(f"[{stamp()}] MCU ALIVE (uwTick={tick})\n")
                     tl.flush()
                     alive = True
-            else:
-                no_resp_count += 1
-                if no_resp_count >= 3 and alive is not False:
-                    dead_since = time.time()
-                    tl.write(f"[{stamp()}] *** DEAD（连续 {no_resp_count} 次无响应）— 立即 DAP 取证 ***\n")
-                    tl.flush()
-                    alive = False
-                    if not dap_done:
-                        dap_done = True
-                        dap_forensic()
-        except Exception as e:
-            tl.write(f"[{stamp()}] 串口错误: {e}\n")
+            last_tick = tick
+            if stall_count >= 2 and alive is not False:
+                dead_since = time.time()
+                tl.write(f"[{stamp()}] *** DEAD（uwTick 连续 {stall_count} 次不变 = {tick}）— 立即 DAP 取证 ***\n")
+                tl.flush()
+                alive = False
+                if not dap_done:
+                    dap_done = True
+                    dap_forensic()
+        else:
+            tl.write(f"[{stamp()}] DAP 读失败（跳过本轮，不误判）\n")
             tl.flush()
-            time.sleep(3)
-            try:
-                ser.close()
-                ser = serial.Serial(args.port, 115200, timeout=0.3)
-            except Exception:
-                pass
 
         time.sleep(args.interval)
 
