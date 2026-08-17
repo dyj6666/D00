@@ -8,6 +8,7 @@
 #include "logger.h"
 #include "cmsis_os2.h"
 #include "err_mgr.h"
+#include "app_config.h"
 
 #include <string.h>
 
@@ -38,10 +39,21 @@ static void wdg_monitor_task(void *arg)
             uint32_t silent = now - g_wdg[i].last_kick_tick;
             if (silent > g_wdg[i].timeout_ticks) {
                 taskEXIT_CRITICAL();
+#if APP_DEBUG_MODE
+                /* 调试模式：任务停滞仅记录 + 复位计时，绝不软复位——
+                 * 保留死机现场供 DAP 取证（发布构建走 ERR 软复位） */
+                LOG_Printf("[WDOG] %s stall %lums (debug: 记录不复位)\r\n",
+                           g_wdg[i].name ? g_wdg[i].name : "?",
+                           (unsigned long)(silent * portTICK_PERIOD_MS));
+                taskENTER_CRITICAL();
+                g_wdg[i].last_kick_tick = xTaskGetTickCount();
+                taskEXIT_CRITICAL();
+#else
                 /* 进入统一错误管理（转储 + BKP 持久化 + 软复位） */
                 ERR_HandleTaskStall(g_wdg[i].name ? g_wdg[i].name : "?",
                                     silent * portTICK_PERIOD_MS);
                 for (;;) {}   /* 理论上不可达（ERR 内部复位） */
+#endif
             }
         }
         taskEXIT_CRITICAL();

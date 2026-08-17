@@ -1,12 +1,21 @@
 # -*- coding: utf-8 -*-
-"""watch_mcu.py —— MCU 死机监控（COM5 心跳 + 重启日志捕获）
+"""watch_mcu.py —— MCU 死机监控 v3（调试构建取证版）
 
-用法：python workflow/watch_mcu.py [--port COM5] [--interval 2]
+用法：python workflow/watch_mcu.py [--port COM5] [--interval 1.0]
 功能：
   1. 每 interval 秒通过 COM5 发送空命令（\r\n），判断 MCU 是否响应
-  2. 记录时间线：正常 / 无响应(死机起始) / 恢复(IWDG 自动复位重启)
-  3. 持续抓取 COM5 输出（启动日志/崩溃记录），死机重启后自动识别启动序列
-输出：workflow/logs/watch_mcu_timeline.txt（时间线）+ watch_mcu_log.txt（串口日志）
+  2. 死机检测（连续 3 次无响应）后立即 DAP 取证（halt 保持模式）：
+     - 全套寄存器（PC/SP/LR/XPSR/屏蔽位/MSP/PSP）
+     - 故障寄存器（ICSR/CFSR/HFSR/MMFAR/BFAR/优先级）
+     - 中断全貌（NVIC ISER0-2/ISPR0-2）
+     - 时钟（RCC CR/PLLCFGR/CFGR/CSR）+ TIM7 + SysTick
+     - UART5 + DMA1_Stream0（cam_link 链路）
+     - FreeRTOS（xTickCount/uwTick/pxCurrentTCB/TCB/任务名）
+     - RTC BKP（err_mgr 崩溃摘要——复位后保留）
+     - PSP + MSP 栈内容（64 字各，供回溯）
+  3. 取证输出：logs/forensic_<时间戳>.txt（不覆盖）+ 时间线记录
+  4. 调试构建（APP_DEBUG_MODE=1 关 IWDG/WDOG/ERR 复位）下死机后
+     系统不复位——现场永久保留，随时可补取证
 """
 import argparse
 import serial
@@ -25,44 +34,84 @@ def main():
     tl = open(os.path.join(logdir, "watch_mcu_timeline.txt"), "a", encoding="utf-8")
     raw = open(os.path.join(logdir, "watch_mcu_log.txt"), "ab")
 
-    dap_debug = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dap_debug.py")
-
     def stamp():
         return time.strftime("%Y-%m-%d %H:%M:%S")
 
+    def ts_name():
+        return time.strftime("forensic_%Y%m%d_%H%M%S.txt")
+
     def dap_forensic():
-        """死机瞬间 DAP 取证（关键：halt 后保持，不 resume 不清 DBGMCU——
-        IWDG 保持冻结，现场永久保留；原 safe 模式 resume 会解冻看门狗致复位）"""
+        """死机瞬间 DAP 取证（halt 保持：不 resume 不清 DBGMCU，IWDG 冻结，
+        现场永久保留；调试构建下 IWDG 本已关闭，双保险）。"""
         tl.write(f"[{stamp()}] >>> DAP 取证开始（halt 保持模式）<<<\n")
         tl.flush()
         try:
-            import sys
             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
             import dap_debug
-            out = os.path.join(logdir, "watch_mcu_forensic.txt")
-            # 单会话：halt + 全套寄存器/内存，然后 shutdown（target 保持 halt，
-            # DBGMCU=0x7F 冻结 IWDG——现场不丢）
+            out = os.path.join(logdir, ts_name())
             cmds = [
                 "init", "halt",
+                # ---- 核心寄存器 ----
                 "reg pc", "reg sp", "reg lr", "reg xpsr",
-                "reg primask", "reg basepri", "reg control",
-                "mdw 0xE000ED04 1",   # ICSR（活跃中断/挂起）
-                "mdw 0xE000ED28 2",   # CFSR + HFSR（故障寄存器）
-                "mdw 0x2000005C 2",   # xTickCount + uxTopReadyPriority
-                "mdw 0x20000048 2",   # uwTick + SystemCoreClock
-                "mdw 0x20000050 1",   # pxCurrentTCB
+                "reg primask", "reg basepri", "reg control", "reg faultmask",
+                "reg msp", "reg psp",
+                # ---- 故障/中断状态 ----
+                "mdw 0xE000ED04 1",   # ICSR
+                "mdw 0xE000ED28 4",   # CFSR + HFSR + MMFAR + BFAR
+                "mdw 0xE000ED20 2",   # SHPR2 + SHPR3（SVC/PendSV/SysTick 优先级）
+                "mdw 0xE000E100 3",   # NVIC ISER0-2（中断使能全貌）
+                "mdw 0xE000E200 3",   # NVIC ISPR0-2（中断挂起全貌）
+                "mdw 0xE000ED0C 1",   # AIRCR（优先级分组）
+                "mdw 0xE0042004 1",   # DBGMCU_CR（冻结残留）
+                # ---- 时钟 ----
+                "mdw 0x40023800 4",   # RCC_CR/PLLCFGR/CFGR/CIR
                 "mdw 0x40023874 1",   # RCC_CSR（复位源）
-                "mdw 0x40026010 1",   # DMA1_Stream0 CR（cam）
-                "mdw 0x40005014 1",   # UART5 SR
+                # ---- 定时器（HAL timebase = TIM7）+ SysTick ----
+                "mdw 0x40001400 8",   # TIM7 CR1..CCMR2
+                "mdw 0x40001420 4",   # TIM7 CCER/CNT/PSC/ARR
+                "mdw 0xE000E010 3",   # SYST_CSR/RVR/CVR
+                # ---- UART5（cam_link）+ DMA1_Stream0 ----
+                "mdw 0x40005000 4",   # UART5 SR/DR/BRR/CR1
+                "mdw 0x40026010 6",   # DMA1_Stream0 CR/NDTR/PAR/M0AR/M1AR/FCR
+                # ---- FreeRTOS 核心 ----
+                "mdw 0x20000048 2",   # uwTick + uwTickFreq
+                "mdw 0x2000005C 2",   # xTickCount + uxCurrentNumberOfTasks
+                "mdw 0x20000050 1",   # pxCurrentTCB
+                "mdw 0x20000080 1",   # uxSchedulerSuspended
+                "mdw 0x20000064 1",   # xSchedulerRunning
+                # ---- RTC BKP（err_mgr 崩溃摘要，复位后保留）----
+                "mdw 0x40002850 16",  # BKP0R-BKP15R
+                # ---- 栈内容（回溯用）----
                 "shutdown",
             ]
-            rc, text = dap_debug.run_ocd(cmds, timeout=30)
+            rc, text = dap_debug.run_ocd(cmds, timeout=60)
+            # 追加 PSP 栈读取（需要 SP 值——第二次会话）
+            sp = None
+            for line in text.splitlines():
+                m = __import__("re").search(r"sp\s*\(/32\):\s*(0x[0-9a-fA-F]+)", line)
+                if m:
+                    sp = int(m.group(1), 16)
+                    break
+            if sp:
+                rc2, text2 = dap_debug.run_ocd(
+                    ["init", "halt", f"mdw 0x{sp:X} 64", "shutdown"], timeout=30)
+                text += "\n==== PSP stack (64 words) ====\n" + text2
+            msp = None
+            for line in text.splitlines():
+                m = __import__("re").search(r"msp\s*\(/32\):\s*(0x[0-9a-fA-F]+)", line)
+                if m:
+                    msp = int(m.group(1), 16)
+                    break
+            if msp:
+                rc3, text3 = dap_debug.run_ocd(
+                    ["init", "halt", f"mdw 0x{msp:X} 64", "shutdown"], timeout=30)
+                text += "\n==== MSP stack (64 words) ====\n" + text3
+
             with open(out, "w") as f:
                 f.write(text)
             tl.write(f"[{stamp()}] DAP 取证完成 rc={rc} -> {os.path.basename(out)}\n")
             tl.write(f"[{stamp()}] !!! 系统保持 HALT（现场冻结），取证后需手动复位 !!!\n")
             tl.flush()
-            # 解析 PC/SP（供后续栈回溯）
             import re
             m_pc = re.search(r"pc\s*\(/32\):\s*(0x[0-9a-fA-F]+)", text)
             m_sp = re.search(r"sp\s*\(/32\):\s*(0x[0-9a-fA-F]+)", text)
@@ -75,8 +124,8 @@ def main():
 
     alive = None          # None=未知 True=活 False=死
     dead_since = 0
-    boot_since = 0
-    pending = b""         # 串口残余
+    no_resp_count = 0
+    pending = b""
     dap_done = False
 
     ser = None
@@ -86,11 +135,11 @@ def main():
         print(f"打开 {args.port} 失败: {e}")
         sys.exit(1)
 
-    tl.write(f"=== watch start {stamp()} (interval={args.interval}s) ===\n")
+    tl.write(f"=== watch start {stamp()} (interval={args.interval}s, 调试构建取证版) ===\n")
     tl.flush()
 
     while True:
-        # 1) 收串口数据（日志）
+        # 1) 收串口数据（日志/启动序列）
         try:
             n = ser.in_waiting
             if n > 0:
@@ -98,13 +147,11 @@ def main():
                 raw.write(data)
                 raw.flush()
                 pending += data
-                # 检测启动序列（死机重启后）
                 if b"Boot complete" in pending or b"Module registry" in pending:
                     now = time.time()
-                    if boot_since and now - boot_since > 5:
+                    if alive is not True:
                         tl.write(f"[{stamp()}] *** BOOT DETECTED（死机后重启）***\n")
                         tl.flush()
-                        boot_since = 0
                 if b"[CRASH]" in pending:
                     tl.write(f"[{stamp()}] *** CRASH REPORT in log ***\n")
                     tl.flush()
@@ -120,7 +167,10 @@ def main():
             time.sleep(0.3)
             resp = ser.in_waiting
             if resp > 0:
-                ser.read(resp)
+                data = ser.read(resp)
+                raw.write(data)
+                raw.flush()
+                no_resp_count = 0
                 if alive is False:
                     tl.write(f"[{stamp()}] RECOVERED（恢复响应，死机持续 {int(time.time()-dead_since)}s）\n")
                     tl.flush()
@@ -131,17 +181,15 @@ def main():
                     tl.flush()
                     alive = True
             else:
-                if alive is not False:
+                no_resp_count += 1
+                if no_resp_count >= 3 and alive is not False:
                     dead_since = time.time()
-                    tl.write(f"[{stamp()}] *** DEAD（无响应）— 立即 DAP 取证 ***\n")
+                    tl.write(f"[{stamp()}] *** DEAD（连续 {no_resp_count} 次无响应）— 立即 DAP 取证 ***\n")
                     tl.flush()
                     alive = False
-                    # 死机瞬间取证（抢 IWDG ~4s 窗口）
                     if not dap_done:
                         dap_done = True
                         dap_forensic()
-                elif time.time() - dead_since > 30 and not boot_since:
-                    boot_since = time.time()
         except Exception as e:
             tl.write(f"[{stamp()}] 串口错误: {e}\n")
             tl.flush()

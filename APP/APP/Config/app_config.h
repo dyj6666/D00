@@ -92,7 +92,7 @@
 /* 调试模式：1 = 关闭 IWDG 与任务级看门狗（供 gdb 断点调试，发布前务必置 0）。
  * 可用编译选项 -DAPP_DEBUG_MODE=1 覆盖（构建系统/CI 双模式验证）。 */
 #ifndef APP_DEBUG_MODE
-#define APP_DEBUG_MODE              0
+#define APP_DEBUG_MODE              1   /* 死机复现取证临时置 1（关 IWDG），复现完成后必须改回 0 */
 #endif
 
 /* 崩溃注入测试命令（crash <bus|undef|stack|assert>）：

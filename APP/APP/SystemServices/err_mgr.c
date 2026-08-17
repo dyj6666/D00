@@ -312,6 +312,15 @@ static void err_recover(void)
         }
     }
 
+#if APP_DEBUG_MODE
+    /* 调试模式：崩溃后保持死循环保留现场（BKP 摘要已写，诊断已打印），
+     * 供 DAP 取证——绝不软复位销毁现场；人工断电/复位恢复。 */
+    err_uart_puts("\r\n[ERR] DEBUG MODE: crash scene preserved, power-cycle to recover.\r\n");
+    for (;;) {
+        BSP_LED_Toggle(1);
+        err_delay_loop(300);
+    }
+#else
     /* LED 快闪 3 次提示后软复位（复位原因由 BSP_RESET 保留供 sysmon 分析；*/
     for (int i = 0; i < 3; i++) {
         BSP_LED_Toggle(1);
@@ -320,6 +329,7 @@ static void err_recover(void)
     BSP_SystemReset();
     for (;;) {
     }
+#endif
 }
 
 /* ---------- 完整转储 ---------- */

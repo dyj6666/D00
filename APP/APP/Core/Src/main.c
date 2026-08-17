@@ -115,7 +115,9 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_RTC_Init();
-  MX_IWDG_Init();
+#if !APP_DEBUG_MODE
+  MX_IWDG_Init();   /* 调试模式（APP_DEBUG_MODE=1）关闭 IWDG：死机取证时保留现场，不被看门狗复位销毁 */
+#endif
   MX_USART1_UART_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
