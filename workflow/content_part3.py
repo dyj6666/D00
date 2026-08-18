@@ -34,9 +34,9 @@ SECTIONS = [
 ("h2", "9.4  打包与签名（encrypt_and_sign 流程）"),
 ("code",
 "encrypt_and_sign(APP.bin, version, build, chip_id):\n"
-"  hdr = ota_header_t(magic=0x4F5441FE, version, size, iv, chip_id, build_no)\n"
+"  hdr = ota_header_t(magic=0x4F5441FE, version, firmware_size, iv, chip_id, build_no)\n"
 "  key = derive_aes_key_from_uid(uid)          # 与 BOOT 一致\n"
-"  cipher = AES_CTR_encrypt(key, iv, payload)  # 载荷加密\n"
+"  cipher = AES_CTR_encrypt(key, iv, payload)  # 载荷加密（长度=明文长度）\n"
 "  digest = SHA256(hdr + cipher)\n"
 "  sig = ECDSA_sign(privkey, digest)           # 私钥=环境变量 OTA_PRIVKEY\n"
 "  return hdr + cipher + sig"),
@@ -66,9 +66,9 @@ SECTIONS = [
  ["场景", "BOOT 输出", "结论"],
  [
   ["同构建号重放", "[SEC] Replay denied! build=9180 last=9180", "防重放生效（真实案例）"],
-  ["跨芯片", "[SEC] Chip mismatch", "芯片绑定生效"],
-  ["版本降级", "[SEC] Rollback denied", "防回滚生效"],
-  ["签名损坏", "[SEC] ECDSA verify failed", "验签生效"],
+  ["跨芯片", "[SEC] Chip mismatch! pkg=0x%04X dev=0x%04X", "芯片绑定生效"],
+  ["版本降级", "[SEC] Rollback denied! New:%lu, Current:%lu", "防回滚生效"],
+  ["签名损坏", "[SEC] ECDSA verify failed!", "验签生效"],
  ],
  [5.0, 8.5, 3.0]),
 ("h2", "10.3  编译与回归"),
@@ -84,8 +84,9 @@ SECTIONS = [
   ["启动早期擦 PARAM", "寄存器级机制为推测，已架构规避", "避免启动早期擦参数扇区"],
   ["批量 UID 一致", "AES 密钥由 UID 派生", "同批次设备 UID 必须一致"],
   ["回滚深度", "BACKUP 仅上一版", "无 N-2 级回滚"],
-  ["CAN 通道", "注册表就绪，服务未实现", "未来接入"],
+  ["CAN 通道", "已实现（1Mbps，ID 0x200/0x201），BSP 就绪即用", "总线场景即可启用"],
   ["HTTPS", "HTTP 拉取（明文传输）", "包已加密签名，传输层明文可接受"],
+  ["img_lib 容量", "备份槽 896KB（头 4KB + RUN 832KB + 余量 60KB）", "与 RUN 上限匹配"],
  ],
  [4.0, 7.0, 5.5]),
 
@@ -95,13 +96,15 @@ SECTIONS = [
 ("table",
  ["错误码/输出", "含义", "处理"],
  [
-  ["Replay denied", "build_no 未递增（<= PARAM last_build_no）", "递增 ota_build 后重推"],
-  ["Chip mismatch", "包 chip_id 与设备不符", "用目标设备 UID 重新打包"],
-  ["ECDSA verify failed", "签名错误/私钥不符/包被篡改", "检查 OTA_PRIVKEY 与打包流程"],
-  ["Rollback denied", "version 低于当前固件", "版本号只升不降"],
+  ["Replay denied!", "build_no 未递增（<= PARAM last_build_no）", "递增 ota_build 后重推"],
+  ["Chip mismatch!", "包 chip_id 与设备不符", "用目标设备 UID 重新打包"],
+  ["ECDSA verify failed!", "签名错误/私钥不符/包被篡改", "检查 OTA_PRIVKEY 与打包流程"],
+  ["Rollback denied!", "version 低于当前固件", "版本号只升不降"],
+  ["0x1001", "回滚成功事件码（last_error 记录）", "正常降级事件，非故障"],
   ["0x1002 BACKUP failed", "备份当前 RUN 到 img_lib 失败", "检查外部 Flash；重推"],
   ["0x1003 APP erase failed", "擦除 RUN 失败", "复位后由 BACKUP 自愈；重推"],
   ["0x1004 APP write failed", "解密写入失败", "复位后由 BACKUP 自愈；重推"],
+  ["0x1005 APP vector invalid", "写入后向量表（SP/PC）非法", "复位后由 BACKUP 自愈；重推"],
   ["TCP PUSH FAILED", "设备 :9020 不可达", "检查 ETH 链路/设备是否运行（复位后重试）"],
  ],
  [4.5, 6.5, 5.5]),
@@ -153,33 +156,34 @@ SECTIONS = [
 ("h2", "A.1  ota_header_t（32B）"),
 ("code",
 "typedef struct {\n"
-"    uint32_t magic;      /* 0x4F5441FE：OTA 包标识 */\n"
-"    uint32_t version;    /* 固件版本：防回滚（只升不降） */\n"
-"    uint32_t size;       /* 密文长度：容量校验 */\n"
-"    uint8_t  aes_iv[12]; /* AES-CTR 初始向量（+4B 零=16B） */\n"
-"    uint32_t chip_id;    /* 目标芯片 ID：防跨芯片 */\n"
-"    uint32_t build_no;   /* 构建号：防重放（严格递增） */\n"
-"} ota_header_t;"),
+"    uint32_t magic;          /* 0x4F5441FE：OTA 包标识 */\n"
+"    uint32_t version;        /* 固件版本：防回滚（只升不降） */\n"
+"    uint32_t firmware_size;  /* 原始固件大小（明文）：容量校验 ≤832KB */\n"
+"    uint8_t  aes_iv[12];     /* AES-CTR 初始向量（+4B 零=16B） */\n"
+"    uint32_t chip_id;        /* 目标芯片 ID：防跨芯片 */\n"
+"    uint32_t build_no;       /* 构建号：防重放（严格递增） */\n"
+"} ota_header_t;   /* pack(1)，32B；包总长 = 32 + firmware_size + 64 */"),
 ("h2", "A.2  boot_param_t（PARAM 双份）"),
 ("code",
 "typedef struct {\n"
-"    uint32_t magic;            /* 参数区魔数 */\n"
+"    uint32_t magic;            /* 0x50524D54（'PRMT'）参数区魔数 */\n"
 "    uint32_t boot_state;       /* 1=NORMAL 2=PENDING 3=RECOVERY 4=UPGRADE */\n"
 "    uint32_t boot_count;       /* 启动计数（PENDING 窗口计数） */\n"
 "    uint32_t rollback_count;   /* 回滚计数（超限进 RECOVERY） */\n"
-"    uint32_t last_error;       /* 上次升级错误码（0x1001-0x1004/SEC err） */\n"
+"    uint32_t last_error;       /* 上次升级错误码（0x1001-0x1005/SEC err） */\n"
 "    uint32_t last_build_no;    /* 已接受最大构建号（防重放基准） */\n"
 "    uint32_t crc32;            /* 覆盖 magic..last_build_no */\n"
-"} boot_param_t;   /* slot0@0x080E0000  slot1@0x080E0400 */"),
+"} boot_param_t;   /* pack(1) 32B；slot0@0x080E0000  slot1@0x080E0400（间距1KB） */"),
 ("h2", "A.3  OTA 会话槽（断点续传）"),
 ("code",
 "struct { magic 0x4F54414D; version; total; received; crc32; }\n"
 "（PARAM 区 0x080E2000 起；BOOT 升级提交后失效）"),
 ("h2", "A.4  TCP 帧"),
 ("code",
-"帧 = magic(0x5A) | cmd | len(2B LE) | payload | crc8\n"
-"cmd: 0x01 BEGIN / 0x02 DATA / 0x03 END / 0x04 STATUS / 0x05 RESET\n"
-"DATA 载荷 = offset(4B LE) + 240B 块（帧总长上限 249B）"),
+"帧 = magic(0x5A) | cmd | len(2B BE) | payload | crc8（poly 0x07，初值 0，覆盖 cmd+len+payload）\n"
+"cmd: 0x01 BEGIN / 0x02 DATA / 0x03 END / 0x04 STATUS / 0x05 RESET；ACK 帧 cmd=0x80\n"
+"BEGIN 载荷 = version(4B BE) + size(4B BE)；DATA 载荷 = offset(4B BE) + 240B 块\n"
+"（帧总长上限 249B；多字节一律大端，与 HOSTLINK 的小端相反，勿混用）"),
 
 # =====================================================================
 ("h1", "附录 B  术语表"),
@@ -194,7 +198,7 @@ SECTIONS = [
   ["img_lib", "外部 Flash 回滚源槽（头 4KB + 数据 832KB）"],
   ["PENDING", "升级待确认状态（新固件首启确认后转 NORMAL）"],
   ["NORMAL", "正常运行态"],
-  ["RECOVERY", "恢复模式（回滚超限，等待强制重刷）"],
+  ["RECOVERY", "恢复模式（回滚超限；无有效包自动归一 NORMAL 回旧固件，不砖机）"],
   ["UPGRADE", "升级模式（执行升级流程）"],
   ["HOSTLINK", "上位机串口链路协议（UART1 921600）"],
   ["YMODEM", "传统串口文件传输协议（BOOT 救援路径，115200）"],
@@ -223,6 +227,7 @@ SECTIONS = [
   ["外部 Flash 驱动", "BOOT/BOOT/BootServices/esp_flash.c"],
   ["APP 下载核心", "APP/APP/Application/ota_agent.c"],
   ["TCP 通道", "APP/APP/Application/ota_tcp_svc.c"],
+  ["CAN 通道", "APP/APP/Application/ota_can_svc.c + Config/can_proto.h"],
   ["传输注册表", "APP/APP/Application/ota_transport.h / ota_mgr.c"],
   ["命令行推送", "APP/APP/Script/ota_tcp_cli.py"],
  ],

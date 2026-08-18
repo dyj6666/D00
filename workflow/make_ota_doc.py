@@ -233,7 +233,7 @@ P("本文档是 D00 嵌入式工业平台的固件 OTA（Over-The-Air，空中�
 P("系统以 STM32F407ZGT6 为核心，FreeRTOS 承载业务，LVGL 驱动人机界面；升级链路采用 "
   "BOOT/RUN 双区布局 + 外部 SPI Flash 双槽（下载暂存 ota_dl 与回滚源 img_lib），"
   "以 AES-256-CTR 加密、SHA-256 + ECDSA P-256 双公钥签名、芯片 UID 绑定、构建号防重放、"
-  "版本号防回滚构建端到端安全链；支持 TCP / HTTP / 串口 HOSTLINK / CAN（预留）/ YMODEM 救援"
+  "版本号防回滚构建端到端安全链；支持 TCP / HTTP / 串口 HOSTLINK / CAN / YMODEM 救援"
   "五类通道；以 PENDING 启动确认、自动回滚、BACKUP 自愈、断点续传、断电四阶段恢复保证"
   "“任何一步失败都不变砖”。文中所有协议帧、数据结构、状态机、故障码均给出源码级定义，"
   "并附真实设备上的功能与安全实测记录，可直接作为开发、联调、维护与二次开发的一手依据。")
