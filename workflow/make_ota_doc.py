@@ -12,6 +12,7 @@ from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.section import WD_SECTION
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -21,6 +22,10 @@ ACCENT = RGBColor(0x1F, 0x4E, 0x79)
 ACCENT2 = RGBColor(0x2E, 0x74, 0xB5)
 GRAY = RGBColor(0x59, 0x59, 0x59)
 WARN_BG = "FFF2CC"
+
+PAGE_W = 21.0          # A4 宽
+MARGIN_LR = 2.4        # 左右边距
+TABLE_W = PAGE_W - 2 * MARGIN_LR  # 16.2cm 可用宽
 
 doc = Document()
 
@@ -85,6 +90,35 @@ def add_field(paragraph, instr, hint="更新"):
     return run
 
 
+def indent2(p):
+    """中文正文首行缩进 2 字符（firstLineChars=200，随字号缩放）"""
+    pPr = p._p.get_or_add_pPr()
+    ind = pPr.find(qn("w:ind"))
+    if ind is None:
+        ind = OxmlElement("w:ind")
+        pPr.append(ind)
+    ind.set(qn("w:firstLineChars"), "200")
+    ind.set(qn("w:firstLine"), "420")  # 兜底：2 × 10.5pt ≈ 0.74cm
+    return p
+
+
+def set_pg_num(section, fmt=None, start=None):
+    """设置节页码格式（fmt: upperRoman/…；start: 起始页码）"""
+    sectPr = section._sectPr
+    pg = sectPr.find(qn("w:pgNumType"))
+    if pg is None:
+        pg = OxmlElement("w:pgNumType")
+        pgMar = sectPr.find(qn("w:pgMar"))
+        if pgMar is not None:
+            pgMar.addnext(pg)
+        else:
+            sectPr.append(pg)
+    if fmt:
+        pg.set(qn("w:fmt"), fmt)
+    if start is not None:
+        pg.set(qn("w:start"), str(start))
+
+
 def render(sec):
     """渲染一个内容项：(type, ...)"""
     typ = sec[0]
@@ -95,11 +129,12 @@ def render(sec):
     elif typ == "h3":
         P(sec[1], style="Heading 3")
     elif typ == "p":
-        P(sec[1])
+        indent2(P(sec[1]))
     elif typ == "pb":  # 加粗引导 + 正文
         p = doc.add_paragraph()
         r = p.add_run(sec[1]); r.font.bold = True; set_ea(r)
         r = p.add_run(sec[2]); set_ea(r)
+        indent2(p)
     elif typ == "li":
         p = doc.add_paragraph(style="List Bullet")
         if len(sec) > 2 and sec[2]:
@@ -145,9 +180,26 @@ def render(sec):
                 r = cells[j].paragraphs[0].add_run(str(v))
                 r.font.size = Pt(9); set_ea(r)
         if widths:
+            # 归一化列宽：保证总和 <= 可用宽度（16.2cm），避免超出页边距
+            total = sum(widths)
+            scale = TABLE_W / total
+            widths = [w * scale for w in widths]
+            widths[-1] = TABLE_W - sum(widths[:-1])  # 末列吸收舍入误差
             for j, w in enumerate(widths):
                 for row in t.rows:
                     row.cells[j].width = Cm(w)
+            # 表格总宽 + 固定布局（Word 中不再自动拉伸/溢出）
+            tblPr = t._tbl.tblPr
+            tblW = tblPr.find(qn("w:tblW"))
+            if tblW is not None:
+                tblW.set(qn("w:w"), str(int(TABLE_W * 567)))  # twips
+                tblW.set(qn("w:type"), "dxa")
+            t.autofit = False
+            # 表头跨页自动重复
+            trPr = t.rows[0]._tr.get_or_add_trPr()
+            th = OxmlElement("w:tblHeader")
+            th.set(qn("w:val"), "true")
+            trPr.append(th)
         doc.add_paragraph().paragraph_format.space_after = Pt(0)
     elif typ == "pagebreak":
         doc.add_page_break()
@@ -167,7 +219,9 @@ P("STM32F407ZGT6 · FreeRTOS · 多通道传输 · 端到端安全", size=11,
   align=WD_ALIGN_PARAGRAPH.CENTER)
 P("文档版本：V2.0（极致详解版）    编制：D00 工程团队", size=10, color=GRAY,
   align=WD_ALIGN_PARAGRAPH.CENTER)
-doc.add_page_break()
+
+# ================= 节1（封面）→ 节2（摘要+目录） =================
+doc.add_section(WD_SECTION.NEW_PAGE)
 
 # ================= 摘要 =================
 P("摘  要", style="Heading 1")
@@ -189,10 +243,13 @@ P("关键词：OTA 升级；安全引导；AES-256-CTR；ECDSA；芯片绑定；
 doc.add_page_break()
 
 # ================= 目录 =================
-P("目录", style="Heading 1")
+# 目录标题用居中大字号（非 Heading 样式），避免"目录"自身出现在目录里
+P("目  录", size=16, bold=True, color=ACCENT, align=WD_ALIGN_PARAGRAPH.CENTER)
 p = doc.add_paragraph()
-add_field(p, 'TOC \\o "1-3" \\h \\z \\u', "（在 Word 中右键 → 更新域 生成目录）")
-doc.add_page_break()
+add_field(p, 'TOC \\o "1-3" \\h \\z \\u', "（打开文档时自动更新；或右键此处 → 更新域）")
+
+# ================= 节2（摘要+目录）→ 节3（正文） =================
+doc.add_section(WD_SECTION.NEW_PAGE)
 
 # ================= 渲染内容 =================
 from content_part1 import SECTIONS as S1
@@ -202,28 +259,54 @@ ALL = S1 + S2 + S3
 for sec in ALL:
     render(sec)
 
-# ---------- 页眉页脚 ----------
-sec = doc.sections[0]
-sec.top_margin = Cm(2.2)
-sec.bottom_margin = Cm(2.0)
-sec.left_margin = Cm(2.4)
-sec.right_margin = Cm(2.4)
+# ---------- 三节页眉页脚与页码 ----------
+secs = doc.sections  # [0]=封面  [1]=摘要+目录  [2]=正文
+for s in secs:
+    s.top_margin = Cm(2.2)
+    s.bottom_margin = Cm(2.0)
+    s.left_margin = Cm(2.4)
+    s.right_margin = Cm(2.4)
 
-hdr = sec.header.paragraphs[0]
-hdr.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-r = hdr.add_run("D00 嵌入式工业平台 · 固件 OTA 升级系统顶级说明书")
+# 节1 封面：无页眉、无页脚（保持空即可）
+
+# 节2 摘要+目录：页眉标题 + 罗马数字页码（I, II, …）
+s2 = secs[1]
+s2.header.is_linked_to_previous = False
+hdr2 = s2.header.paragraphs[0]
+hdr2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+r = hdr2.add_run("D00 嵌入式工业平台 · 固件 OTA 升级系统顶级说明书")
 r.font.size = Pt(8); r.font.color.rgb = GRAY; set_ea(r)
 
-ftr = sec.footer.paragraphs[0]
-ftr.alignment = WD_ALIGN_PARAGRAPH.CENTER
-r = ftr.add_run("第 ")
-add_field(ftr, "PAGE", "1")
-r = ftr.add_run(" 页 · 共 ")
-add_field(ftr, "NUMPAGES", "1")
-r = ftr.add_run(" 页")
-for run in ftr.runs:
+s2.footer.is_linked_to_previous = False
+ftr2 = s2.footer.paragraphs[0]
+ftr2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+r = ftr2.add_run("第 ")
+add_field(ftr2, "PAGE", "I")
+r = ftr2.add_run(" 页 · 共 ")
+add_field(ftr2, "SECTIONPAGES", "I")
+r = ftr2.add_run(" 页")
+for run in ftr2.runs:
     run.font.size = Pt(8)
     run.font.color.rgb = GRAY
+set_pg_num(s2, fmt="upperRoman", start=1)
+
+# 节3 正文：页眉页脚继承节2，页码重新从 1 编号（阿拉伯）
+set_pg_num(secs[2], start=1)
+
+# ---------- 文档属性 ----------
+cp = doc.core_properties
+cp.title = "D00 固件 OTA 升级系统顶级说明书"
+cp.author = "D00 工程团队"
+cp.subject = "嵌入式 OTA 升级系统完整技术文档"
+cp.keywords = "OTA,STM32F407,安全引导,AES-256-CTR,ECDSA,防重放,防回滚,断点续传"
+cp.comments = "V2.0 极致详解版：14 章 + 3 附录"
+
+# ---------- 打开时自动更新所有域（目录/页码） ----------
+settings = doc.settings.element
+if settings.find(qn("w:updateFields")) is None:
+    uf = OxmlElement("w:updateFields")
+    uf.set(qn("w:val"), "true")
+    settings.insert_element_before(uf, "w:compat", "w:rsids", "w:mathPr")
 
 doc.save(OUT)
 print("已生成:", OUT, "  章节项:", len(ALL))
