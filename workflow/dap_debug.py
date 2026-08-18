@@ -169,16 +169,26 @@ def run_ocd(commands, timeout=30):
 
 
 def run_ocd_safe(commands, timeout=30):
-    """Run a session that halts, captures data, then resumes before exit.
+    """Run a session that halts, captures data, then ALWAYS resumes.
 
     A halt that outlives the session can wedge bus peripherals (e.g. I2C)
     on STM32F4, so inspection commands always hand control back to the
     running firmware once their data is captured.
+
+    双会话保险（2026-08 实测教训）：若取证命令含无效命令（如 'regs'），
+    OpenOCD 会在该命令处立即退出 rc=1，同会话后续的 resume 不会执行，
+    目标被永久 halt —— 表现为"死机"（心跳 DEAD、uwTick 停、必须断电）。
+    因此取证与会话恢复拆成两个独立 OpenOCD 会话：取证会话无论成败，
+    恢复会话（init+清 DBGMCU 冻结+resume）必定单独执行，保证目标恢复。
     """
-    # resume 前恢复 DBGMCU_CR：halt 时注入的 IWDG/TIM 冻结位不能残留到
-    # 运行态（曾长期以 0x7F 运行，干扰 TIM2/TIM3 等在用定时器）。
-    return run_ocd(commands + ["mww 0xE0042004 0x00000000", "resume", "shutdown"],
-                   timeout)
+    rc, out = run_ocd(commands + ["shutdown"], timeout)
+    # 独立恢复会话：取证失败（无效命令/超时）也必须恢复目标运行
+    for attempt in range(2):
+        r2, _ = run_ocd(["init", "mww 0xE0042004 0x00000000",
+                         "resume", "shutdown"], timeout)
+        if r2 == 0:
+            break
+    return rc, out
 
 
 def parse_reg(output, name):

@@ -31,29 +31,32 @@ def dap_forensics(tl):
         return "[dap] dap_debug unavailable, skip forensics"
     lines = []
     try:
-        # halt + 冻结外设 → 取证 → resume（run_ocd_safe 自动恢复 DBGMCU）
+        # 取证（OpenOCD 0.12 有效命令：reg <name>；'regs'/'disassemble' 无效！
+        # 无效命令会导致会话中止——run_ocd_safe 已拆双会话保证恢复）
         rc, out = dap_debug.run_ocd_safe([
             "init", "halt",
-            "regs",                                   # PC/SP/LR/R0-12/xPSR
-            "mdw 0xE000ED28 1",                       # CFSR
-            "mdw 0xE000ED2C 1",                       # HFSR
-            "mdw 0xE000ED34 1",                       # MMFAR
-            "mdw 0xE000ED38 1",                       # BFAR
-            "mdw 0x4002104C 1",                       # RCC_CSR（复位原因）
-            "disassemble pc 4",                       # PC 附近 4 条指令
+            "reg pc", "reg sp", "reg lr",                # PC/SP/LR
+            "mdw 0xE000ED28 1",                          # CFSR
+            "mdw 0xE000ED2C 1",                          # HFSR
+            "mdw 0xE000ED34 1",                          # MMFAR
+            "mdw 0xE000ED38 1",                          # BFAR
+            "mdw 0x4002104C 1",                          # RCC_CSR（复位原因）
+            "mdw 0xE000ED04 1",                          # ICSR（挂起中断）
         ], timeout=45)
         if rc != 0:
             return f"[dap] session failed rc={rc}"
         for ln in out.splitlines():
-            if any(k in ln for k in ("pc", "sp", "lr", "r0", "r1", "r2", "r3",
-                                     "xpsr", "0xe000ed", "0x4002104c",
-                                     "0x4002104C", "0x:", "=>")):
+            if any(k in ln for k in ("pc ", "sp ", "lr ", "0xe000ed",
+                                     "0x4002104c", "0x4002104C")):
                 lines.append(ln.strip())
         pc = dap_debug.parse_reg(out, "pc")
         if pc is not None:
-            sym = dap_debug.sym_at(pc) if hasattr(dap_debug, "sym_at") else None
-            if sym:
-                lines.append(f"PC symbol: {sym}")
+            try:
+                sym = dap_debug.sym_at(pc)
+                if sym:
+                    lines.append(f"PC symbol: {sym}")
+            except Exception:
+                pass
         return "[dap] FORENSICS:\n" + "\n".join(lines[:40])
     except Exception as e:
         return f"[dap] forensics error: {e}"
