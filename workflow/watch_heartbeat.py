@@ -33,7 +33,7 @@ def dap_forensics(tl):
     try:
         # halt + 冻结外设 → 取证 → resume（run_ocd_safe 自动恢复 DBGMCU）
         rc, out = dap_debug.run_ocd_safe([
-            "halt",
+            "init", "halt",
             "regs",                                   # PC/SP/LR/R0-12/xPSR
             "mdw 0xE000ED28 1",                       # CFSR
             "mdw 0xE000ED2C 1",                       # HFSR
