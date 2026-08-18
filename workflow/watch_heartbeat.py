@@ -95,8 +95,44 @@ def main():
                     # 正常现象——严禁立即 DAP 取证（halt 会打断 BOOT Flash 擦写，
                     # 实测教训：OTA 升级被打断）。观察期内恢复则记录 RECOVERED；
                     # 持续无响应（真实死机）才触发 DAP 取证。
+                    # 25s 时做一次快速 PC 采样：PC 在 APP 区 = 真实死机现场
+                    # （运行中 hang 的 PC 就抓这一下——等 60s 可能已进入
+                    # 死机-复位循环，PC 落在启动早期失去现场）；
+                    # PC 在 BOOT 区（0x0800xxxx）= OTA/复位窗口，放弃。
+                    time.sleep(25)
+                    try:
+                        ser.reset_input_buffer()
+                        ser.write(b"\r\n")
+                        time.sleep(0.6)
+                        if ser.in_waiting > 0:
+                            ser.read(ser.in_waiting)
+                            tl.write(f"[{stamp()}] RECOVERED（25s 快速采样前已恢复，"
+                                     f"判定为 OTA/复位窗口）\n")
+                            tl.flush()
+                            no_resp = 0
+                        else:
+                            tl.write(f"[{stamp()}] 25s 仍无响应 → 快速 PC 采样\n")
+                            tl.flush()
+                            if HAVE_DAP:
+                                rc, out = dap_debug.run_ocd_safe(
+                                    ["init", "halt", "reg pc", "reg sp",
+                                     "reg lr", "mdw 0xE000ED04 1"], timeout=45)
+                                pc = dap_debug.parse_reg(out, "pc") if rc == 0 else None
+                                if pc is not None and 0x08010000 <= pc < 0x080E0000:
+                                    fg.write(f"[{stamp()}] EARLY-SAMPLE(APP区=真死机现场)"
+                                             f" pc=0x{pc:08X} "
+                                             f"sp=0x{(dap_debug.parse_reg(out,'sp') or 0):08X} "
+                                             f"lr=0x{(dap_debug.parse_reg(out,'lr') or 0):08X}\n")
+                                    fg.flush()
+                                elif pc is not None:
+                                    fg.write(f"[{stamp()}] EARLY-SAMPLE(非APP区=OTA/复位窗口)"
+                                             f" pc=0x{pc:08X}\n")
+                                    fg.flush()
+                    except Exception:
+                        pass
+                    # 观察期剩余时间继续探测
                     dead_t0 = time.time()
-                    while time.time() - dead_t0 < 60.0:
+                    while time.time() - dead_t0 < 35.0:
                         time.sleep(2)
                         try:
                             ser.reset_input_buffer()
