@@ -78,6 +78,7 @@ def main():
     tl.flush()
 
     no_resp = 0
+    rx_tail = b""   # 最近收到的响应内容（死机前线索/复位循环启动日志）
     while True:
         try:
             ser.reset_input_buffer()
@@ -85,7 +86,8 @@ def main():
             time.sleep(0.6)
             n = ser.in_waiting
             if n > 0:
-                ser.read(n)
+                data = ser.read(n)
+                rx_tail = (rx_tail + data)[-512:]
                 if no_resp >= 3:
                     tl.write(f"[{stamp()}] RECOVERED（死机持续约 {no_resp*2}s 后恢复）\n")
                     tl.flush()
@@ -95,6 +97,14 @@ def main():
                 if no_resp == 3:
                     tl.write(f"[{stamp()}] *** DEAD（连续 {no_resp} 次无响应）*** 进入 60s 观察期\n")
                     tl.flush()
+                    # 死机前最后收到的 shell 内容（启动日志/崩溃线索）落盘
+                    if rx_tail.strip():
+                        try:
+                            tail_txt = rx_tail.decode(errors="replace")
+                        except Exception:
+                            tail_txt = repr(rx_tail)
+                        tl.write(f"[{stamp()}] 死机前最后串口内容:\n{tail_txt}\n")
+                        tl.flush()
                     # 观察期：OTA 升级/看门狗复位窗口（20-80s）内 shell 无响应是
                     # 正常现象——严禁立即 DAP 取证（halt 会打断 BOOT Flash 擦写，
                     # 实测教训：OTA 升级被打断）。观察期内恢复则记录 RECOVERED；
