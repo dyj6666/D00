@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""watch_heartbeat.py v2 —— COM5 心跳监控 + 死机 DAP 自动取证
+"""watch_heartbeat.py v3 —— COM5 心跳监控（死机检测，默认零 DAP 打扰）
 
-每 2s 发 \r\n 探测 shell 响应；连续 3 次无响应 = 死机：
-  1. 立即 OpenOCD halt 取证（PC/SP/LR/异常寄存器/复位原因/PC 反汇编/异常栈帧）
-  2. resume 后继续监控（发布固件 IWDG 4.1s 会自动复位，观察 DEAD→RECOVERED 周期）
-输出：workflow/logs/heartbeat_timeline.txt（时间线）+ heartbeat_forensics.txt（取证）
+每 2s 发 \r\n 探测 shell 响应；连续 3 次无响应 = DEAD：
+  - 进入 60s 观察期（OTA 升级/看门狗复位窗口内恢复 = 非死机）
+  - 默认【不自动 DAP】——死机现场只记录时间，提示人工取证
+    （用户要求：监控不得自动触碰 DAP，halt/resume 会干扰设备）
+  - 环境变量 HEARTBEAT_DAP=1 可临时启用自动取证（25s 采样 + 60s 取证）
+输出：workflow/logs/heartbeat_timeline.txt（时间线）
 """
 import serial
 import time
@@ -13,6 +15,8 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "workflow"))
+
+AUTO_DAP = os.environ.get("HEARTBEAT_DAP", "0") == "1"
 
 try:
     import dap_debug
@@ -111,9 +115,10 @@ def main():
                             tl.flush()
                             no_resp = 0
                         else:
-                            tl.write(f"[{stamp()}] 25s 仍无响应 → 快速 PC 采样\n")
+                            tl.write(f"[{stamp()}] 25s 仍无响应 → "
+                                     f"{'快速 PC 采样' if AUTO_DAP else '（DAP 自动取证已禁用，跳过）'}\n")
                             tl.flush()
-                            if HAVE_DAP:
+                            if AUTO_DAP and HAVE_DAP:
                                 rc, out = dap_debug.run_ocd_safe(
                                     ["init", "halt", "reg pc", "reg sp",
                                      "reg lr", "mdw 0xE000ED04 1"], timeout=45)
@@ -148,12 +153,14 @@ def main():
                         except Exception:
                             pass
                     if no_resp != 0:
-                        tl.write(f"[{stamp()}] *** 观察期 60s 后仍无响应 = 真实死机，"
-                                 f"触发 DAP 取证 ***\n")
+                        tl.write(f"[{stamp()}] *** 观察期 60s 后仍无响应 = 真实死机 "
+                                 f"{'，触发 DAP 取证' if AUTO_DAP else '（DAP 取证已禁用，'
+                                 f'如需现场请手动执行 workflow/dap_debug.py）'} ***\n")
                         tl.flush()
-                        f = dap_forensics(tl)
-                        fg.write(f"[{stamp()}] DEAD\n{f}\n")
-                        fg.flush()
+                        if AUTO_DAP:
+                            f = dap_forensics(tl)
+                            fg.write(f"[{stamp()}] DEAD\n{f}\n")
+                            fg.flush()
         except Exception as e:
             tl.write(f"[{stamp()}] 串口错误: {e}\n")
             tl.flush()
