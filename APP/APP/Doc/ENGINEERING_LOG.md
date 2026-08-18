@@ -3789,3 +3789,34 @@ GuiApp 任务正常（8KB 栈余 6.5KB）；三页面日常刷新正常。
   断点在此场景反而因 halt 干扰 IWDG（发布构建看门狗未冻结）不适用；
 - 堆余量监控：GUI 任务栈 8KB 后 FreeRTOS 堆余 3KB，TcpCli 动态
   连接仍正常；后续堆不足时优先回收（6KB 栈折中）。
+
+### 13.3 "MCU 运行中死机"实为 DAP 假死机——OpenOCD 无效命令致 resume 未执行（2026-08-19，重点问题）
+
+**现象**：用户反馈纯闲置约 1 小时后死机（画面定格、按键/COM/TCP 全失效、TIM7/uwTick 停、必须断电恢复）；且"摄像头接着必死、拔掉不死"——一度判定与 CAM 强相关，启动摄像头链路（cam_link/UART5/挥手翻页）地毯式排查。
+
+**排查过程（多轮被推翻的方向）**：
+1. cam_link 协议状态机 LEN>16 死锁（s_rx_idx 卡在 16 永远等不到 SUM）——真实缺陷，已修（防呆复位 HEAD1）；
+2. UART5 错误中断（HAL_UART_Receive_DMA 自动使能 PE/ERR IT）→ FE/NE/ORE 触发 HAL 错误处理 → 清 CR3 DMAR + HAL_DMA_Abort → 链路永久静默死、无人恢复（bsp_uart 表不含 UART5）——真实缺陷，已修（1s 巡检自愈 + PD2 上拉 + 挥手 500ms 防抖）；
+3. **方向错误**：FSMC 外部 SRAM 偶发挂起（10.25 先例）+ LVGL 堆在外部 SRAM → 挥手动画放大触发概率——推测链条看似完美但无法解释"必须手动断电"（IWDG 4.1s 会复位任何 CPU 停摆，除非喂狗仍在跑）；
+4. **真相（DAP 证据链）**：心跳监控 DEAD 后 DAP halt 取证 PC=0x0803E682（lcd_opt_delay）、CFSR/HFSR=0（非 fault 是 hang）、ICSR VECTPENDING=30（TIM3 挂起未响应）、uwTick 停——看似"启动早期死机"。
+   **实为**：此前 DAP 验证会话命令含 `regs`（OpenOCD 0.12 无效命令）→ OpenOCD 在该命令处立即退出 rc=1 → 同会话后续 resume 从未执行 → 目标被永久 halt。"死机"全部是 halt 残留产物：uwTick 停 = DBGMCU_CR=0x7F 冻结 TIM；PC 卡 lcd_opt_delay = init 遇 unknown target 复位设备后 halt 采样落在启动早期；必须断电 = halt 后唯一恢复手段。
+
+**根因机理**：
+- OpenOCD `-c` 命令行会话退出（shutdown）**不会自动 resume target**（旧注释"auto-resumes on disconnect"为错误认知，那是 GDB 会话行为）；
+- 命令序列中任一无效命令导致 OpenOCD 提前退出，后续全部命令（含 resume）不执行；
+- 叠加：每次 halt/resume 会话本身会触发 APP 任务级看门狗静默超时软复位（10.53/7.3 节已记录 link uptime 归零）——周期性 DAP 监控（watch_mcu v4）即"死机"源头。
+
+**解决方案（已落地，3 commit）**：
+1. run_ocd_safe 拆双会话：取证（halt+读）与恢复（init+清 DBGMCU_CR+resume）分离执行，取证命令再失败恢复会话也必定执行；
+2. 全部命令改用 OpenOCD 0.12 有效命令（reg pc 系列）；cmd_halt 改"瞬时采样"语义；
+3. 心跳监控 v2 死机自动取证（取证后自动恢复运行）；DAP_DEBUG.md 新增第 8 节复盘与 4 条红线。
+
+**验证数据**：
+- 假死机现场：PC=0x0803E682（lcd_opt_delay 循环体）、CFSR=0、HFSR=0、ICSR VECTPENDING=30（TIM3）；
+- 双会话恢复验证：故意用无效命令 regs 取证（rc=1），恢复会话独立执行，设备恢复运行（心跳 RECOVERED）；
+- 修复后设备 23:56:42 起持续正常（含 DAP 双会话取证测试），等待插摄像头长测确认无真实死机。
+
+**经验沉淀**：
+- 报告"死机"前先确认最近 10 分钟无 DAP 会话活动；禁止对运行中系统执行无 resume 的 halt；
+- 中断"停了"+PC 落在初始化代码 + 无 fault = 先怀疑 halt 残留，再怀疑固件；
+- 监控脚本的 DAP 采样必须自带恢复保障（双会话），否则监控即干扰源。
