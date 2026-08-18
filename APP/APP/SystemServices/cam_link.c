@@ -267,11 +267,25 @@ void CamLink_IdleISR(void)
     }
 }
 
-/* HAL 回调：DMA 循环缓冲写满（防御——正常 IDLE 每帧消费，不会满） */
+/* HAL 回调：DMA 循环缓冲写满（连续流路径——无帧间隙时 IDLE 不触发）
+ * ⚠ 满回调必须消费"整圈"（256B），不能用 256-NDTR 计算消费量：
+ * TC 触发时 NDTR 已重载为 256 且中断延迟内仅递减 0-1 字节（115200bps
+ * 每字节 87µs）→ cur≈0 → 每圈只消费 0-1 字节，99% 帧被覆盖丢弃
+ * （实测：连续满速流解析率仅 ~8fps vs 理论 880fps，err 持续增长）。
+ * 修复：先消费整圈（本圈全部数据），再消费 TC 之后新写入的余量。 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == UART5) {
-        cam_link_drain();
+        for (uint16_t i = 0; i < CAM_RX_BUF_SIZE; i++) {
+            CamLink_OnRxByte(s_rx_dma_buf[s_rx_rd]);
+            s_rx_rd = (uint16_t)((s_rx_rd + 1u) % CAM_RX_BUF_SIZE);
+        }
+        /* TC 之后 DMA 继续写入的余量（循环模式 NDTR 递减中） */
+        uint16_t cur = CAM_RX_BUF_SIZE - (uint16_t)__HAL_DMA_GET_COUNTER(&hdma_usart5_rx);
+        while (s_rx_rd != cur) {
+            CamLink_OnRxByte(s_rx_dma_buf[s_rx_rd]);
+            s_rx_rd = (uint16_t)((s_rx_rd + 1u) % CAM_RX_BUF_SIZE);
+        }
     }
 }
 
