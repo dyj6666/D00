@@ -10,10 +10,7 @@
 void BSP_Watchdog_Refresh(void)
 {
 #if APP_DEBUG_MODE
-    /* 调试构建：APP 不初始化 IWDG，但 BOOT 跳转前启动的 IWDG 仍在运行
-     * （IWDG 一旦启动不可关闭，BOOT 配置 128/4095 ≈ 16.4s 窗口）——
-     * 必须继续喂，否则系统每 ~16s 被 BOOT 看门狗复位（重启循环）。 */
-    IWDG->KR = 0xAAAA;
+    /* 调试构建：IWDG 未启动，无需喂狗 */
 #else
     HAL_IWDG_Refresh(&hiwdg);
 #endif
