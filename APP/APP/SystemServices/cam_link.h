@@ -41,6 +41,10 @@ void CamLink_IdleISR(void);
 /* 查询当前链路状态（ISR 写，volatile；调用方可拷贝快照） */
 const volatile cam_link_state_t *CamLink_GetState(void);
 
+/* 链路巡检（事件总线 MSG_TICK_1S 挂接）：检测到接收链路静默死亡
+ * （DMA 被 HAL 错误处理中止/悬空噪声错误风暴等）时自动重启 DMA 接收 */
+void CamLink_Supervise(void);
+
 /* 消费挥手事件：返回 1=有事件，dir_out 输出方向（CAM_SWIPE_*） */
 uint8_t CamLink_ConsumeSwipe(uint8_t *dir_out);
 

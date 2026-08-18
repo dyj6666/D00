@@ -12,6 +12,7 @@
 #include "cam_link.h"
 #include "usart.h"
 #include "bsp_system.h"
+#include "event_bus.h"
 #include "logger.h"
 #include <string.h>
 
@@ -127,7 +128,14 @@ void CamLink_OnRxByte(uint8_t b)
         s_rx_len = b;
         s_rx_idx = 0;
         s_rx_sum = 0;
-        s_rx_state = (s_rx_len == 0u) ? CAM_RX_SUM : CAM_RX_DATA;
+        /* 防呆：非法长度（> 数据区上限）直接失步重同步——否则 s_rx_idx
+         * 到 16 后不再增长、永远等不到 SUM，解析器永久卡死（挥手/统计
+         * 全失效；噪声/协议错帧可触发）。 */
+        if (s_rx_len > CAM_DATA_MAX) {
+            s_rx_state = CAM_RX_HEAD1;
+        } else {
+            s_rx_state = (s_rx_len == 0u) ? CAM_RX_SUM : CAM_RX_DATA;
+        }
         break;
     case CAM_RX_DATA:
         if (s_rx_idx < CAM_DATA_MAX) {
@@ -191,6 +199,53 @@ void CamLink_ClearSwipe(void)
     s_cam.swipe_right = 0;
 }
 
+/* ---------------- 链路巡检（1s 心跳）：DMA 静默死亡自动恢复 ----------------
+ * 背景：HAL_UART_Receive_DMA 会自动使能 PE/ERR 中断；一旦出现帧错误（FE，
+ * 线缆接触不良/拔插/悬空噪声）HAL_UART_IRQHandler 错误分支会清除 CR3 DMAR
+ * 并 HAL_DMA_Abort——UART5 不在 bsp_uart 表内，无人恢复，链路永久静默死。
+ * 巡检：曾收到帧但 last_rx_ms 超时（5s）→ 判定链路死 → 重启 DMA 接收。
+ * 拔线场景每 5s 重启一次（开销微秒级），插回后立即恢复，无需复位。 */
+#define CAM_SUPERVISE_TIMEOUT_MS  5000u
+
+static uint8_t s_rx_armed;   /* DMA 接收已启动（任务上下文访问） */
+
+static void cam_link_restart_rx(void)
+{
+    /* 重启期间屏蔽 IDLE 中断：防止 ISR 穿插读取 DMA 计数器的中间态 */
+    __HAL_UART_DISABLE_IT(&huart5, UART_IT_IDLE);
+    HAL_UART_DMAStop(&huart5);
+    huart5.ErrorCode = HAL_UART_ERROR_NONE;
+    huart5.RxState = HAL_UART_STATE_READY;
+    huart5.RxXferCount = 0;
+    s_rx_rd = 0;
+    if (HAL_UART_Receive_DMA(&huart5, s_rx_dma_buf, CAM_RX_BUF_SIZE) == HAL_OK) {
+        __HAL_UART_ENABLE_IT(&huart5, UART_IT_IDLE);
+        s_rx_armed = 1;
+        LOG_Printf("[CAM] link DMA restarted (self-heal)\r\n");
+    } else {
+        s_rx_armed = 0;
+        LOG_Printf("[CAM] link DMA restart FAILED\r\n");
+    }
+}
+
+/* 事件总线 1s 心跳（eventBusTask 上下文） */
+static void cam_link_supervise_tick(const message_t *msg)
+{
+    (void)msg;
+    CamLink_Supervise();
+}
+
+void CamLink_Supervise(void)
+{
+    if (!s_rx_armed) {
+        return;
+    }
+    uint32_t now = BSP_GetTick();
+    if ((now - s_cam.last_rx_ms) >= CAM_SUPERVISE_TIMEOUT_MS) {
+        cam_link_restart_rx();
+    }
+}
+
 /* ---------------- 初始化：循环 DMA + IDLE 接收 ---------------- */
 static void cam_link_drain(void)
 {
@@ -225,10 +280,14 @@ void CamLink_Init(void)
     memset((void *)&s_cam, 0, sizeof(s_cam));
     s_cam.gesture_id = 0xFFu;   /* 无手势 */
     s_rx_rd = 0;
+    s_rx_armed = 0;
 
     /* 启动循环 DMA 接收 + IDLE 中断（DMA 永不停止） */
     HAL_StatusTypeDef st = HAL_UART_Receive_DMA(&huart5, s_rx_dma_buf, CAM_RX_BUF_SIZE);
     __HAL_UART_ENABLE_IT(&huart5, UART_IT_IDLE);
+    s_rx_armed = (st == HAL_OK);
+    /* 链路巡检：事件总线 1s 心跳（与 ota_can_svc 同模式，不额外建任务） */
+    EventBus_Subscribe(MSG_TICK_1S, cam_link_supervise_tick);
     LOG_Printf("[CAM] link ready (UART5 115200, IDLE+DMA PC12/PD2) dma_rc=%d\r\n",
                (int)st);
 }

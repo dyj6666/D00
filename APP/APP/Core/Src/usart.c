@@ -254,6 +254,9 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     PC12     ------> UART5_TX（接 OpenART B13）
     PD2      ------> UART5_RX（接 OpenART B12）
     */
+    /* UART5 GPIO：PC12=TX（输出，NOPULL）；PD2=RX（输入，上拉——
+     * 摄像头拔线/接触不良时 RX 悬空会产生不确定电平与帧错误风暴，
+     * 上拉保证空闲电平稳定为 1，链路静默而非噪声）。 */
     GPIO_InitStruct.Pin = GPIO_PIN_12;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
@@ -263,7 +266,7 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
     GPIO_InitStruct.Pin = GPIO_PIN_2;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
     GPIO_InitStruct.Alternate = GPIO_AF8_UART5;
     HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);

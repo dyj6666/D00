@@ -15,6 +15,7 @@
 #include "lv_port_disp.h"
 #include "gui_pages.h"
 #include "bsp_lcd.h"
+#include "bsp_system.h"
 #include "app_config.h"
 #include "mem_map.h"
 
@@ -48,6 +49,7 @@ static void gui_bench_run(void);
  * LVGL API 非线程安全，回调只置标志，实际切换由 GUI 任务消费执行。 */
 static volatile uint8_t s_key_page_next;
 static volatile uint8_t s_key_home;
+static uint32_t s_last_swipe_ms;   /* 挥手翻页防抖时间戳 */
 
 static void gui_on_key_event(const message_t *msg)
 {
@@ -80,11 +82,18 @@ static void gui_task(void *arg)
             GuiPages_ShowHome();
         }
         /* 摄像头挥手翻页（cam_link 服务层事件标志，250ms 节拍内消费）：
-         * 挥手 SWIPE_LEFT/RIGHT → 页面轮换 + 蜂鸣提示，与 KEY0 短按等效 */
+         * 挥手 SWIPE_LEFT/RIGHT → 页面轮换 + 蜂鸣提示，与 KEY0 短按等效。
+         * 防抖：500ms 内仅响应一次（OpenART AI 挥手模型静态场景可能误报，
+         * 连续误报会导致频繁翻页动画——每次动画在外部 SRAM 堆分配对象，
+         * 高频动画是本平台 FSMC 偶发挂起（ENGINEERING_LOG 10.25）的放大因素） */
         uint8_t swipe_dir = 0;
         if (CamLink_ConsumeSwipe(&swipe_dir) && swipe_dir != 0u) {
-            GuiPages_PageNext();
-            Buzzer_Beep(30);   /* 换页提示音 */
+            uint32_t now = BSP_GetTick();
+            if ((now - s_last_swipe_ms) >= 500u) {
+                s_last_swipe_ms = now;
+                GuiPages_PageNext();
+                Buzzer_Beep(30);   /* 换页提示音 */
+            }
         }
         /* 性能基准请求（命令上下文置位，本任务上下文串行执行） */
         if (s_bench_request) {
