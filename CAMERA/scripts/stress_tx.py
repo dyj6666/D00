@@ -18,7 +18,8 @@ s = 0x01
 for b in DATA:
     s = (s + b) & 0xFF
 FRAME = b'\xAA\x55\x01\x09' + DATA + bytes([s])
-print("frame:", FRAME.hex(), "size:", len(FRAME))
+# MicroPython v1.18 无 bytes.hex()（OpenART mini = i.MX RT1060 固件）
+print("frame size:", len(FRAME), "head:", FRAME[:4])
 
 t0 = time.ticks_ms()
 n = 0
