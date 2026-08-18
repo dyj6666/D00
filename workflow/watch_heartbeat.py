@@ -89,12 +89,35 @@ def main():
             else:
                 no_resp += 1
                 if no_resp == 3:
-                    tl.write(f"[{stamp()}] *** DEAD（连续 {no_resp} 次无响应 = 死机）***\n")
+                    tl.write(f"[{stamp()}] *** DEAD（连续 {no_resp} 次无响应）*** 进入 60s 观察期\n")
                     tl.flush()
-                    # 死机取证（独立线程，避免阻塞心跳循环太久）
-                    f = dap_forensics(tl)
-                    fg.write(f"[{stamp()}] DEAD\n{f}\n")
-                    fg.flush()
+                    # 观察期：OTA 升级/看门狗复位窗口（20-80s）内 shell 无响应是
+                    # 正常现象——严禁立即 DAP 取证（halt 会打断 BOOT Flash 擦写，
+                    # 实测教训：OTA 升级被打断）。观察期内恢复则记录 RECOVERED；
+                    # 持续无响应（真实死机）才触发 DAP 取证。
+                    dead_t0 = time.time()
+                    while time.time() - dead_t0 < 60.0:
+                        time.sleep(2)
+                        try:
+                            ser.reset_input_buffer()
+                            ser.write(b"\r\n")
+                            time.sleep(0.6)
+                            if ser.in_waiting > 0:
+                                ser.read(ser.in_waiting)
+                                tl.write(f"[{stamp()}] RECOVERED（观察期内恢复，"
+                                         f"判定为 OTA/复位窗口，非死机）\n")
+                                tl.flush()
+                                no_resp = 0
+                                break
+                        except Exception:
+                            pass
+                    if no_resp != 0:
+                        tl.write(f"[{stamp()}] *** 观察期 60s 后仍无响应 = 真实死机，"
+                                 f"触发 DAP 取证 ***\n")
+                        tl.flush()
+                        f = dap_forensics(tl)
+                        fg.write(f"[{stamp()}] DEAD\n{f}\n")
+                        fg.flush()
         except Exception as e:
             tl.write(f"[{stamp()}] 串口错误: {e}\n")
             tl.flush()
