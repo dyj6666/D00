@@ -122,3 +122,38 @@ flash 鑼冨洿鍐呯殑瀛椾細鑷姩鏍囨敞绗﹀彿锛堝 `<modules_
    link uptime 归零、uwTick 重新计数（任务级软件看门狗 WDOG 判定静默超时）。
    需要挂起排查时优先用 debug 交互模式并尽量缩短 halt 时间，或使用
    APP_DEBUG_MODE=1 构建（WDOG/IWDG 关闭）。
+
+## 8. DAP 假死机教训（2026-08-19 复盘——重点问题，全员必须知晓）
+
+### 现象
+心跳监控连续报 DEAD（系统无响应），DAP 取证 PC 停在 `lcd_opt_delay`（LCD 初始化自旋）、
+uwTick 停、TIM7 停——曾被误判为"MCU 运行中死机"并启动长篇 CAM 相关排查。
+
+### 真相
+**设备从未死机——是被 OpenOCD halt 后永久暂停（假死机）**：
+1. 监控脚本调用 `run_ocd_safe(['init','halt','mdw ...','regs', ...])`；
+2. `regs` 在 OpenOCD 0.12 是**无效命令** → OpenOCD 在该命令处立即退出 rc=1；
+3. **同会话后续的 `resume`/`shutdown` 从未执行** → 目标保持 halt；
+4. 设备"死机"（心跳 DEAD、uwTick 停=DBGMCU_CR 0x7F 冻结 TIM、PC 卡任意位置、
+   必须断电恢复）——全部是 halt 残留的产物。
+
+### 关键机制
+- **OpenOCD `-c` 会话退出不会自动 resume target**（旧注释"auto-resumes on
+  disconnect"是错的——那是 GDB 会话行为）；
+- `init` 时若 target 状态未知（上次会话残留 halt），OpenOCD 可能复位设备，
+  导致 halt 采样 PC 落在**启动早期**（如 lcd_opt_delay）——误判"启动死机"。
+
+### 修复（已落地）
+1. `run_ocd_safe` 改为**双会话**：取证会话（halt+读）与恢复会话
+   （init + 清 DBGMCU_CR + resume）**分离执行**——取证命令再失败，
+   恢复会话也必定单独执行，目标必定恢复运行；
+2. 所有命令只使用 OpenOCD 0.12 有效命令（`reg pc` 系列；`regs`/`disassemble` 无效）；
+3. `cmd_halt` 语义改为"瞬时采样"（halt→读→恢复），不再留下 halt 残留；
+4. 死机取证脚本（watch_mcu v4）的 halt 保持模式是**有意设计**（现场冻结），
+   但必须日志明示"需手动复位"，且仅在真死机判定后触发。
+
+### 纪律（新增红线）
+- **禁止在运行中的系统上执行无 resume 的 halt 会话**；
+- 任何 DAP 脚本新增命令前，先验证命令在 OpenOCD 0.12 下有效；
+- 心跳监控 DEAD 判定后，取证必须走双会话（取证+恢复）；
+- 报告"死机"前，先确认最近 10 分钟内没有 DAP 会话活动。

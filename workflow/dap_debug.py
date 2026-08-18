@@ -297,15 +297,16 @@ def resolve_addr(token):
 # Commands
 # ----------------------------------------------------------------------
 def cmd_halt():
-    rc, out = run_ocd(["init", "halt", "reg pc", "reg sp", "reg lr",
-                       "shutdown"])
+    # 2026-08 实测教训：OpenOCD `-c` 会话退出（shutdown）不会自动 resume
+    # target——曾因无效命令中断会话导致设备被永久 halt，表现为"死机"。
+    # 因此 halt 采样一律走 run_ocd_safe（采样后必定恢复运行）。
+    rc, out = run_ocd_safe(["init", "halt", "reg pc", "reg sp", "reg lr"])
     pc = parse_reg(out, "pc")
     sp = parse_reg(out, "sp")
     lr = parse_reg(out, "lr")
     if pc is not None:
-        print(f"halted, pc=0x{pc:08X} sp=0x{sp:08X} lr=0x{lr:08X}")
-        print("(one-shot session: core auto-resumes on disconnect; use "
-              "`dap_debug.py debug` for a persistent halted session)")
+        print(f"sampled, pc=0x{pc:08X} sp=0x{sp:08X} lr=0x{lr:08X}")
+        print("(瞬时采样：目标已恢复运行)")
     else:
         print(out)
 
