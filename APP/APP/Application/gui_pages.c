@@ -1038,7 +1038,7 @@ static lv_obj_t *gimbal_meter(lv_obj_t *parent, lv_meter_indicator_t **ind_out)
     lv_meter_set_scale_range(m, sc, 0, 180, 270, 90);
     lv_meter_set_scale_ticks(m, sc, 9, 2, 6, lv_color_hex(0x3A4658));
     lv_meter_set_scale_major_ticks(m, sc, 3, 3, 12, lv_color_hex(0x8A97A8), 0);
-    *ind_out = lv_meter_add_needle_line(m, sc, 2, GUI_COL_ACCENT, -26);
+    *ind_out = lv_meter_add_needle_line(m, sc, 2, GUI_COL_ACCENT, 22);
     return m;
 }
 

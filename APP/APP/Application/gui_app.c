@@ -73,6 +73,7 @@ static void gui_task(void *arg)
 {
     (void)arg;
     LOG_Printf("[GUI] task enter\r\n");
+    BSP_DWT_Enable();   /* DWT 周期计数（渲染耗时测量；幂等） */
     uint32_t last = 0;
     for (;;) {
         uint32_t t0 = DWT->CYCCNT;
