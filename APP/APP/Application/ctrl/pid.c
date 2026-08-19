@@ -154,6 +154,10 @@ void PID_FeedForward_Init(PID_FeedForward *p)
 {
     if (p == NULL) return;
     PID_Pos_Init(&p->pid);
+    if (p->out_min == 0.0f && p->out_max == 0.0f) {
+        p->out_min = -1e6f;   /* 默认宽限幅（否则 clamp 恒 0） */
+        p->out_max =  1e6f;
+    }
     p->out = 0.0f;
 }
 
@@ -264,6 +268,10 @@ float PID_DerivativeOnMeasure_Update(PID_DerivativeOnMeasure *p,
 void PID_GainSched_Init(PID_GainSched *p)
 {
     if (p == NULL) return;
+    if (p->out_min == 0.0f && p->out_max == 0.0f) {
+        p->out_min = -1e6f;
+        p->out_max =  1e6f;
+    }
     p->integral = 0.0f;
     p->prev_err = 0.0f;
     p->out = 0.0f;
@@ -277,9 +285,11 @@ float PID_GainSched_Update(PID_GainSched *p, float sched_var, float err)
     float kp = p->seg[0].kp, ki = p->seg[0].ki, kd = p->seg[0].kd;
     for (int i = 0; i < PID_SCHED_SEGMENTS - 1; i++) {
         if (av <= p->seg[i + 1].bound) {
-            float t = (p->seg[i + 1].bound > p->seg[i].bound)
-                    ? (av - p->seg[i].bound)
-                      / (p->seg[i + 1].bound - p->seg[i].bound) : 1.0f;
+            float lo = p->seg[i].bound;
+            float hi = p->seg[i + 1].bound;
+            float t = (hi > lo) ? ((av - lo) / (hi - lo)) : 1.0f;
+            if (t < 0.0f) t = 0.0f;   /* av 低于本段下界：用本段增益 */
+            if (t > 1.0f) t = 1.0f;
             kp = p->seg[i].kp + (p->seg[i + 1].kp - p->seg[i].kp) * t;
             ki = p->seg[i].ki + (p->seg[i + 1].ki - p->seg[i].ki) * t;
             kd = p->seg[i].kd + (p->seg[i + 1].kd - p->seg[i].kd) * t;
@@ -350,6 +360,10 @@ static float fuzzy_out(const float table[5][5], float e, float ec)
 void PID_Fuzzy_Init(PID_Fuzzy *p)
 {
     if (p == NULL) return;
+    if (p->out_min == 0.0f && p->out_max == 0.0f) {
+        p->out_min = -1e6f;
+        p->out_max =  1e6f;
+    }
     p->dkp = p->dki = p->dkd = 0.0f;
     p->integral = 0.0f;
     p->prev_err = 0.0f;
@@ -505,6 +519,10 @@ float PID_Autotune_Update(PID_Autotune *p, float y, float setpoint)
 void PID_Neural_Init(PID_Neural *p)
 {
     if (p == NULL) return;
+    if (p->out_min == 0.0f && p->out_max == 0.0f) {
+        p->out_min = -1e6f;
+        p->out_max =  1e6f;
+    }
     p->x1 = p->x2 = p->x3 = 0.0f;
     p->prev_err = 0.0f;
     p->out = 0.0f;

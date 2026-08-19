@@ -42,14 +42,6 @@ static void mat_add(int32_t n, const float (*a)[KF_MAX_DIM],
     }
 }
 
-static void mat_sub(int32_t n, const float (*a)[KF_MAX_DIM],
-                    const float (*b)[KF_MAX_DIM], float (*c)[KF_MAX_DIM])
-{
-    for (int32_t i = 0; i < n; i++) {
-        for (int32_t j = 0; j < n; j++) c[i][j] = a[i][j] - b[i][j];
-    }
-}
-
 /* 高斯消元解 A·x = b（n 维），返回 0=成功 */
 static int mat_solve(int32_t n, const float (*a)[KF_MAX_DIM],
                      const float *b, float *x)
@@ -666,14 +658,14 @@ void InfoKF_Init(InfoKF *k)
 void InfoKF_Update(InfoKF *k, const float *z)
 {
     if (k == NULL) return;
-    int32_t n = k->n, m = k->m;
-    /* 预测：Y = (F·Y⁻¹·Fᵀ + Q)⁻¹；y = Y·F·Y⁻¹·y
+    int32_t n = k->n;
+    /* 预测：Y = (F·Y⁻¹·Fᵀ + Q)⁻¹；y = Y·F·Y⁻¹·y_old
      * （工程简化：一维实现为主，多维走通用 KF 更实用） */
     if (n == 1) {
         float yinv = (k->Y[0][0] > 1e-12f) ? (1.0f / k->Y[0][0]) : 1e6f;
         float f = k->F[0][0];
         float ypred = 1.0f / (f * f * yinv + k->Q[0][0]);
-        float yvec = ypred * f * (k->y[0] / (yinv > 1e-12f ? yinv : 1e6f));
+        float yvec = ypred * f * (k->y[0] * yinv);   /* y·Y⁻¹ = y·yinv */
         float h = k->H[0][0], r = k->R[0][0];
         k->Y[0][0] = ypred + h * h / r;
         k->y[0] = yvec + h * z[0] / r;
@@ -770,9 +762,13 @@ void PF_Init(PF *k, float q, float r, int32_t n)
 void PF_Update(PF *k, float z)
 {
     if (k == NULL) return;
-    /* 1. 过程噪声扰动 */
+    /* 1. 过程噪声扰动（LCG 伪随机：确定性可复现，避免固定模式导致
+     *    粒子无法扩散——实测固定序列使估计冻结在初始值） */
+    static uint32_t pf_seed = 0x12345678u;
     for (int32_t i = 0; i < k->n; i++) {
-        k->x[i] += k->q * (float)(((i * 2654435761u) % 1000u) / 500.0f - 1.0f);
+        pf_seed = pf_seed * 1664525u + 1013904223u;
+        float n = (float)((pf_seed >> 8) & 0xFFFF) / 32768.0f - 1.0f;
+        k->x[i] += k->q * n;
     }
     /* 2. 似然加权（高斯） */
     float wsum = 0.0f;
