@@ -18,10 +18,13 @@
 
 typedef struct {
     volatile float q0, q1, q2, q3;      /* 单位四元数 */
-    volatile float roll, pitch, yaw;    /* 欧拉角（度） */
+    volatile float roll, pitch, yaw;    /* 欧拉角（度，2D 卡尔曼融合输出） */
     volatile float ax, ay, az;          /* 加速度（g，已去偏移） */
     volatile float gx, gy, gz;          /* 角速度（dps，已去零偏） */
     volatile float temp;                /* 温度（℃） */
+    /* ---- 滤波对比通道（GIMBAL 实验室用） ---- */
+    volatile float acc_roll, acc_pitch; /* 加速度计直接解算角度（未滤波，含毛刺） */
+    volatile float comp_roll, comp_pitch; /* 互补滤波输出（ctrl::Complementary） */
     volatile uint32_t sample_count;     /* 累计有效采样 */
     volatile uint32_t fault_count;      /* I2C/器件故障计数 */
     volatile uint8_t  ready;            /* 1=器件就绪（含校准完成） */

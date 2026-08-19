@@ -128,8 +128,12 @@ static float s_g_demo_t;                       /* 演示时间（秒） */
 static float s_g_follow_x, s_g_follow_y;       /* 准星跟随位置（插值） */
 static lv_timer_t *s_g_anim_timer;             /* 动画定时器（33ms ≈ 30fps；保留句柄供后续 pause/resume） */
 static lv_obj_t *s_g_perf;                     /* 标题栏性能显示（fps/渲染耗时） */
-static uint8_t s_g_frame_cnt;                  /* 仪表降频计数器（每 4 帧） */
+static uint8_t s_g_frame_cnt;                  /* 仪表降频计数器（每 6 帧） */
 static uint32_t s_g_last_ms;                   /* 上一帧 lv_tick（fps 计算） */
+/* 通道模式：0=DEMO（Lissajous 演示） 1=RAW（加速度原始） 2=COMP（互补） 3=KF（卡尔曼） */
+static uint8_t s_g_mode;
+static lv_obj_t *s_g_ch_btn;                   /* 通道切换按钮（HUD 条右侧） */
+static const char *const s_g_mode_name[4] = { "DEMO", "RAW", "COMP", "KF" };
 /* LVGL 单帧渲染耗时（gui_app.c 实测） */
 extern uint32_t g_gui_render_us;
 
@@ -987,6 +991,7 @@ static void page_cam_refresh(void)
  * 刷新：独立 50ms 定时器（20fps），仅页面可见时执行
  * ================================================================ */
 static void gimbal_anim_cb(lv_timer_t *tmr);   /* 前向声明 */
+static void gimbal_ch_click(lv_event_t *e);    /* 通道切换按钮回调 */
 #define G_FOV_X     16      /* 视场内区原点（页面坐标） */
 #define G_FOV_Y     60
 #define G_FOV_W     208
@@ -1061,7 +1066,7 @@ static void page_gimbal_build(void)
     /* ---- 视场卡：模拟摄像头画面（HUD 风格：顶条状态 + 大视场） ---- */
     lv_obj_t *fov = GuiTheme_Card(s_scr_gimbal, 220, 188);
     lv_obj_set_pos(fov, 10, 34);
-    /* HUD 顶条：TRACK 状态 + 偏差读数（相机取景风格） */
+    /* HUD 顶条：状态 + 偏差读数 + 通道切换按钮（相机取景风格） */
     lv_obj_t *hud = lv_obj_create(fov);
     lv_obj_remove_style_all(hud);
     lv_obj_set_pos(hud, 6, 6);
@@ -1078,6 +1083,23 @@ static void page_gimbal_build(void)
     lv_obj_set_pos(s_g_dx, 84, 2);
     s_g_dy = GuiTheme_Label(hud, "dy +000", &lv_font_montserrat_12, GUI_COL_TEXT);
     lv_obj_set_pos(s_g_dy, 150, 2);
+    /* 通道切换按钮（循环：DEMO→RAW→COMP→KF→DEMO） */
+    s_g_ch_btn = lv_btn_create(hud);
+    lv_obj_remove_style_all(s_g_ch_btn);
+    lv_obj_set_size(s_g_ch_btn, 44, 16);
+    lv_obj_set_pos(s_g_ch_btn, 162, 0);
+    lv_obj_set_style_radius(s_g_ch_btn, 4, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_g_ch_btn, lv_color_hex(0x1F2B3D), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_g_ch_btn, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_g_ch_btn, GUI_COL_CARD_HI, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(s_g_ch_btn, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(s_g_ch_btn, GUI_COL_BORDER, LV_PART_MAIN);
+    lv_obj_t *ch_lab = lv_label_create(s_g_ch_btn);
+    lv_label_set_text(ch_lab, "DEMO");
+    lv_obj_set_style_text_font(ch_lab, &lv_font_montserrat_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(ch_lab, GUI_COL_ACCENT, LV_PART_MAIN);
+    lv_obj_center(ch_lab);
+    lv_obj_add_event_cb(s_g_ch_btn, gimbal_ch_click, LV_EVENT_CLICKED, NULL);
 
     /* 视场底（更深的"取景"感） */
     lv_obj_t *scene = lv_obj_create(fov);
@@ -1160,22 +1182,46 @@ static void page_gimbal_build(void)
     (void)s_g_anim_timer;   /* 句柄保留：后续页面隐藏时 pause/resume 用 */
     s_g_frame_cnt = 0;
     s_g_last_ms = lv_tick_get();
+    s_g_mode = 0;           /* 默认 DEMO 演示 */
 }
 
-/* 动画刷新（33ms 定时器驱动 ≈30fps；仅 GIMBAL 页可见时执行） */
+/* 动画刷新（33ms 定时器驱动 ≈30fps；仅 GIMBAL 页可见时执行）
+ * 通道模式：DEMO（Lissajous 演示）/ RAW（加速度原始）/ COMP（互补）/ KF（卡尔曼） */
 static void page_gimbal_refresh(void)
 {
-    s_g_demo_t += 0.033f;
-    float t = s_g_demo_t;
-    /* 目标轨迹：Lissajous（视觉演示）——sinf 由 FPU 原生支持 */
-    float tx = G_FOV_W * 0.5f + G_FOV_W * 0.38f * sinf(t * 0.5236f);  /* ω=2π/12s */
-    float ty = G_FOV_H * 0.5f + G_FOV_H * 0.34f * sinf(t * 0.3491f);  /* ω=2π/18s */
-    /* 准星跟随（指数插值，纯视觉平滑；30fps 下 0.4 系数跟手） */
-    s_g_follow_x += (tx - s_g_follow_x) * 0.40f;
-    s_g_follow_y += (ty - s_g_follow_y) * 0.40f;
+    float tx, ty;
+    float pan, tilt;
 
-    lv_obj_set_pos(s_g_target, (lv_coord_t)(tx - G_TGT_HALF),
-                   (lv_coord_t)(ty - G_TGT_HALF));
+    if (s_g_mode == 0u) {
+        /* ---- DEMO：Lissajous 演示轨迹 ---- */
+        s_g_demo_t += 0.033f;
+        float t = s_g_demo_t;
+        tx = G_FOV_W * 0.5f + G_FOV_W * 0.38f * sinf(t * 0.5236f);
+        ty = G_FOV_H * 0.5f + G_FOV_H * 0.34f * sinf(t * 0.3491f);
+        s_g_follow_x += (tx - s_g_follow_x) * 0.40f;
+        s_g_follow_y += (ty - s_g_follow_y) * 0.40f;
+        pan  = (s_g_follow_x - G_FOV_W * 0.5f) / (G_FOV_W * 0.5f) * G_PAN_MAX;
+        tilt = -(s_g_follow_y - G_FOV_H * 0.5f) / (G_FOV_H * 0.5f) * G_TILT_MAX;
+        lv_obj_clear_flag(s_g_target, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(s_g_target, (lv_coord_t)(tx - G_TGT_HALF),
+                       (lv_coord_t)(ty - G_TGT_HALF));
+    } else {
+        /* ---- REAL：MPU6050 真实姿态（滤波对比通道） ---- */
+        const imu_svc_state_t *imu = ImuSvc_GetState();
+        float r, p;
+        if (s_g_mode == 1u) { r = imu->acc_roll;  p = imu->acc_pitch; }
+        else if (s_g_mode == 2u) { r = imu->comp_roll; p = imu->comp_pitch; }
+        else { r = imu->roll; p = imu->pitch; }
+        pan  = r;
+        tilt = p;
+        /* 姿态 → 视场映射：roll ±90 → 水平 ±42%，pitch ±45 → 垂直 ±40% */
+        tx = G_FOV_W * 0.5f + (r / G_PAN_MAX) * G_FOV_W * 0.42f;
+        ty = G_FOV_H * 0.5f - (p / G_TILT_MAX) * G_FOV_H * 0.40f;
+        s_g_follow_x += (tx - s_g_follow_x) * 0.30f;
+        s_g_follow_y += (ty - s_g_follow_y) * 0.30f;
+        /* REAL 模式：目标块隐藏（准星 = 板子姿态，中心 = 水平基准） */
+        lv_obj_add_flag(s_g_target, LV_OBJ_FLAG_HIDDEN);
+    }
 
     /* 准星画布：每帧重绘（透明底 + 十字圆头线 + 圆环 + 中心点）+ 单对象平移 */
     lv_draw_line_dsc_t ld;
@@ -1204,8 +1250,6 @@ static void page_gimbal_refresh(void)
 
     /* 仪表联动（每 6 帧更新——lv_meter 全表重绘最贵，深降频消除帧率跳动） */
     if ((s_g_frame_cnt++ % 6u) == 0u) {
-        float pan = (s_g_follow_x - G_FOV_W * 0.5f) / (G_FOV_W * 0.5f) * G_PAN_MAX;
-        float tilt = -(s_g_follow_y - G_FOV_H * 0.5f) / (G_FOV_H * 0.5f) * G_TILT_MAX;
         int16_t pan_deg = (int16_t)((pan + G_PAN_MAX) / (2.0f * G_PAN_MAX) * 180.0f);
         int16_t tilt_deg = (int16_t)((tilt + G_TILT_MAX) / (2.0f * G_TILT_MAX) * 180.0f);
         if (s_g_pan_ind != NULL) {
@@ -1218,22 +1262,53 @@ static void page_gimbal_refresh(void)
         lv_label_set_text_fmt(s_g_tilt_val, "%+.1f°", (double)tilt);
     }
 
-    int32_t dx = (int32_t)(tx - s_g_follow_x);
-    int32_t dy = (int32_t)(ty - s_g_follow_y);
-    lv_label_set_text_fmt(s_g_dx, "dx %+04d", (int)dx);
-    lv_label_set_text_fmt(s_g_dy, "dy %+04d", (int)dy);
-    GuiTheme_DotSet(s_g_track_dot,
-                    (dx * dx + dy * dy) < 900 ? GUI_STATE_OK : GUI_STATE_WARN);
+    /* HUD：DEMO 显示跟踪偏差；REAL 显示当前通道姿态值 */
+    if (s_g_mode == 0u) {
+        int32_t dx = (int32_t)(tx - s_g_follow_x);
+        int32_t dy = (int32_t)(ty - s_g_follow_y);
+        lv_label_set_text_fmt(s_g_dx, "dx %+04d", (int)dx);
+        lv_label_set_text_fmt(s_g_dy, "dy %+04d", (int)dy);
+        GuiTheme_DotSet(s_g_track_dot,
+                        (dx * dx + dy * dy) < 900 ? GUI_STATE_OK : GUI_STATE_WARN);
+    } else {
+        lv_label_set_text_fmt(s_g_dx, "r%+.1f", (double)pan);
+        lv_label_set_text_fmt(s_g_dy, "p%+.1f", (double)tilt);
+        GuiTheme_DotSet(s_g_track_dot, GUI_STATE_OK);
+    }
 
-    /* 实时性能显示：实际帧率（lv_tick 间隔）+ LVGL 渲染耗时 */
+    /* 标题栏：通道名 + fps + 渲染耗时 */
     uint32_t now = lv_tick_get();
     uint32_t dt = now - s_g_last_ms;
     s_g_last_ms = now;
     if (dt > 0u) {
         uint32_t fps = 1000u / dt;
         uint32_t us = g_gui_render_us;
-        lv_label_set_text_fmt(s_g_perf, "DEMO %ufps %.1fms", (unsigned)fps,
+        lv_label_set_text_fmt(s_g_perf, "%s %ufps %.1fms",
+                              s_g_mode_name[s_g_mode], (unsigned)fps,
                               (double)us / 1000.0);
+    }
+}
+
+/* 通道切换按钮：DEMO → RAW → COMP → KF → DEMO */
+static void gimbal_ch_click(lv_event_t *e)
+{
+    (void)e;
+    s_g_mode = (uint8_t)((s_g_mode + 1u) % 4u);
+    if (s_g_ch_btn != NULL) {
+        lv_obj_t *lab = lv_obj_get_child(s_g_ch_btn, 0);
+        if (lab != NULL) {
+            lv_label_set_text(lab, s_g_mode_name[s_g_mode]);
+        }
+    }
+    /* 切到 REAL 通道：准星直接定位到当前姿态（避免从 DEMO 位置跳变追过去） */
+    if (s_g_mode != 0u) {
+        const imu_svc_state_t *imu = ImuSvc_GetState();
+        float r, p;
+        if (s_g_mode == 1u) { r = imu->acc_roll;  p = imu->acc_pitch; }
+        else if (s_g_mode == 2u) { r = imu->comp_roll; p = imu->comp_pitch; }
+        else { r = imu->roll; p = imu->pitch; }
+        s_g_follow_x = G_FOV_W * 0.5f + (r / G_PAN_MAX) * G_FOV_W * 0.42f;
+        s_g_follow_y = G_FOV_H * 0.5f - (p / G_TILT_MAX) * G_FOV_H * 0.40f;
     }
 }
 

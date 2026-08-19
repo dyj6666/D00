@@ -6,6 +6,7 @@
  * ================================================================ */
 #include "imu_svc.h"
 #include "bsp_mpu6050.h"
+#include "ctrl/ctrl.h"     /* 互补滤波（对比通道） */
 #include "FreeRTOS.h"
 #include "task.h"
 #include "cmsis_os2.h"
@@ -60,6 +61,12 @@ typedef struct {
 static kf2d_t s_kf_roll, s_kf_pitch;
 static float s_yaw_angle = 0.0f;   /* 偏航（陀螺积分，rad） */
 static uint8_t s_kf_inited = 0;
+
+/* ---------- 滤波对比通道（ctrl 库：互补滤波） ----------
+ * 与 2D KF 同一数据流并行运行，供 GIMBAL 实验室同屏对比：
+ *   原始加速度角度（毛刺） vs 互补（平滑但滞后） vs KF（最优） */
+#define COMP_TAU_S   1.0f    /* 互补时间常数（秒）：越大越信任陀螺 */
+static Complementary s_comp_roll, s_comp_pitch;
 
 static void kf2d_init(kf2d_t *k, float qa, float qb, float rm)
 {
@@ -149,6 +156,8 @@ static void imu_task(void *arg)
 
     kf2d_init(&s_kf_roll, KF_Q_ANGLE, KF_Q_BIAS, KF_R_BASE);
     kf2d_init(&s_kf_pitch, KF_Q_ANGLE, KF_Q_BIAS, KF_R_BASE);
+    Complementary_Init(&s_comp_roll, COMP_TAU_S, 0.005f);
+    Complementary_Init(&s_comp_pitch, COMP_TAU_S, 0.005f);
     s_state.ready = 1;
 
     /* 精确 200Hz 节拍：vTaskDelayUntil 消除累积抖动（dt 自适应仍兜底） */
@@ -217,6 +226,18 @@ static void imu_task(void *arg)
                                              sqrtf(aym * aym + azm * azm)),
                                       dt);
             s_yaw_angle += gzm * dt;
+
+            /* ---- 滤波对比通道（同数据流并行） ---- */
+            float acc_r = atan2f(aym, azm);          /* 加速度原始角度（rad） */
+            float acc_p = atan2f(-axm,
+                                 sqrtf(aym * aym + azm * azm));
+            float comp_r = Complementary_Update(&s_comp_roll, gxm, acc_r);
+            float comp_p = Complementary_Update(&s_comp_pitch, gym, acc_p);
+            /* 显示约定与 KF 通道一致（镜像） */
+            s_state.acc_roll  = -acc_r  * RAD2DEG;
+            s_state.acc_pitch = -acc_p  * RAD2DEG;
+            s_state.comp_roll = -comp_r * RAD2DEG;
+            s_state.comp_pitch = -comp_p * RAD2DEG;
 
             /* 显示约定：镜像（延续用户确认的 R/P 方向） */
             float rd = -roll * RAD2DEG;

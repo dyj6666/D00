@@ -12,8 +12,8 @@
 #include <string.h>
 
 /* ---------------- 矩阵辅助（4 维内） ---------------- */
-static void mat_mul(int32_t n, const float (*a)[KF_MAX_DIM],
-                    const float (*b)[KF_MAX_DIM], float (*c)[KF_MAX_DIM])
+static void mat_mul(int32_t n, float (*a)[KF_MAX_DIM],
+                    float (*b)[KF_MAX_DIM], float (*c)[KF_MAX_DIM])
 {
     float tmp[KF_MAX_DIM][KF_MAX_DIM] = {0};
     for (int32_t i = 0; i < n; i++) {
@@ -26,7 +26,7 @@ static void mat_mul(int32_t n, const float (*a)[KF_MAX_DIM],
     memcpy(c, tmp, sizeof(float) * KF_MAX_DIM * KF_MAX_DIM);
 }
 
-static void mat_trans(int32_t n, const float (*a)[KF_MAX_DIM],
+static void mat_trans(int32_t n, float (*a)[KF_MAX_DIM],
                       float (*at)[KF_MAX_DIM])
 {
     for (int32_t i = 0; i < n; i++) {
@@ -34,8 +34,8 @@ static void mat_trans(int32_t n, const float (*a)[KF_MAX_DIM],
     }
 }
 
-static void mat_add(int32_t n, const float (*a)[KF_MAX_DIM],
-                    const float (*b)[KF_MAX_DIM], float (*c)[KF_MAX_DIM])
+static void mat_add(int32_t n, float (*a)[KF_MAX_DIM],
+                    float (*b)[KF_MAX_DIM], float (*c)[KF_MAX_DIM])
 {
     for (int32_t i = 0; i < n; i++) {
         for (int32_t j = 0; j < n; j++) c[i][j] = a[i][j] + b[i][j];
@@ -43,7 +43,7 @@ static void mat_add(int32_t n, const float (*a)[KF_MAX_DIM],
 }
 
 /* 高斯消元解 A·x = b（n 维），返回 0=成功 */
-static int mat_solve(int32_t n, const float (*a)[KF_MAX_DIM],
+static int mat_solve(int32_t n, float (*a)[KF_MAX_DIM],
                      const float *b, float *x)
 {
     float m[KF_MAX_DIM][KF_MAX_DIM + 1];
@@ -522,7 +522,7 @@ void UKF_Update(UKF *k, const float *z)
     for (int32_t i = 0; i < n; i++) {
         float col[UKF_MAX_DIM], sol[UKF_MAX_DIM];
         for (int32_t r = 0; r < m; r++) col[r] = Pxz[i][r];
-        if (mat_solve(m, (const float (*)[KF_MAX_DIM])Pzz, col, sol) == 0) {
+        if (mat_solve(m, (float (*)[KF_MAX_DIM])Pzz, col, sol) == 0) {
             for (int32_t r = 0; r < m; r++) K[i][r] = sol[r];
         }
     }
