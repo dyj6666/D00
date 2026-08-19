@@ -984,25 +984,26 @@ static void page_cam_refresh(void)
  * 刷新：独立 50ms 定时器（20fps），仅页面可见时执行
  * ================================================================ */
 static void gimbal_anim_cb(lv_timer_t *tmr);   /* 前向声明 */
-#define G_FOV_X     16      /* 视场内区原点 */
-#define G_FOV_Y     44
+#define G_FOV_X     16      /* 视场内区原点（页面坐标） */
+#define G_FOV_Y     60
 #define G_FOV_W     208
-#define G_FOV_H     134
+#define G_FOV_H     158
 #define G_TGT_HALF  11      /* 目标块半宽（22px） */
 #define G_PAN_MAX   90.0f
 #define G_TILT_MAX  45.0f
 
-/* 视场网格（静态：4 竖 3 横细线；lv_line 引用点数组，每条线必须独立数组） */
+/* 视场网格（静态：4 竖 3 横细线；lv_line 引用点数组，每条线必须独立数组；
+ * scene 为卡内子对象，坐标从 0 起） */
 static void gimbal_fov_grid(lv_obj_t *parent)
 {
     lv_color_t c = lv_color_hex(0x1A2434);
     static lv_point_t vps[4][2];
     static lv_point_t hps[3][2];
     for (int i = 1; i < 4; i++) {
-        vps[i][0].x = G_FOV_X + G_FOV_W * i / 4;
-        vps[i][0].y = G_FOV_Y;
+        vps[i][0].x = G_FOV_W * i / 4;
+        vps[i][0].y = 0;
         vps[i][1].x = vps[i][0].x;
-        vps[i][1].y = G_FOV_Y + G_FOV_H;
+        vps[i][1].y = G_FOV_H;
         lv_obj_t *l = lv_line_create(parent);
         lv_line_set_points(l, vps[i], 2);
         lv_obj_set_style_line_color(l, c, 0);
@@ -1010,9 +1011,9 @@ static void gimbal_fov_grid(lv_obj_t *parent)
         lv_obj_set_style_line_opa(l, LV_OPA_40, 0);
     }
     for (int i = 1; i < 3; i++) {
-        hps[i][0].x = G_FOV_X;
-        hps[i][0].y = G_FOV_Y + G_FOV_H * i / 3;
-        hps[i][1].x = G_FOV_X + G_FOV_W;
+        hps[i][0].x = 0;
+        hps[i][0].y = G_FOV_H * i / 3;
+        hps[i][1].x = G_FOV_W;
         hps[i][1].y = hps[i][0].y;
         lv_obj_t *l = lv_line_create(parent);
         lv_line_set_points(l, hps[i], 2);
@@ -1022,20 +1023,19 @@ static void gimbal_fov_grid(lv_obj_t *parent)
     }
 }
 
-/* 弧形仪表：半圆刻度 + 指针 + 刻度标签；ind_out 返回指针句柄
- * 性能：刻度数字标签关闭（label_gap=0）——文本渲染是全表重绘最贵项，
- *       数值由旁边 s_g_*_val 标签显示，不丢失信息 */
+/* 弧形仪表（简洁清晰）：半圆弧 + 细刻度 + 长刻度（0° 位）+ 指针 + 中心点。
+ * 不显示刻度数字（lv_meter 无法自定义标签文本，0/90/180 不直观）——
+ * 数值由卡内读数标签（ACCENT 色）传达，视觉 = 经典飞行仪表。 */
 static lv_obj_t *gimbal_meter(lv_obj_t *parent, lv_meter_indicator_t **ind_out)
 {
     lv_obj_t *m = lv_meter_create(parent);
-    lv_obj_set_size(m, 104, 48);
+    lv_obj_set_size(m, 100, 42);
     lv_obj_set_style_bg_opa(m, LV_OPA_TRANSP, 0);
     lv_meter_scale_t *sc = lv_meter_add_scale(m);
-    /* 半圆：范围 0-180，起始角 270（正上方）→ 顺时针扫过 */
     lv_meter_set_scale_range(m, sc, 0, 180, 270, 90);
-    lv_meter_set_scale_ticks(m, sc, 5, 2, 6, lv_color_hex(0x3A4658));
-    lv_meter_set_scale_major_ticks(m, sc, 3, 4, 12, lv_color_hex(0x6B7A90), 0);
-    *ind_out = lv_meter_add_needle_line(m, sc, 2, GUI_COL_ACCENT, -24);
+    lv_meter_set_scale_ticks(m, sc, 9, 2, 6, lv_color_hex(0x3A4658));
+    lv_meter_set_scale_major_ticks(m, sc, 3, 3, 12, lv_color_hex(0x8A97A8), 0);
+    *ind_out = lv_meter_add_needle_line(m, sc, 2, GUI_COL_ACCENT, -20);
     return m;
 }
 
@@ -1055,13 +1055,31 @@ static void page_gimbal_build(void)
                                &lv_font_montserrat_12, GUI_COL_ACCENT);
     lv_obj_align(s_g_perf, LV_ALIGN_TOP_RIGHT, -10, 6);
 
-    /* ---- 视场卡：模拟摄像头画面 ---- */
-    lv_obj_t *fov = GuiTheme_Card(s_scr_gimbal, 224, 150);
-    lv_obj_set_pos(fov, 8, 36);
+    /* ---- 视场卡：模拟摄像头画面（HUD 风格：顶条状态 + 大视场） ---- */
+    lv_obj_t *fov = GuiTheme_Card(s_scr_gimbal, 220, 188);
+    lv_obj_set_pos(fov, 10, 34);
+    /* HUD 顶条：TRACK 状态 + 偏差读数（相机取景风格） */
+    lv_obj_t *hud = lv_obj_create(fov);
+    lv_obj_remove_style_all(hud);
+    lv_obj_set_pos(hud, 6, 6);
+    lv_obj_set_size(hud, 208, 18);
+    lv_obj_set_style_border_color(hud, lv_color_hex(0x2A3548), 0);
+    lv_obj_set_style_border_width(hud, 1, 0);
+    lv_obj_set_style_border_side(hud, LV_BORDER_SIDE_BOTTOM, 0);
+    s_g_track_dot = GuiTheme_Dot(hud);
+    lv_obj_set_pos(s_g_track_dot, 0, 5);
+    lv_obj_t *tl = GuiTheme_Label(hud, "TRACK", &lv_font_montserrat_12,
+                                  GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(tl, 12, 2);
+    s_g_dx = GuiTheme_Label(hud, "dx +000", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_g_dx, 84, 2);
+    s_g_dy = GuiTheme_Label(hud, "dy +000", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_g_dy, 150, 2);
+
     /* 视场底（更深的"取景"感） */
     lv_obj_t *scene = lv_obj_create(fov);
     lv_obj_remove_style_all(scene);
-    lv_obj_set_pos(scene, G_FOV_X, G_FOV_Y);
+    lv_obj_set_pos(scene, 6, 26);
     lv_obj_set_size(scene, G_FOV_W, G_FOV_H);
     lv_obj_set_style_bg_color(scene, lv_color_hex(0x0A0E16), 0);
     lv_obj_set_style_bg_opa(scene, LV_OPA_COVER, 0);
@@ -1094,40 +1112,28 @@ static void page_gimbal_build(void)
     lv_obj_set_style_bg_opa(s_g_cross_canvas, LV_OPA_TRANSP, 0);
     lv_obj_set_pos(s_g_cross_canvas, 0, 0);
 
-    /* ---- PAN/TILT 双仪表卡 ---- */
-    lv_obj_t *pan_c = GuiTheme_Card(s_scr_gimbal, 108, 64);
-    lv_obj_set_pos(pan_c, 8, 194);
+    /* ---- PAN/TILT 双仪表卡（标题+读数同行，弧形表下方） ---- */
+    lv_obj_t *pan_c = GuiTheme_Card(s_scr_gimbal, 106, 62);
+    lv_obj_set_pos(pan_c, 10, 226);
     lv_obj_t *pan_lab = GuiTheme_Label(pan_c, "PAN", &lv_font_montserrat_12,
                                        GUI_COL_TEXT_DIM);
     lv_obj_set_pos(pan_lab, 8, 4);
+    s_g_pan_val = GuiTheme_Label(pan_c, "+0.0°", &lv_font_montserrat_14,
+                                 GUI_COL_ACCENT);
+    lv_obj_set_pos(s_g_pan_val, 58, 2);
     s_g_pan_meter = gimbal_meter(pan_c, &s_g_pan_ind);
-    lv_obj_set_pos(s_g_pan_meter, 2, 16);
-    s_g_pan_val = GuiTheme_Label(pan_c, "+0.0°", &lv_font_montserrat_12,
-                                 GUI_COL_TEXT);
-    lv_obj_set_pos(s_g_pan_val, 60, 4);
+    lv_obj_set_pos(s_g_pan_meter, 3, 18);
 
-    lv_obj_t *tilt_c = GuiTheme_Card(s_scr_gimbal, 108, 64);
-    lv_obj_set_pos(tilt_c, 124, 194);
+    lv_obj_t *tilt_c = GuiTheme_Card(s_scr_gimbal, 106, 62);
+    lv_obj_set_pos(tilt_c, 124, 226);
     lv_obj_t *tilt_lab = GuiTheme_Label(tilt_c, "TILT", &lv_font_montserrat_12,
                                         GUI_COL_TEXT_DIM);
     lv_obj_set_pos(tilt_lab, 8, 4);
+    s_g_tilt_val = GuiTheme_Label(tilt_c, "+0.0°", &lv_font_montserrat_14,
+                                  GUI_COL_ACCENT);
+    lv_obj_set_pos(s_g_tilt_val, 58, 2);
     s_g_tilt_meter = gimbal_meter(tilt_c, &s_g_tilt_ind);
-    lv_obj_set_pos(s_g_tilt_meter, 2, 16);
-    s_g_tilt_val = GuiTheme_Label(tilt_c, "+0.0°", &lv_font_montserrat_12,
-                                  GUI_COL_TEXT);
-    lv_obj_set_pos(s_g_tilt_val, 60, 4);
-
-    /* ---- 状态行 ---- */
-    lv_obj_t *st = GuiTheme_Card(s_scr_gimbal, 224, 22);
-    lv_obj_set_pos(st, 8, 262);
-    s_g_track_dot = GuiTheme_Dot(st);
-    lv_obj_set_pos(s_g_track_dot, 8, 7);
-    GuiTheme_Label(st, "TRACK", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(lv_obj_get_child(st, lv_obj_get_child_cnt(st) - 1u), 20, 3);
-    s_g_dx = GuiTheme_Label(st, "dx +000", &lv_font_montserrat_12, GUI_COL_TEXT);
-    lv_obj_set_pos(s_g_dx, 88, 3);
-    s_g_dy = GuiTheme_Label(st, "dy +000", &lv_font_montserrat_12, GUI_COL_TEXT);
-    lv_obj_set_pos(s_g_dy, 156, 3);
+    lv_obj_set_pos(s_g_tilt_meter, 3, 18);
 
     s_g_demo_t = 0.0f;
     s_g_follow_x = G_FOV_W * 0.7f;
