@@ -122,6 +122,10 @@ static lv_obj_t *s_g_track_dot;                /* 跟踪状态点 */
 static lv_obj_t *s_g_dx, *s_g_dy;              /* 偏差标签 */
 static float s_g_demo_t;                       /* 演示时间（秒） */
 static float s_g_follow_x, s_g_follow_y;       /* 准星跟随位置（插值） */
+static lv_timer_t *s_g_anim_timer;             /* 动画定时器（50ms = 20fps） */
+/* 准星十字静态点数组（build 时 set_points 一次，刷新只 set_pos） */
+static const lv_point_t s_g_hp[2] = {{-13, 0}, {13, 0}};
+static const lv_point_t s_g_vp[2] = {{0, -13}, {0, 13}};
 
 /* 主页 */
 static lv_obj_t *s_h_sub;                 /* 标题栏副文本（时钟） */
@@ -974,8 +978,9 @@ static void page_cam_refresh(void)
 /* ================================================================
  * GIMBAL 云台模型页（虚拟云台视觉演示）
  * 布局：视场模拟（目标+准星）→ PAN/TILT 弧形仪表 → 状态行
- * 刷新：250ms 节拍（RefreshFast 可见时调用），演示轨迹纯视觉
+ * 刷新：独立 50ms 定时器（20fps），仅页面可见时执行
  * ================================================================ */
+static void gimbal_anim_cb(lv_timer_t *tmr);   /* 前向声明 */
 #define G_FOV_X     16      /* 视场内区原点 */
 #define G_FOV_Y     44
 #define G_FOV_W     208
@@ -1067,8 +1072,7 @@ static void page_gimbal_build(void)
     lv_obj_set_style_bg_opa(s_g_target, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_g_target, lv_color_hex(0xECEFF1), 0);
     lv_obj_set_style_border_width(s_g_target, 2, 0);
-    lv_obj_set_style_shadow_color(s_g_target, GUI_COL_OK, 0);
-    lv_obj_set_style_shadow_width(s_g_target, 8, 0);
+    /* 阴影每帧重绘开销大（动画流畅度优先），取消 */
     s_g_core = lv_obj_create(s_g_target);
     lv_obj_remove_style_all(s_g_core);
     lv_obj_set_size(s_g_core, 8, 8);
@@ -1076,13 +1080,15 @@ static void page_gimbal_build(void)
     lv_obj_set_style_bg_color(s_g_core, lv_color_hex(0xECEFF1), 0);
     lv_obj_set_style_bg_opa(s_g_core, LV_OPA_COVER, 0);
 
-    /* 准星：十字两条线 + 中心点 + 外圈 */
+    /* 准星：十字两条线 + 中心点 + 外圈（点数组一次性绑定，刷新只 set_pos） */
     s_g_cross_h = lv_line_create(scene);
     lv_obj_set_style_line_color(s_g_cross_h, GUI_COL_ACCENT, 0);
     lv_obj_set_style_line_width(s_g_cross_h, 2, 0);
+    lv_line_set_points(s_g_cross_h, s_g_hp, 2);
     s_g_cross_v = lv_line_create(scene);
     lv_obj_set_style_line_color(s_g_cross_v, GUI_COL_ACCENT, 0);
     lv_obj_set_style_line_width(s_g_cross_v, 2, 0);
+    lv_line_set_points(s_g_cross_v, s_g_vp, 2);
     s_g_cross_dot = lv_obj_create(scene);
     lv_obj_remove_style_all(s_g_cross_dot);
     lv_obj_set_size(s_g_cross_dot, 4, 4);
@@ -1141,28 +1147,28 @@ static void page_gimbal_build(void)
                    (lv_coord_t)(s_g_follow_y - G_TGT_HALF));
     GuiTheme_DotSet(s_g_track_dot, GUI_STATE_OK);
     nav_build(s_scr_gimbal);
+
+    /* 独立动画定时器（50ms = 20fps，摆脱 250ms 三相节拍卡顿）；
+     * 回调 gimbal_anim_cb 定义于页面切换段（需 s_active），仅可见时驱动 */
+    s_g_anim_timer = lv_timer_create(gimbal_anim_cb, 50, NULL);
 }
 
-/* 250ms 演示刷新：Lissajous 目标轨迹 + 准星插值跟随 + 仪表联动 */
+/* 动画刷新（50ms 定时器驱动，20fps；仅 GIMBAL 页可见时执行） */
 static void page_gimbal_refresh(void)
 {
-    s_g_demo_t += 0.25f;
+    s_g_demo_t += 0.05f;
     float t = s_g_demo_t;
     /* 目标轨迹：Lissajous（视觉演示）——sinf 由 FPU 原生支持 */
     float tx = G_FOV_W * 0.5f + G_FOV_W * 0.38f * sinf(t * 0.5236f);  /* ω=2π/12s */
     float ty = G_FOV_H * 0.5f + G_FOV_H * 0.34f * sinf(t * 0.3491f);  /* ω=2π/18s */
-    /* 准星跟随（指数插值，纯视觉平滑） */
-    s_g_follow_x += (tx - s_g_follow_x) * 0.25f;
-    s_g_follow_y += (ty - s_g_follow_y) * 0.25f;
+    /* 准星跟随（指数插值，纯视觉平滑；20fps 下 0.35 系数跟手） */
+    s_g_follow_x += (tx - s_g_follow_x) * 0.35f;
+    s_g_follow_y += (ty - s_g_follow_y) * 0.35f;
 
     lv_obj_set_pos(s_g_target, (lv_coord_t)(tx - G_TGT_HALF),
                    (lv_coord_t)(ty - G_TGT_HALF));
 
-    /* 准星十字（两条线，静态点数组已足够——用 set_pos 整体平移） */
-    static lv_point_t hp[2] = {{-13, 0}, {13, 0}};
-    static lv_point_t vp[2] = {{0, -13}, {0, 13}};
-    lv_line_set_points(s_g_cross_h, hp, 2);
-    lv_line_set_points(s_g_cross_v, vp, 2);
+    /* 准星：只平移（点数组已绑定） */
     lv_obj_set_pos(s_g_cross_h, (lv_coord_t)s_g_follow_x, (lv_coord_t)s_g_follow_y);
     lv_obj_set_pos(s_g_cross_v, (lv_coord_t)s_g_follow_x, (lv_coord_t)s_g_follow_y);
     lv_obj_set_pos(s_g_cross_dot, (lv_coord_t)s_g_follow_x - 2,
@@ -1222,6 +1228,16 @@ static void page_show(lv_obj_t *scr, lv_scr_load_anim_t dir)
     /* 一次性定时器：200ms 后解除切换屏蔽（动画完成后可再次切换） */
     lv_timer_t *t = lv_timer_create(page_busy_clear, 200, NULL);
     lv_timer_set_repeat_count(t, 1);
+}
+
+/* GIMBAL 动画定时器回调：仅页面可见时驱动演示（s_active 本段已定义） */
+static void gimbal_anim_cb(lv_timer_t *tmr)
+{
+    (void)tmr;
+    if (s_active != s_scr_gimbal) {
+        return;
+    }
+    page_gimbal_refresh();
 }
 
 void GuiPages_ShowHome(void) { page_show(s_scr_home, LV_SCR_LOAD_ANIM_MOVE_RIGHT); }
@@ -1295,9 +1311,7 @@ void GuiPages_RefreshFast(void)
     if (s_active == s_scr_cam) {
         page_cam_refresh();
     }
-    /* GIMBAL 云台模型页 250ms 演示刷新（仅可见时） */
-    if (s_active == s_scr_gimbal) {
-        page_gimbal_refresh();
-    }
+    /* GIMBAL 页动画由独立 50ms 定时器驱动（gimbal_anim_cb），
+     * 不走三相节拍（250ms = 4fps 会卡顿） */
     s_refr_phase = (uint8_t)((s_refr_phase + 1u) % 3u);
 }
