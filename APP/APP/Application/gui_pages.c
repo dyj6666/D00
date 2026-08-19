@@ -130,10 +130,29 @@ static lv_timer_t *s_g_anim_timer;             /* 动画定时器（33ms ≈ 30f
 static lv_obj_t *s_g_perf;                     /* 标题栏性能显示（fps/渲染耗时） */
 static uint8_t s_g_frame_cnt;                  /* 仪表降频计数器（每 6 帧） */
 static uint32_t s_g_last_ms;                   /* 上一帧 lv_tick（fps 计算） */
-/* 通道模式：0=DEMO（Lissajous 演示） 1=RAW（加速度原始） 2=COMP（互补） 3=KF（卡尔曼） */
+/* 通道模式：0=DEMO（Lissajous 演示） 1=RAW（加速度原始） 2=COMP（互补）
+ * 3=KF（卡尔曼） 4=PID（调参实验室） */
 static uint8_t s_g_mode;
 static lv_obj_t *s_g_ch_btn;                   /* 通道切换按钮（HUD 条右侧） */
-static const char *const s_g_mode_name[4] = { "DEMO", "RAW", "COMP", "KF" };
+static const char *const s_g_mode_name[5] = { "DEMO", "RAW", "COMP", "KF", "PID" };
+
+/* ---- PID 调参实验室（HIL：真实算法 + 虚拟二阶对象 + 真实扰动） ---- */
+#include "ctrl/ctrl.h"
+static PID_Pos s_pid_lab;                      /* ctrl 库位置式 PID（全特性） */
+static float s_plant_y, s_plant_ydot;          /* 虚拟云台状态（二阶对象） */
+static float s_plant_u_d[3];                   /* 输出延迟缓冲（2 步 ≈ 66ms） */
+static uint8_t s_pid_run_mode;                 /* 0=阶跃 1=正弦 2=扰动(MPU6050) */
+static float s_pid_t;                          /* 实验室时间 */
+#define PID_CV_PTS  60                          /* 曲线点数（60×3×4B=720B） */
+static float s_cv_set[PID_CV_PTS], s_cv_y[PID_CV_PTS], s_cv_u[PID_CV_PTS];
+static uint32_t s_cv_n;                         /* 已采点数 */
+static uint32_t s_cv_tick;                      /* 曲线采样节拍（每 2 帧一点） */
+static lv_obj_t *s_g_curve_set, *s_g_curve_y, *s_g_curve_u;  /* 曲线线对象 */
+static lv_point_t s_cv_pts_set[PID_CV_PTS], s_cv_pts_y[PID_CV_PTS],
+                  s_cv_pts_u[PID_CV_PTS];
+static lv_obj_t *s_g_kp_card, *s_g_ki_card, *s_g_kd_card;   /* 参数卡（PID 模式） */
+static lv_obj_t *s_g_kp_val, *s_g_ki_val, *s_g_kd_val;
+static lv_obj_t *s_g_pan_card, *s_g_tilt_card; /* 仪表卡（非 PID 模式显示） */
 /* LVGL 单帧渲染耗时（gui_app.c 实测） */
 extern uint32_t g_gui_render_us;
 
@@ -992,6 +1011,9 @@ static void page_cam_refresh(void)
  * ================================================================ */
 static void gimbal_anim_cb(lv_timer_t *tmr);   /* 前向声明 */
 static void gimbal_ch_click(lv_event_t *e);    /* 通道切换按钮回调 */
+static void gimbal_pid_btn(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
+                           const char *txt, uint8_t tag);  /* 参数加减按钮 */
+static void gimbal_pid_btn_click(lv_event_t *e);
 #define G_FOV_X     16      /* 视场内区原点（页面坐标） */
 #define G_FOV_Y     60
 #define G_FOV_W     208
@@ -1138,35 +1160,103 @@ static void page_gimbal_build(void)
     lv_obj_set_pos(s_g_cross_canvas, 0, 0);
 
     /* ---- PAN/TILT 双仪表卡（含义符号 + 读数 + 量程标签） ---- */
-    lv_obj_t *pan_c = GuiTheme_Card(s_scr_gimbal, 106, 64);
-    lv_obj_set_pos(pan_c, 10, 224);
-    lv_obj_t *pan_lab = GuiTheme_Label(pan_c, LV_SYMBOL_LEFT " PAN",
+    s_g_pan_card = GuiTheme_Card(s_scr_gimbal, 106, 64);
+    lv_obj_set_pos(s_g_pan_card, 10, 224);
+    lv_obj_t *pan_lab = GuiTheme_Label(s_g_pan_card, LV_SYMBOL_LEFT " PAN",
                                        &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
     lv_obj_set_pos(pan_lab, 6, 2);
-    s_g_pan_val = GuiTheme_Label(pan_c, "+0.0°", &lv_font_montserrat_14,
+    s_g_pan_val = GuiTheme_Label(s_g_pan_card, "+0.0°", &lv_font_montserrat_14,
                                  GUI_COL_ACCENT);
     lv_obj_set_pos(s_g_pan_val, 56, 2);
-    s_g_pan_meter = gimbal_meter(pan_c, &s_g_pan_ind);
+    s_g_pan_meter = gimbal_meter(s_g_pan_card, &s_g_pan_ind);
     lv_obj_set_pos(s_g_pan_meter, 3, 14);
-    GuiTheme_Label(pan_c, "-90°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(lv_obj_get_child(pan_c, lv_obj_get_child_cnt(pan_c) - 1u), 2, 52);
-    GuiTheme_Label(pan_c, "+90°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(lv_obj_get_child(pan_c, lv_obj_get_child_cnt(pan_c) - 1u), 80, 52);
+    GuiTheme_Label(s_g_pan_card, "-90°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(s_g_pan_card, lv_obj_get_child_cnt(s_g_pan_card) - 1u), 2, 52);
+    GuiTheme_Label(s_g_pan_card, "+90°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(s_g_pan_card, lv_obj_get_child_cnt(s_g_pan_card) - 1u), 80, 52);
 
-    lv_obj_t *tilt_c = GuiTheme_Card(s_scr_gimbal, 106, 64);
-    lv_obj_set_pos(tilt_c, 124, 224);
-    lv_obj_t *tilt_lab = GuiTheme_Label(tilt_c, LV_SYMBOL_UP " TILT",
+    s_g_tilt_card = GuiTheme_Card(s_scr_gimbal, 106, 64);
+    lv_obj_set_pos(s_g_tilt_card, 124, 224);
+    lv_obj_t *tilt_lab = GuiTheme_Label(s_g_tilt_card, LV_SYMBOL_UP " TILT",
                                         &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
     lv_obj_set_pos(tilt_lab, 6, 2);
-    s_g_tilt_val = GuiTheme_Label(tilt_c, "+0.0°", &lv_font_montserrat_14,
+    s_g_tilt_val = GuiTheme_Label(s_g_tilt_card, "+0.0°", &lv_font_montserrat_14,
                                   GUI_COL_ACCENT);
     lv_obj_set_pos(s_g_tilt_val, 56, 2);
-    s_g_tilt_meter = gimbal_meter(tilt_c, &s_g_tilt_ind);
+    s_g_tilt_meter = gimbal_meter(s_g_tilt_card, &s_g_tilt_ind);
     lv_obj_set_pos(s_g_tilt_meter, 3, 14);
-    GuiTheme_Label(tilt_c, "-45°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(lv_obj_get_child(tilt_c, lv_obj_get_child_cnt(tilt_c) - 1u), 2, 52);
-    GuiTheme_Label(tilt_c, "+45°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(lv_obj_get_child(tilt_c, lv_obj_get_child_cnt(tilt_c) - 1u), 78, 52);
+    GuiTheme_Label(s_g_tilt_card, "-45°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(s_g_tilt_card, lv_obj_get_child_cnt(s_g_tilt_card) - 1u), 2, 52);
+    GuiTheme_Label(s_g_tilt_card, "+45°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(s_g_tilt_card, lv_obj_get_child_cnt(s_g_tilt_card) - 1u), 78, 52);
+
+    /* ---- PID 调参实验室控件（初始隐藏，PID 模式显示） ---- */
+    /* 三条曲线线对象挂在 GIMBAL 屏上（坐标=视场区，覆盖 scene 上方） */
+    s_g_curve_set = lv_line_create(s_scr_gimbal);
+    lv_obj_set_style_line_color(s_g_curve_set, GUI_COL_ACCENT, 0);
+    lv_obj_set_style_line_width(s_g_curve_set, 2, 0);
+    lv_obj_set_style_line_opa(s_g_curve_set, LV_OPA_80, 0);
+    s_g_curve_y = lv_line_create(s_scr_gimbal);
+    lv_obj_set_style_line_color(s_g_curve_y, GUI_COL_OK, 0);
+    lv_obj_set_style_line_width(s_g_curve_y, 2, 0);
+    s_g_curve_u = lv_line_create(s_scr_gimbal);
+    lv_obj_set_style_line_color(s_g_curve_u, GUI_COL_WARN, 0);
+    lv_obj_set_style_line_width(s_g_curve_u, 1, 0);
+    lv_obj_set_style_line_opa(s_g_curve_u, LV_OPA_70, 0);
+    lv_obj_add_flag(s_g_curve_set, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_g_curve_y, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_g_curve_u, LV_OBJ_FLAG_HIDDEN);
+
+    /* Kp/Ki/Kd 三参数卡（70 宽 × 64 高，PID 模式替换仪表卡） */
+    s_g_kp_card = GuiTheme_Card(s_scr_gimbal, 70, 64);
+    lv_obj_set_pos(s_g_kp_card, 10, 224);
+    s_g_ki_card = GuiTheme_Card(s_scr_gimbal, 70, 64);
+    lv_obj_set_pos(s_g_ki_card, 85, 224);
+    s_g_kd_card = GuiTheme_Card(s_scr_gimbal, 70, 64);
+    lv_obj_set_pos(s_g_kd_card, 160, 224);
+    /* Kp 卡：标题 + 值 + 加减按钮 */
+    GuiTheme_Label(s_g_kp_card, "Kp", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(s_g_kp_card, lv_obj_get_child_cnt(s_g_kp_card) - 1u), 4, 2);
+    s_g_kp_val = GuiTheme_Label(s_g_kp_card, "1.0", &lv_font_montserrat_14,
+                                GUI_COL_ACCENT);
+    lv_obj_set_pos(s_g_kp_val, 30, 2);
+    gimbal_pid_btn(s_g_kp_card, 4, 24, "-", 0);      /* tag=0: Kp- */
+    gimbal_pid_btn(s_g_kp_card, 38, 24, "+", 1);     /* tag=1: Kp+ */
+    /* Ki 卡 */
+    GuiTheme_Label(s_g_ki_card, "Ki", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(s_g_ki_card, lv_obj_get_child_cnt(s_g_ki_card) - 1u), 4, 2);
+    s_g_ki_val = GuiTheme_Label(s_g_ki_card, "0.0", &lv_font_montserrat_14,
+                                GUI_COL_ACCENT);
+    lv_obj_set_pos(s_g_ki_val, 30, 2);
+    gimbal_pid_btn(s_g_ki_card, 4, 24, "-", 2);      /* tag=2: Ki- */
+    gimbal_pid_btn(s_g_ki_card, 38, 24, "+", 3);     /* tag=3: Ki+ */
+    /* Kd 卡 */
+    GuiTheme_Label(s_g_kd_card, "Kd", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(s_g_kd_card, lv_obj_get_child_cnt(s_g_kd_card) - 1u), 4, 2);
+    s_g_kd_val = GuiTheme_Label(s_g_kd_card, "0.00", &lv_font_montserrat_14,
+                                GUI_COL_ACCENT);
+    lv_obj_set_pos(s_g_kd_val, 30, 2);
+    gimbal_pid_btn(s_g_kd_card, 4, 24, "-", 4);      /* tag=4: Kd- */
+    gimbal_pid_btn(s_g_kd_card, 38, 24, "+", 5);     /* tag=5: Kd+ */
+    lv_obj_add_flag(s_g_kp_card, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_g_ki_card, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_g_kd_card, LV_OBJ_FLAG_HIDDEN);
+
+    /* PID 初始化：虚拟二阶对象 + 全特性 PID */
+    s_pid_lab.kp = 1.0f;
+    s_pid_lab.ki = 0.0f;
+    s_pid_lab.kd = 0.0f;
+    s_pid_lab.dt = 0.033f;
+    s_pid_lab.out_min = -40.0f;
+    s_pid_lab.out_max = 40.0f;
+    PID_Pos_Init(&s_pid_lab);
+    s_plant_y = 0.0f;
+    s_plant_ydot = 0.0f;
+    s_plant_u_d[0] = s_plant_u_d[1] = s_plant_u_d[2] = 0.0f;
+    s_pid_run_mode = 0;
+    s_pid_t = 0.0f;
+    s_cv_n = 0;
+    s_cv_tick = 0;
 
     s_g_demo_t = 0.0f;
     s_g_follow_x = G_FOV_W * 0.7f;
@@ -1185,12 +1275,140 @@ static void page_gimbal_build(void)
     s_g_mode = 0;           /* 默认 DEMO 演示 */
 }
 
+/* PID 参数加减按钮：tag 0..5 = Kp-/Kp+/Ki-/Ki+/Kd-/Kd+ */
+static void gimbal_pid_btn(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
+                           const char *txt, uint8_t tag)
+{
+    lv_obj_t *b = lv_btn_create(parent);
+    lv_obj_remove_style_all(b);
+    lv_obj_set_size(b, 28, 20);
+    lv_obj_set_pos(b, x, y);
+    lv_obj_set_style_radius(b, 4, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(b, lv_color_hex(0x1F2B3D), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(b, GUI_COL_CARD_HI, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(b, 1, LV_PART_MAIN);
+    lv_obj_set_style_border_color(b, GUI_COL_BORDER, LV_PART_MAIN);
+    lv_obj_t *lab = lv_label_create(b);
+    lv_label_set_text(lab, txt);
+    lv_obj_set_style_text_font(lab, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_set_style_text_color(lab, GUI_COL_TEXT, LV_PART_MAIN);
+    lv_obj_center(lab);
+    lv_obj_add_event_cb(b, gimbal_pid_btn_click, LV_EVENT_CLICKED,
+                        (void *)(uintptr_t)tag);
+}
+
+static void gimbal_pid_btn_click(lv_event_t *e)
+{
+    uint8_t tag = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+    switch (tag) {
+    case 0: s_pid_lab.kp = (s_pid_lab.kp > 0.05f) ? (s_pid_lab.kp - 0.5f) : 0.0f; break;
+    case 1: s_pid_lab.kp += 0.5f; break;
+    case 2: s_pid_lab.ki = (s_pid_lab.ki > 0.05f) ? (s_pid_lab.ki - 0.1f) : 0.0f; break;
+    case 3: s_pid_lab.ki += 0.1f; break;
+    case 4: s_pid_lab.kd = (s_pid_lab.kd > 0.005f) ? (s_pid_lab.kd - 0.02f) : 0.0f; break;
+    default: s_pid_lab.kd += 0.02f; break;
+    }
+    /* 曲线清空重来（新参数下观察全新响应） */
+    s_cv_n = 0;
+    s_pid_t = 0.0f;
+    s_plant_y = 0.0f;
+    s_plant_ydot = 0.0f;
+}
+
+/* PID 实验室单步：设定值 → ctrl PID → 虚拟二阶对象 → 曲线采样 */
+static void gimbal_pid_step(void)
+{
+    s_pid_t += 0.033f;
+    /* 设定值（模式：0=阶跃 1=正弦 2=定值+真实扰动） */
+    float set = 0.0f;
+    if (s_pid_run_mode == 0u) {
+        set = (s_pid_t > 0.2f) ? 30.0f : 0.0f;
+    } else if (s_pid_run_mode == 1u) {
+        set = 30.0f + 20.0f * sinf(s_pid_t * 3.1416f);
+    } else {
+        set = 15.0f;
+    }
+    /* 测量 = 对象输出 + 真实扰动（MPU6050 roll，DIST 模式） */
+    float dist = (s_pid_run_mode == 2u) ? 0.3f * ImuSvc_GetState()->roll : 0.0f;
+    float y_meas = s_plant_y + dist;
+
+    /* ctrl 库 PID（全特性：积分分离/微分低通/限幅） */
+    float u = PID_Pos_Update(&s_pid_lab, set - y_meas);
+
+    /* 虚拟二阶对象（欠阻尼 ζ=0.3，振荡可见；2 步输出延迟） */
+    float u_d = s_plant_u_d[2];
+    s_plant_u_d[2] = s_plant_u_d[1];
+    s_plant_u_d[1] = s_plant_u_d[0];
+    s_plant_u_d[0] = u;
+    const float wn = 12.0f, zeta = 0.3f;
+    float ddot = wn * wn * (u_d - s_plant_y) - 2.0f * zeta * wn * s_plant_ydot;
+    s_plant_ydot += ddot * 0.033f;
+    s_plant_y += s_plant_ydot * 0.033f;
+
+    /* 曲线采样（每 2 帧一点 ≈66ms，60 点 = 4s 窗口） */
+    if (++s_cv_tick >= 2u) {
+        s_cv_tick = 0;
+        if (s_cv_n < PID_CV_PTS) s_cv_n++;
+        for (uint32_t i = s_cv_n; i > 0; i--) {
+            s_cv_set[i] = s_cv_set[i - 1];
+            s_cv_y[i]   = s_cv_y[i - 1];
+            s_cv_u[i]   = s_cv_u[i - 1];
+        }
+        s_cv_set[0] = set;
+        s_cv_y[0]   = y_meas;
+        s_cv_u[0]   = u;
+    }
+    /* 曲线点映射：±40 → 视场高度 */
+    for (uint32_t i = 0; i < s_cv_n; i++) {
+        s_cv_pts_set[i].x = (lv_coord_t)(G_FOV_X + (lv_coord_t)i * (G_FOV_W - 1)
+                                         / (PID_CV_PTS - 1));
+        s_cv_pts_set[i].y = (lv_coord_t)(G_FOV_Y + (40.0f - s_cv_set[i]) / 80.0f * G_FOV_H);
+        s_cv_pts_y[i].x = s_cv_pts_set[i].x;
+        s_cv_pts_y[i].y = (lv_coord_t)(G_FOV_Y + (40.0f - s_cv_y[i]) / 80.0f * G_FOV_H);
+        s_cv_pts_u[i].x = s_cv_pts_set[i].x;
+        s_cv_pts_u[i].y = (lv_coord_t)(G_FOV_Y + (40.0f - s_cv_u[i]) / 80.0f * G_FOV_H);
+    }
+    if (s_cv_n >= 2u) {
+        lv_line_set_points(s_g_curve_set, s_cv_pts_set, s_cv_n);
+        lv_line_set_points(s_g_curve_y, s_cv_pts_y, s_cv_n);
+        lv_line_set_points(s_g_curve_u, s_cv_pts_u, s_cv_n);
+    }
+
+    /* 参数卡数值 */
+    lv_label_set_text_fmt(s_g_kp_val, "%.1f", (double)s_pid_lab.kp);
+    lv_label_set_text_fmt(s_g_ki_val, "%.1f", (double)s_pid_lab.ki);
+    lv_label_set_text_fmt(s_g_kd_val, "%.2f", (double)s_pid_lab.kd);
+
+    /* HUD：模式名 + 误差/输出 */
+    static const char *const run_name[3] = { "STEP", "SINE", "DIST" };
+    lv_label_set_text_fmt(s_g_dx, "e%+.1f", (double)(set - y_meas));
+    lv_label_set_text_fmt(s_g_dy, "u%+.1f", (double)u);
+    GuiTheme_DotSet(s_g_track_dot, GUI_STATE_OK);
+
+    /* 标题栏：模式 + fps */
+    uint32_t now = lv_tick_get();
+    uint32_t dt = now - s_g_last_ms;
+    s_g_last_ms = now;
+    if (dt > 0u) {
+        lv_label_set_text_fmt(s_g_perf, "%s %ufps %.1fms",
+                              run_name[s_pid_run_mode], (unsigned)(1000u / dt),
+                              (double)g_gui_render_us / 1000.0);
+    }
+}
+
 /* 动画刷新（33ms 定时器驱动 ≈30fps；仅 GIMBAL 页可见时执行）
  * 通道模式：DEMO（Lissajous 演示）/ RAW（加速度原始）/ COMP（互补）/ KF（卡尔曼） */
 static void page_gimbal_refresh(void)
 {
     float tx, ty;
     float pan, tilt;
+
+    /* PID 实验室：独立逻辑（曲线 + 参数卡） */
+    if (s_g_mode == 4u) {
+        gimbal_pid_step();
+        return;
+    }
 
     if (s_g_mode == 0u) {
         /* ---- DEMO：Lissajous 演示轨迹 ---- */
@@ -1289,26 +1507,71 @@ static void page_gimbal_refresh(void)
     }
 }
 
-/* 通道切换按钮：DEMO → RAW → COMP → KF → DEMO */
+/* 通道切换按钮：DEMO → RAW → COMP → KF → PID → DEMO
+ * 长按（PID 模式内）：切换 PID 运行模式 STEP → SINE → DIST */
 static void gimbal_ch_click(lv_event_t *e)
 {
-    (void)e;
-    s_g_mode = (uint8_t)((s_g_mode + 1u) % 4u);
+    uint32_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_LONG_PRESSED) {
+        if (s_g_mode == 4u) {
+            s_pid_run_mode = (uint8_t)((s_pid_run_mode + 1u) % 3u);
+            s_cv_n = 0;
+            s_pid_t = 0.0f;
+            s_plant_y = 0.0f;
+            s_plant_ydot = 0.0f;
+            s_plant_u_d[0] = s_plant_u_d[1] = s_plant_u_d[2] = 0.0f;
+        }
+        return;
+    }
+    if (code != LV_EVENT_CLICKED) {
+        return;
+    }
+    s_g_mode = (uint8_t)((s_g_mode + 1u) % 5u);
     if (s_g_ch_btn != NULL) {
         lv_obj_t *lab = lv_obj_get_child(s_g_ch_btn, 0);
         if (lab != NULL) {
             lv_label_set_text(lab, s_g_mode_name[s_g_mode]);
         }
     }
-    /* 切到 REAL 通道：准星直接定位到当前姿态（避免从 DEMO 位置跳变追过去） */
-    if (s_g_mode != 0u) {
-        const imu_svc_state_t *imu = ImuSvc_GetState();
-        float r, p;
-        if (s_g_mode == 1u) { r = imu->acc_roll;  p = imu->acc_pitch; }
-        else if (s_g_mode == 2u) { r = imu->comp_roll; p = imu->comp_pitch; }
-        else { r = imu->roll; p = imu->pitch; }
-        s_g_follow_x = G_FOV_W * 0.5f + (r / G_PAN_MAX) * G_FOV_W * 0.42f;
-        s_g_follow_y = G_FOV_H * 0.5f - (p / G_TILT_MAX) * G_FOV_H * 0.40f;
+    /* PID 模式：曲线 + 参数卡显示，仪表/目标/准星隐藏 */
+    if (s_g_mode == 4u) {
+        lv_obj_clear_flag(s_g_curve_set, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_g_curve_y, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_g_curve_u, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_g_kp_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_g_ki_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_g_kd_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_g_pan_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_g_tilt_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_g_target, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_g_cross_canvas, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_g_track_dot, LV_OBJ_FLAG_HIDDEN);
+        s_cv_n = 0;
+        s_pid_t = 0.0f;
+        s_plant_y = 0.0f;
+        s_plant_ydot = 0.0f;
+        s_plant_u_d[0] = s_plant_u_d[1] = s_plant_u_d[2] = 0.0f;
+        s_pid_run_mode = 0;
+    } else {
+        lv_obj_add_flag(s_g_curve_set, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_g_curve_y, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_g_curve_u, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_g_kp_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_g_ki_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_g_kd_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_g_pan_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_g_tilt_card, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_g_cross_canvas, LV_OBJ_FLAG_HIDDEN);
+        /* 切到 REAL 通道：准星直接定位到当前姿态（避免从 DEMO 位置跳变追过去） */
+        if (s_g_mode != 0u) {
+            const imu_svc_state_t *imu = ImuSvc_GetState();
+            float r, p;
+            if (s_g_mode == 1u) { r = imu->acc_roll;  p = imu->acc_pitch; }
+            else if (s_g_mode == 2u) { r = imu->comp_roll; p = imu->comp_pitch; }
+            else { r = imu->roll; p = imu->pitch; }
+            s_g_follow_x = G_FOV_W * 0.5f + (r / G_PAN_MAX) * G_FOV_W * 0.42f;
+            s_g_follow_y = G_FOV_H * 0.5f - (p / G_TILT_MAX) * G_FOV_H * 0.40f;
+        }
     }
 }
 
