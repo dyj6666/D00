@@ -143,10 +143,10 @@ static float s_plant_y, s_plant_ydot;          /* 虚拟云台状态（二阶对
 static float s_plant_u_d[3];                   /* 输出延迟缓冲（2 步 ≈ 66ms） */
 static uint8_t s_pid_run_mode;                 /* 0=阶跃 1=正弦 2=扰动(MPU6050) */
 static float s_pid_t;                          /* 实验室时间 */
-#define PID_CV_PTS  60                          /* 曲线点数（60×3×4B=720B） */
+#define PID_CV_PTS  40                          /* 曲线点数（40×3×4B=480B） */
 static float s_cv_set[PID_CV_PTS], s_cv_y[PID_CV_PTS], s_cv_u[PID_CV_PTS];
 static uint32_t s_cv_n;                         /* 已采点数 */
-static uint32_t s_cv_tick;                      /* 曲线采样节拍（每 2 帧一点） */
+static uint32_t s_cv_tick;                      /* 曲线采样节拍（每 3 帧≈100ms） */
 static lv_obj_t *s_g_curve_set, *s_g_curve_y, *s_g_curve_u;  /* 曲线线对象 */
 static lv_point_t s_cv_pts_set[PID_CV_PTS], s_cv_pts_y[PID_CV_PTS],
                   s_cv_pts_u[PID_CV_PTS];
@@ -1012,7 +1012,8 @@ static void page_cam_refresh(void)
 static void gimbal_anim_cb(lv_timer_t *tmr);   /* 前向声明 */
 static void gimbal_ch_click(lv_event_t *e);    /* 通道切换按钮回调 */
 static void gimbal_pid_btn(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
-                           const char *txt, uint8_t tag);  /* 参数加减按钮 */
+                           const char *txt, uint8_t tag,
+                           lv_coord_t w, lv_coord_t h);  /* 参数加减按钮 */
 static void gimbal_pid_btn_click(lv_event_t *e);
 #define G_FOV_X     16      /* 视场内区原点（页面坐标） */
 #define G_FOV_Y     60
@@ -1207,40 +1208,37 @@ static void page_gimbal_build(void)
     lv_obj_add_flag(s_g_curve_y, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_g_curve_u, LV_OBJ_FLAG_HIDDEN);
 
-    /* Kp/Ki/Kd 三参数卡（70 宽 × 64 高，PID 模式替换仪表卡） */
-    s_g_kp_card = GuiTheme_Card(s_scr_gimbal, 70, 64);
+    /* Kp/Kd 大卡 + Ki 大卡（106 宽，16px 大字号，PID 模式替换仪表卡） */
+    s_g_kp_card = GuiTheme_Card(s_scr_gimbal, 106, 64);
     lv_obj_set_pos(s_g_kp_card, 10, 224);
-    s_g_ki_card = GuiTheme_Card(s_scr_gimbal, 70, 64);
-    lv_obj_set_pos(s_g_ki_card, 85, 224);
-    s_g_kd_card = GuiTheme_Card(s_scr_gimbal, 70, 64);
-    lv_obj_set_pos(s_g_kd_card, 160, 224);
-    /* Kp 卡：标题 + 值 + 加减按钮 */
+    s_g_ki_card = GuiTheme_Card(s_scr_gimbal, 106, 64);
+    lv_obj_set_pos(s_g_ki_card, 124, 224);
+    s_g_kd_card = NULL;   /* Kd 并入 Kp 卡第二行 */
+    /* Kp 卡：标题 + 大值 + 主按钮 + Kd 行 */
     GuiTheme_Label(s_g_kp_card, "Kp", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(lv_obj_get_child(s_g_kp_card, lv_obj_get_child_cnt(s_g_kp_card) - 1u), 4, 2);
-    s_g_kp_val = GuiTheme_Label(s_g_kp_card, "1.0", &lv_font_montserrat_14,
+    lv_obj_set_pos(lv_obj_get_child(s_g_kp_card, lv_obj_get_child_cnt(s_g_kp_card) - 1u), 6, 3);
+    s_g_kp_val = GuiTheme_Label(s_g_kp_card, "1.0", &lv_font_montserrat_16,
                                 GUI_COL_ACCENT);
-    lv_obj_set_pos(s_g_kp_val, 30, 2);
-    gimbal_pid_btn(s_g_kp_card, 4, 24, "-", 0);      /* tag=0: Kp- */
-    gimbal_pid_btn(s_g_kp_card, 38, 24, "+", 1);     /* tag=1: Kp+ */
-    /* Ki 卡 */
+    lv_obj_set_pos(s_g_kp_val, 38, 1);
+    gimbal_pid_btn(s_g_kp_card, 6, 20, "-", 0, 40, 22);   /* Kp- */
+    gimbal_pid_btn(s_g_kp_card, 54, 20, "+", 1, 40, 22);  /* Kp+ */
+    GuiTheme_Label(s_g_kp_card, "Kd", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(s_g_kp_card, lv_obj_get_child_cnt(s_g_kp_card) - 1u), 6, 45);
+    s_g_kd_val = GuiTheme_Label(s_g_kp_card, "0.00", &lv_font_montserrat_12,
+                                GUI_COL_ACCENT);
+    lv_obj_set_pos(s_g_kd_val, 34, 45);
+    gimbal_pid_btn(s_g_kp_card, 62, 44, "-", 4, 20, 16);  /* Kd- */
+    gimbal_pid_btn(s_g_kp_card, 84, 44, "+", 5, 20, 16);  /* Kd+ */
+    /* Ki 卡：标题 + 大值 + 主按钮 */
     GuiTheme_Label(s_g_ki_card, "Ki", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(lv_obj_get_child(s_g_ki_card, lv_obj_get_child_cnt(s_g_ki_card) - 1u), 4, 2);
-    s_g_ki_val = GuiTheme_Label(s_g_ki_card, "0.0", &lv_font_montserrat_14,
+    lv_obj_set_pos(lv_obj_get_child(s_g_ki_card, lv_obj_get_child_cnt(s_g_ki_card) - 1u), 6, 3);
+    s_g_ki_val = GuiTheme_Label(s_g_ki_card, "0.0", &lv_font_montserrat_16,
                                 GUI_COL_ACCENT);
-    lv_obj_set_pos(s_g_ki_val, 30, 2);
-    gimbal_pid_btn(s_g_ki_card, 4, 24, "-", 2);      /* tag=2: Ki- */
-    gimbal_pid_btn(s_g_ki_card, 38, 24, "+", 3);     /* tag=3: Ki+ */
-    /* Kd 卡 */
-    GuiTheme_Label(s_g_kd_card, "Kd", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(lv_obj_get_child(s_g_kd_card, lv_obj_get_child_cnt(s_g_kd_card) - 1u), 4, 2);
-    s_g_kd_val = GuiTheme_Label(s_g_kd_card, "0.00", &lv_font_montserrat_14,
-                                GUI_COL_ACCENT);
-    lv_obj_set_pos(s_g_kd_val, 30, 2);
-    gimbal_pid_btn(s_g_kd_card, 4, 24, "-", 4);      /* tag=4: Kd- */
-    gimbal_pid_btn(s_g_kd_card, 38, 24, "+", 5);     /* tag=5: Kd+ */
+    lv_obj_set_pos(s_g_ki_val, 38, 1);
+    gimbal_pid_btn(s_g_ki_card, 6, 20, "-", 2, 40, 22);   /* Ki- */
+    gimbal_pid_btn(s_g_ki_card, 54, 20, "+", 3, 40, 22);  /* Ki+ */
     lv_obj_add_flag(s_g_kp_card, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_g_ki_card, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_g_kd_card, LV_OBJ_FLAG_HIDDEN);
 
     /* PID 初始化：虚拟二阶对象 + 全特性 PID */
     s_pid_lab.kp = 1.0f;
@@ -1275,13 +1273,14 @@ static void page_gimbal_build(void)
     s_g_mode = 0;           /* 默认 DEMO 演示 */
 }
 
-/* PID 参数加减按钮：tag 0..5 = Kp-/Kp+/Ki-/Ki+/Kd-/Kd+ */
+/* PID 参数加减按钮：tag 0..5 = Kp-/Kp+/Ki-/Ki+/Kd-/Kd+；w/h 可指定尺寸 */
 static void gimbal_pid_btn(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
-                           const char *txt, uint8_t tag)
+                           const char *txt, uint8_t tag,
+                           lv_coord_t w, lv_coord_t h)
 {
     lv_obj_t *b = lv_btn_create(parent);
     lv_obj_remove_style_all(b);
-    lv_obj_set_size(b, 28, 20);
+    lv_obj_set_size(b, w, h);
     lv_obj_set_pos(b, x, y);
     lv_obj_set_style_radius(b, 4, LV_PART_MAIN);
     lv_obj_set_style_bg_color(b, lv_color_hex(0x1F2B3D), LV_PART_MAIN);
@@ -1320,12 +1319,12 @@ static void gimbal_pid_btn_click(lv_event_t *e)
 static void gimbal_pid_step(void)
 {
     s_pid_t += 0.033f;
-    /* 设定值（模式：0=阶跃 1=正弦 2=定值+真实扰动） */
+    /* 设定值（模式：0=阶跃 1=正弦 2=定值+真实扰动）；幅度限制在 ±40 量程内 */
     float set = 0.0f;
     if (s_pid_run_mode == 0u) {
         set = (s_pid_t > 0.2f) ? 30.0f : 0.0f;
     } else if (s_pid_run_mode == 1u) {
-        set = 30.0f + 20.0f * sinf(s_pid_t * 3.1416f);
+        set = 25.0f + 12.0f * sinf(s_pid_t * 3.1416f);   /* 13..37，不越界 */
     } else {
         set = 15.0f;
     }
@@ -1346,8 +1345,8 @@ static void gimbal_pid_step(void)
     s_plant_ydot += ddot * 0.033f;
     s_plant_y += s_plant_ydot * 0.033f;
 
-    /* 曲线采样（每 2 帧一点 ≈66ms，60 点 = 4s 窗口） */
-    if (++s_cv_tick >= 2u) {
+    /* 曲线采样（每 3 帧一点 ≈100ms，40 点 = 4s 窗口；降频保流畅） */
+    if (++s_cv_tick >= 3u) {
         s_cv_tick = 0;
         if (s_cv_n < PID_CV_PTS) s_cv_n++;
         for (uint32_t i = s_cv_n; i > 0; i--) {
@@ -1359,15 +1358,24 @@ static void gimbal_pid_step(void)
         s_cv_y[0]   = y_meas;
         s_cv_u[0]   = u;
     }
-    /* 曲线点映射：±40 → 视场高度 */
+    /* 曲线点映射：±40 → 视场高度（clamp 防越界） */
     for (uint32_t i = 0; i < s_cv_n; i++) {
         s_cv_pts_set[i].x = (lv_coord_t)(G_FOV_X + (lv_coord_t)i * (G_FOV_W - 1)
                                          / (PID_CV_PTS - 1));
-        s_cv_pts_set[i].y = (lv_coord_t)(G_FOV_Y + (40.0f - s_cv_set[i]) / 80.0f * G_FOV_H);
+        float sv = s_cv_set[i];
+        if (sv > 40.0f) sv = 40.0f;
+        else if (sv < -40.0f) sv = -40.0f;
+        s_cv_pts_set[i].y = (lv_coord_t)(G_FOV_Y + (40.0f - sv) / 80.0f * G_FOV_H);
         s_cv_pts_y[i].x = s_cv_pts_set[i].x;
-        s_cv_pts_y[i].y = (lv_coord_t)(G_FOV_Y + (40.0f - s_cv_y[i]) / 80.0f * G_FOV_H);
+        float yv = s_cv_y[i];
+        if (yv > 40.0f) yv = 40.0f;
+        else if (yv < -40.0f) yv = -40.0f;
+        s_cv_pts_y[i].y = (lv_coord_t)(G_FOV_Y + (40.0f - yv) / 80.0f * G_FOV_H);
         s_cv_pts_u[i].x = s_cv_pts_set[i].x;
-        s_cv_pts_u[i].y = (lv_coord_t)(G_FOV_Y + (40.0f - s_cv_u[i]) / 80.0f * G_FOV_H);
+        float uv = s_cv_u[i];
+        if (uv > 40.0f) uv = 40.0f;
+        else if (uv < -40.0f) uv = -40.0f;
+        s_cv_pts_u[i].y = (lv_coord_t)(G_FOV_Y + (40.0f - uv) / 80.0f * G_FOV_H);
     }
     if (s_cv_n >= 2u) {
         lv_line_set_points(s_g_curve_set, s_cv_pts_set, s_cv_n);
@@ -1540,7 +1548,6 @@ static void gimbal_ch_click(lv_event_t *e)
         lv_obj_clear_flag(s_g_curve_u, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_g_kp_card, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_g_ki_card, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_clear_flag(s_g_kd_card, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_g_pan_card, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_g_tilt_card, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_g_target, LV_OBJ_FLAG_HIDDEN);
@@ -1558,7 +1565,6 @@ static void gimbal_ch_click(lv_event_t *e)
         lv_obj_add_flag(s_g_curve_u, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_g_kp_card, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(s_g_ki_card, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(s_g_kd_card, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_g_pan_card, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_g_tilt_card, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_g_cross_canvas, LV_OBJ_FLAG_HIDDEN);
