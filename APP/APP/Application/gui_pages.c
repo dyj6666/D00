@@ -37,6 +37,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>   /* sinf（GIMBAL 演示轨迹） */
 
 /* ---------------- 布局常量 ---------------- */
 #define GUI_W              240
@@ -99,7 +100,7 @@ static gui_data_t s_data
     __attribute__((section(".ccmram"), zero_init));   /* 仅 GUI 任务访问，放 CCM 省主 RAM */
 
 /* ---------------- 页面与控件句柄 ---------------- */
-static lv_obj_t *s_scr_home, *s_scr_net, *s_scr_sys, *s_scr_cam;
+static lv_obj_t *s_scr_home, *s_scr_net, *s_scr_sys, *s_scr_cam, *s_scr_gimbal;
 
 /* CAM 页（摄像头链路状态） */
 static lv_obj_t *s_c_dot;                  /* 链路状态点 */
@@ -107,9 +108,25 @@ static lv_obj_t *s_c_frames, *s_c_err, *s_c_swipe, *s_c_last;  /* 统计 */
 static lv_obj_t *s_c_hand, *s_c_pos, *s_c_size;
 static lv_obj_t *s_c_gesture, *s_c_conf, *s_c_swl, *s_c_swr;
 
+/* ================= GIMBAL 云台模型页（纯视觉演示，无算法） =================
+ * 视场模拟（Lissajous 目标轨迹 + 准星跟随插值）+ PAN/TILT 弧形仪表。
+ * 数据仅演示用途（demo 时间步进），后续接真实视觉/IMU/控制。 */
+static lv_obj_t *s_g_target, *s_g_core;        /* 目标块（apriltag 风格）+ 白心 */
+static lv_obj_t *s_g_cross_h, *s_g_cross_v;    /* 准星十字两条线 */
+static lv_obj_t *s_g_cross_dot;                /* 准星中心点 */
+static lv_obj_t *s_g_ring;                     /* 准星外圈 */
+static lv_obj_t *s_g_pan_meter, *s_g_tilt_meter;   /* 双轴弧形仪表 */
+static lv_meter_indicator_t *s_g_pan_ind, *s_g_tilt_ind; /* 仪表指针（直接持有） */
+static lv_obj_t *s_g_pan_val, *s_g_tilt_val;   /* 仪表数值标签 */
+static lv_obj_t *s_g_track_dot;                /* 跟踪状态点 */
+static lv_obj_t *s_g_dx, *s_g_dy;              /* 偏差标签 */
+static float s_g_demo_t;                       /* 演示时间（秒） */
+static float s_g_follow_x, s_g_follow_y;       /* 准星跟随位置（插值） */
+
 /* 主页 */
 static lv_obj_t *s_h_sub;                 /* 标题栏副文本（时钟） */
 static lv_obj_t *s_h_sum[3];              /* 摘要条：CPU/HEAP/UP */
+static lv_obj_t *s_h_fw;                  /* 固件版本 + build（标题栏左下） */
 
 /* 网络页 */
 static lv_obj_t *s_n_link_dot, *s_n_link_ip, *s_n_gw, *s_n_mac, *s_n_dhcp;
@@ -406,6 +423,14 @@ static void page_home_build(void)
         card_build(s_scr_home, i, names[i], x, y);
     }
 
+    /* 固件信息卡（卡片区下方，与摘要条同风格嵌入布局）：
+     * 显示版本（0x080DFFFC）+ build（PARAM last_build_no），上电即见当前固件 */
+    lv_obj_t *fwcard = GuiTheme_Card(s_scr_home, 224, 24);
+    lv_obj_set_pos(fwcard, 8, 212);
+    s_h_fw = GuiTheme_Label(fwcard, "FW --",
+                            &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_align(s_h_fw, LV_ALIGN_LEFT_MID, 8, 0);
+
     nav_build(s_scr_home);
 }
 
@@ -415,6 +440,18 @@ static void page_home_build(void)
  * 每片仅 3-4 个控件变化（LVGL 相同文本自动跳过重绘），刷新帧轻量。 */
 static void page_home_refresh_top(void)
 {
+    /* 固件版本（0x080DFFFC）+ build（PARAM last_build_no 0x080E0014）：
+     * build 全 0xFF（PARAM 未初始化/升级擦除）时显示 "--"（容错） */
+    uint32_t fw_ver = *(volatile uint32_t *)0x080DFFFC;
+    uint32_t fw_build = *(volatile uint32_t *)0x080E0014;
+    if (fw_build == 0xFFFFFFFFu) {
+        lv_label_set_text_fmt(s_h_fw, "FW v%lu b--",
+                              (unsigned long)fw_ver);
+    } else {
+        lv_label_set_text_fmt(s_h_fw, "FW v%lu b%lu",
+                              (unsigned long)fw_ver, (unsigned long)fw_build);
+    }
+
     /* 摘要条 */
     lv_label_set_text_fmt(s_h_sum[0], LV_SYMBOL_BARS " CPU %lu%%",
                           (unsigned long)s_data.cpu_percent);
@@ -935,6 +972,227 @@ static void page_cam_refresh(void)
 }
 
 /* ================================================================
+ * GIMBAL 云台模型页（虚拟云台视觉演示）
+ * 布局：视场模拟（目标+准星）→ PAN/TILT 弧形仪表 → 状态行
+ * 刷新：250ms 节拍（RefreshFast 可见时调用），演示轨迹纯视觉
+ * ================================================================ */
+#define G_FOV_X     16      /* 视场内区原点 */
+#define G_FOV_Y     44
+#define G_FOV_W     208
+#define G_FOV_H     134
+#define G_TGT_HALF  11      /* 目标块半宽（22px） */
+#define G_PAN_MAX   90.0f
+#define G_TILT_MAX  45.0f
+
+/* 视场网格（静态：4 竖 3 横细线；lv_line 引用点数组，每条线必须独立数组） */
+static void gimbal_fov_grid(lv_obj_t *parent)
+{
+    lv_color_t c = lv_color_hex(0x1A2434);
+    static lv_point_t vps[4][2];
+    static lv_point_t hps[3][2];
+    for (int i = 1; i < 4; i++) {
+        vps[i][0].x = G_FOV_X + G_FOV_W * i / 4;
+        vps[i][0].y = G_FOV_Y;
+        vps[i][1].x = vps[i][0].x;
+        vps[i][1].y = G_FOV_Y + G_FOV_H;
+        lv_obj_t *l = lv_line_create(parent);
+        lv_line_set_points(l, vps[i], 2);
+        lv_obj_set_style_line_color(l, c, 0);
+        lv_obj_set_style_line_width(l, 1, 0);
+        lv_obj_set_style_line_opa(l, LV_OPA_40, 0);
+    }
+    for (int i = 1; i < 3; i++) {
+        hps[i][0].x = G_FOV_X;
+        hps[i][0].y = G_FOV_Y + G_FOV_H * i / 3;
+        hps[i][1].x = G_FOV_X + G_FOV_W;
+        hps[i][1].y = hps[i][0].y;
+        lv_obj_t *l = lv_line_create(parent);
+        lv_line_set_points(l, hps[i], 2);
+        lv_obj_set_style_line_color(l, c, 0);
+        lv_obj_set_style_line_width(l, 1, 0);
+        lv_obj_set_style_line_opa(l, LV_OPA_40, 0);
+    }
+}
+
+/* 弧形仪表：半圆刻度 + 指针 + 刻度标签；ind_out 返回指针句柄 */
+static lv_obj_t *gimbal_meter(lv_obj_t *parent, lv_meter_indicator_t **ind_out)
+{
+    lv_obj_t *m = lv_meter_create(parent);
+    lv_obj_set_size(m, 104, 48);
+    lv_obj_set_style_bg_opa(m, LV_OPA_TRANSP, 0);
+    lv_meter_scale_t *sc = lv_meter_add_scale(m);
+    /* 半圆：范围 0-180，起始角 270（正上方）→ 顺时针扫过 */
+    lv_meter_set_scale_range(m, sc, 0, 180, 270, 90);
+    lv_meter_set_scale_ticks(m, sc, 9, 2, 6, lv_color_hex(0x3A4658));
+    lv_meter_set_scale_major_ticks(m, sc, 3, 4, 12, lv_color_hex(0x6B7A90), 12);
+    *ind_out = lv_meter_add_needle_line(m, sc, 3, GUI_COL_ACCENT, -24);
+    return m;
+}
+
+static void page_gimbal_build(void)
+{
+    s_scr_gimbal = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_gimbal, GUI_COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_scr_gimbal, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_scr_gimbal, LV_OBJ_FLAG_SCROLLABLE);
+
+    GuiTheme_Label(s_scr_gimbal, LV_SYMBOL_IMAGE " GIMBAL",
+                   &lv_font_montserrat_16, GUI_COL_PRIMARY);
+    lv_obj_align(lv_obj_get_child(s_scr_gimbal, lv_obj_get_child_cnt(s_scr_gimbal) - 1u),
+                 LV_ALIGN_TOP_LEFT, 10, 6);
+    GuiTheme_Label(s_scr_gimbal, "Virtual Gimbal · DEMO",
+                   &lv_font_montserrat_12, GUI_COL_ACCENT);
+    lv_obj_align(lv_obj_get_child(s_scr_gimbal, lv_obj_get_child_cnt(s_scr_gimbal) - 1u),
+                 LV_ALIGN_TOP_RIGHT, -10, 6);
+
+    /* ---- 视场卡：模拟摄像头画面 ---- */
+    lv_obj_t *fov = GuiTheme_Card(s_scr_gimbal, 224, 150);
+    lv_obj_set_pos(fov, 8, 36);
+    /* 视场底（更深的"取景"感） */
+    lv_obj_t *scene = lv_obj_create(fov);
+    lv_obj_remove_style_all(scene);
+    lv_obj_set_pos(scene, G_FOV_X, G_FOV_Y);
+    lv_obj_set_size(scene, G_FOV_W, G_FOV_H);
+    lv_obj_set_style_bg_color(scene, lv_color_hex(0x0A0E16), 0);
+    lv_obj_set_style_bg_opa(scene, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(scene, lv_color_hex(0x2A3548), 0);
+    lv_obj_set_style_border_width(scene, 1, 0);
+    gimbal_fov_grid(scene);
+
+    /* 目标块（apriltag 风格：黑底白边 + 白心），初始居中偏右 */
+    s_g_target = lv_obj_create(scene);
+    lv_obj_remove_style_all(s_g_target);
+    lv_obj_set_size(s_g_target, G_TGT_HALF * 2, G_TGT_HALF * 2);
+    lv_obj_set_style_bg_color(s_g_target, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_g_target, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_g_target, lv_color_hex(0xECEFF1), 0);
+    lv_obj_set_style_border_width(s_g_target, 2, 0);
+    lv_obj_set_style_shadow_color(s_g_target, GUI_COL_OK, 0);
+    lv_obj_set_style_shadow_width(s_g_target, 8, 0);
+    s_g_core = lv_obj_create(s_g_target);
+    lv_obj_remove_style_all(s_g_core);
+    lv_obj_set_size(s_g_core, 8, 8);
+    lv_obj_align(s_g_core, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(s_g_core, lv_color_hex(0xECEFF1), 0);
+    lv_obj_set_style_bg_opa(s_g_core, LV_OPA_COVER, 0);
+
+    /* 准星：十字两条线 + 中心点 + 外圈 */
+    s_g_cross_h = lv_line_create(scene);
+    lv_obj_set_style_line_color(s_g_cross_h, GUI_COL_ACCENT, 0);
+    lv_obj_set_style_line_width(s_g_cross_h, 2, 0);
+    s_g_cross_v = lv_line_create(scene);
+    lv_obj_set_style_line_color(s_g_cross_v, GUI_COL_ACCENT, 0);
+    lv_obj_set_style_line_width(s_g_cross_v, 2, 0);
+    s_g_cross_dot = lv_obj_create(scene);
+    lv_obj_remove_style_all(s_g_cross_dot);
+    lv_obj_set_size(s_g_cross_dot, 4, 4);
+    lv_obj_set_style_bg_color(s_g_cross_dot, GUI_COL_ACCENT, 0);
+    lv_obj_set_style_bg_opa(s_g_cross_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(s_g_cross_dot, 2, 0);
+    s_g_ring = lv_arc_create(scene);
+    lv_obj_remove_style_all(s_g_ring);
+    lv_obj_set_size(s_g_ring, 30, 30);
+    lv_obj_set_style_arc_color(s_g_ring, GUI_COL_ACCENT, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_g_ring, 2, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(s_g_ring, LV_OPA_70, LV_PART_MAIN);
+    lv_arc_set_rotation(s_g_ring, 0);
+    lv_arc_set_bg_angles(s_g_ring, 0, 360);
+    lv_arc_set_angles(s_g_ring, 0, 360);
+
+    /* ---- PAN/TILT 双仪表卡 ---- */
+    lv_obj_t *pan_c = GuiTheme_Card(s_scr_gimbal, 108, 64);
+    lv_obj_set_pos(pan_c, 8, 194);
+    lv_obj_t *pan_lab = GuiTheme_Label(pan_c, "PAN", &lv_font_montserrat_12,
+                                       GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(pan_lab, 8, 4);
+    s_g_pan_meter = gimbal_meter(pan_c, &s_g_pan_ind);
+    lv_obj_set_pos(s_g_pan_meter, 2, 16);
+    s_g_pan_val = GuiTheme_Label(pan_c, "+0.0°", &lv_font_montserrat_12,
+                                 GUI_COL_TEXT);
+    lv_obj_set_pos(s_g_pan_val, 60, 4);
+
+    lv_obj_t *tilt_c = GuiTheme_Card(s_scr_gimbal, 108, 64);
+    lv_obj_set_pos(tilt_c, 124, 194);
+    lv_obj_t *tilt_lab = GuiTheme_Label(tilt_c, "TILT", &lv_font_montserrat_12,
+                                        GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(tilt_lab, 8, 4);
+    s_g_tilt_meter = gimbal_meter(tilt_c, &s_g_tilt_ind);
+    lv_obj_set_pos(s_g_tilt_meter, 2, 16);
+    s_g_tilt_val = GuiTheme_Label(tilt_c, "+0.0°", &lv_font_montserrat_12,
+                                  GUI_COL_TEXT);
+    lv_obj_set_pos(s_g_tilt_val, 60, 4);
+
+    /* ---- 状态行 ---- */
+    lv_obj_t *st = GuiTheme_Card(s_scr_gimbal, 224, 22);
+    lv_obj_set_pos(st, 8, 262);
+    s_g_track_dot = GuiTheme_Dot(st);
+    lv_obj_set_pos(s_g_track_dot, 8, 7);
+    GuiTheme_Label(st, "TRACK", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(st, lv_obj_get_child_cnt(st) - 1u), 20, 3);
+    s_g_dx = GuiTheme_Label(st, "dx +000", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_g_dx, 88, 3);
+    s_g_dy = GuiTheme_Label(st, "dy +000", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_g_dy, 156, 3);
+
+    s_g_demo_t = 0.0f;
+    s_g_follow_x = G_FOV_W * 0.7f;
+    s_g_follow_y = G_FOV_H * 0.5f;
+    lv_obj_set_pos(s_g_target, (lv_coord_t)(s_g_follow_x - G_TGT_HALF),
+                   (lv_coord_t)(s_g_follow_y - G_TGT_HALF));
+    GuiTheme_DotSet(s_g_track_dot, GUI_STATE_OK);
+    nav_build(s_scr_gimbal);
+}
+
+/* 250ms 演示刷新：Lissajous 目标轨迹 + 准星插值跟随 + 仪表联动 */
+static void page_gimbal_refresh(void)
+{
+    s_g_demo_t += 0.25f;
+    float t = s_g_demo_t;
+    /* 目标轨迹：Lissajous（视觉演示）——sinf 由 FPU 原生支持 */
+    float tx = G_FOV_W * 0.5f + G_FOV_W * 0.38f * sinf(t * 0.5236f);  /* ω=2π/12s */
+    float ty = G_FOV_H * 0.5f + G_FOV_H * 0.34f * sinf(t * 0.3491f);  /* ω=2π/18s */
+    /* 准星跟随（指数插值，纯视觉平滑） */
+    s_g_follow_x += (tx - s_g_follow_x) * 0.25f;
+    s_g_follow_y += (ty - s_g_follow_y) * 0.25f;
+
+    lv_obj_set_pos(s_g_target, (lv_coord_t)(tx - G_TGT_HALF),
+                   (lv_coord_t)(ty - G_TGT_HALF));
+
+    /* 准星十字（两条线，静态点数组已足够——用 set_pos 整体平移） */
+    static lv_point_t hp[2] = {{-13, 0}, {13, 0}};
+    static lv_point_t vp[2] = {{0, -13}, {0, 13}};
+    lv_line_set_points(s_g_cross_h, hp, 2);
+    lv_line_set_points(s_g_cross_v, vp, 2);
+    lv_obj_set_pos(s_g_cross_h, (lv_coord_t)s_g_follow_x, (lv_coord_t)s_g_follow_y);
+    lv_obj_set_pos(s_g_cross_v, (lv_coord_t)s_g_follow_x, (lv_coord_t)s_g_follow_y);
+    lv_obj_set_pos(s_g_cross_dot, (lv_coord_t)s_g_follow_x - 2,
+                   (lv_coord_t)s_g_follow_y - 2);
+    lv_obj_set_pos(s_g_ring, (lv_coord_t)s_g_follow_x - 15,
+                   (lv_coord_t)s_g_follow_y - 15);
+
+    /* 仪表联动：偏差 → PAN/TILT 角（演示线性映射） */
+    float pan = (s_g_follow_x - G_FOV_W * 0.5f) / (G_FOV_W * 0.5f) * G_PAN_MAX;
+    float tilt = -(s_g_follow_y - G_FOV_H * 0.5f) / (G_FOV_H * 0.5f) * G_TILT_MAX;
+    int16_t pan_deg = (int16_t)((pan + G_PAN_MAX) / (2.0f * G_PAN_MAX) * 180.0f);
+    int16_t tilt_deg = (int16_t)((tilt + G_TILT_MAX) / (2.0f * G_TILT_MAX) * 180.0f);
+    if (s_g_pan_ind != NULL) {
+        lv_meter_set_indicator_value(s_g_pan_meter, s_g_pan_ind, pan_deg);
+    }
+    if (s_g_tilt_ind != NULL) {
+        lv_meter_set_indicator_value(s_g_tilt_meter, s_g_tilt_ind, tilt_deg);
+    }
+    lv_label_set_text_fmt(s_g_pan_val, "%+.1f°", (double)pan);
+    lv_label_set_text_fmt(s_g_tilt_val, "%+.1f°", (double)tilt);
+
+    int32_t dx = (int32_t)(tx - s_g_follow_x);
+    int32_t dy = (int32_t)(ty - s_g_follow_y);
+    lv_label_set_text_fmt(s_g_dx, "dx %+04d", (int)dx);
+    lv_label_set_text_fmt(s_g_dy, "dy %+04d", (int)dy);
+    GuiTheme_DotSet(s_g_track_dot,
+                    (dx * dx + dy * dy) < 900 ? GUI_STATE_OK : GUI_STATE_WARN);
+}
+
+/* ================================================================
  * 页面切换（方向动画：向右导航 MOVE_LEFT，向左 MOVE_RIGHT）
  * ================================================================ */
 /* ---------------- 页面切换（方向动画：向右导航 MOVE_LEFT，向左 MOVE_RIGHT） ----------------
@@ -969,9 +1227,10 @@ static void page_show(lv_obj_t *scr, lv_scr_load_anim_t dir)
 void GuiPages_ShowHome(void) { page_show(s_scr_home, LV_SCR_LOAD_ANIM_MOVE_RIGHT); }
 void GuiPages_ShowNet(void)  { page_show(s_scr_net,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 void GuiPages_ShowCam(void)  { page_show(s_scr_cam,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
+void GuiPages_ShowGimbal(void) { page_show(s_scr_gimbal, LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 void GuiPages_ShowSys(void)  { page_show(s_scr_sys,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 
-/* 单按键/挥手翻页：按当前活动页轮换（含 CAM 页） */
+/* 单按键/挥手翻页：按当前活动页轮换（含 CAM/GIMBAL 页） */
 void GuiPages_PageNext(void)
 {
     if (s_active == s_scr_home) {
@@ -979,6 +1238,8 @@ void GuiPages_PageNext(void)
     } else if (s_active == s_scr_net) {
         page_show(s_scr_cam, LV_SCR_LOAD_ANIM_MOVE_LEFT);
     } else if (s_active == s_scr_cam) {
+        page_show(s_scr_gimbal, LV_SCR_LOAD_ANIM_MOVE_LEFT);
+    } else if (s_active == s_scr_gimbal) {
         page_show(s_scr_sys, LV_SCR_LOAD_ANIM_MOVE_LEFT);
     } else {
         page_show(s_scr_home, LV_SCR_LOAD_ANIM_MOVE_RIGHT);
@@ -998,6 +1259,7 @@ void GuiPages_Init(void)
     page_net_build();
     page_sys_build();
     page_cam_build();
+    page_gimbal_build();
     s_active = s_scr_home;
     lv_scr_load(s_scr_home);
     gui_data_collect();   /* 首窗立即采集（CPU 基线等） */
@@ -1032,6 +1294,10 @@ void GuiPages_RefreshFast(void)
     /* CAM 页 250ms 实时刷新（仅可见时；标签开销小，保证验证跟手） */
     if (s_active == s_scr_cam) {
         page_cam_refresh();
+    }
+    /* GIMBAL 云台模型页 250ms 演示刷新（仅可见时） */
+    if (s_active == s_scr_gimbal) {
+        page_gimbal_refresh();
     }
     s_refr_phase = (uint8_t)((s_refr_phase + 1u) % 3u);
 }

@@ -23,6 +23,7 @@ void GuiPages_ShowHome(void);
 void GuiPages_ShowNet(void);
 void GuiPages_ShowSys(void);
 void GuiPages_ShowCam(void);
+void GuiPages_ShowGimbal(void);
 
 /* 单按键翻页：HOME → NET → SYS → HOME 轮换（KEY0 短按导航，
  * 复用页面切换动画与连点保护；长按回主页走 GuiPages_ShowHome） */
