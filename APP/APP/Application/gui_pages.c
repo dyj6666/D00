@@ -1028,17 +1028,17 @@ static void gimbal_fov_grid(lv_obj_t *parent)
 
 /* 弧形仪表（简洁清晰）：半圆弧 + 细刻度 + 长刻度（0° 位）+ 指针 + 中心点。
  * 不显示刻度数字（lv_meter 无法自定义标签文本，0/90/180 不直观）——
- * 数值由卡内读数标签（ACCENT 色）传达，视觉 = 经典飞行仪表。 */
+ * 数值由卡内读数标签（ACCENT 色）传达，量程由卡内 ± 标签传达。 */
 static lv_obj_t *gimbal_meter(lv_obj_t *parent, lv_meter_indicator_t **ind_out)
 {
     lv_obj_t *m = lv_meter_create(parent);
-    lv_obj_set_size(m, 100, 42);
+    lv_obj_set_size(m, 100, 48);
     lv_obj_set_style_bg_opa(m, LV_OPA_TRANSP, 0);
     lv_meter_scale_t *sc = lv_meter_add_scale(m);
     lv_meter_set_scale_range(m, sc, 0, 180, 270, 90);
     lv_meter_set_scale_ticks(m, sc, 9, 2, 6, lv_color_hex(0x3A4658));
     lv_meter_set_scale_major_ticks(m, sc, 3, 3, 12, lv_color_hex(0x8A97A8), 0);
-    *ind_out = lv_meter_add_needle_line(m, sc, 2, GUI_COL_ACCENT, -20);
+    *ind_out = lv_meter_add_needle_line(m, sc, 2, GUI_COL_ACCENT, -26);
     return m;
 }
 
@@ -1053,8 +1053,8 @@ static void page_gimbal_build(void)
                    &lv_font_montserrat_16, GUI_COL_PRIMARY);
     lv_obj_align(lv_obj_get_child(s_scr_gimbal, lv_obj_get_child_cnt(s_scr_gimbal) - 1u),
                  LV_ALIGN_TOP_LEFT, 10, 6);
-    /* 标题栏副文本 = 实时性能显示（fps / 渲染耗时），刷新时覆盖 */
-    s_g_perf = GuiTheme_Label(s_scr_gimbal, "--fps --ms",
+    /* 标题栏副文本 = 实时性能显示（DEMO 标注 + fps + 渲染耗时） */
+    s_g_perf = GuiTheme_Label(s_scr_gimbal, "DEMO --fps --ms",
                                &lv_font_montserrat_12, GUI_COL_ACCENT);
     lv_obj_align(s_g_perf, LV_ALIGN_TOP_RIGHT, -10, 6);
 
@@ -1115,28 +1115,36 @@ static void page_gimbal_build(void)
     lv_obj_set_style_bg_opa(s_g_cross_canvas, LV_OPA_TRANSP, 0);
     lv_obj_set_pos(s_g_cross_canvas, 0, 0);
 
-    /* ---- PAN/TILT 双仪表卡（标题+读数同行，弧形表下方） ---- */
-    lv_obj_t *pan_c = GuiTheme_Card(s_scr_gimbal, 106, 62);
-    lv_obj_set_pos(pan_c, 10, 226);
-    lv_obj_t *pan_lab = GuiTheme_Label(pan_c, "PAN", &lv_font_montserrat_12,
-                                       GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(pan_lab, 8, 4);
+    /* ---- PAN/TILT 双仪表卡（含义符号 + 读数 + 量程标签） ---- */
+    lv_obj_t *pan_c = GuiTheme_Card(s_scr_gimbal, 106, 64);
+    lv_obj_set_pos(pan_c, 10, 224);
+    lv_obj_t *pan_lab = GuiTheme_Label(pan_c, LV_SYMBOL_LEFT " PAN",
+                                       &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(pan_lab, 6, 2);
     s_g_pan_val = GuiTheme_Label(pan_c, "+0.0°", &lv_font_montserrat_14,
                                  GUI_COL_ACCENT);
-    lv_obj_set_pos(s_g_pan_val, 58, 2);
+    lv_obj_set_pos(s_g_pan_val, 56, 2);
     s_g_pan_meter = gimbal_meter(pan_c, &s_g_pan_ind);
-    lv_obj_set_pos(s_g_pan_meter, 3, 18);
+    lv_obj_set_pos(s_g_pan_meter, 3, 14);
+    GuiTheme_Label(pan_c, "-90°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(pan_c, lv_obj_get_child_cnt(pan_c) - 1u), 2, 52);
+    GuiTheme_Label(pan_c, "+90°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(pan_c, lv_obj_get_child_cnt(pan_c) - 1u), 80, 52);
 
-    lv_obj_t *tilt_c = GuiTheme_Card(s_scr_gimbal, 106, 62);
-    lv_obj_set_pos(tilt_c, 124, 226);
-    lv_obj_t *tilt_lab = GuiTheme_Label(tilt_c, "TILT", &lv_font_montserrat_12,
-                                        GUI_COL_TEXT_DIM);
-    lv_obj_set_pos(tilt_lab, 8, 4);
+    lv_obj_t *tilt_c = GuiTheme_Card(s_scr_gimbal, 106, 64);
+    lv_obj_set_pos(tilt_c, 124, 224);
+    lv_obj_t *tilt_lab = GuiTheme_Label(tilt_c, LV_SYMBOL_UP " TILT",
+                                        &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(tilt_lab, 6, 2);
     s_g_tilt_val = GuiTheme_Label(tilt_c, "+0.0°", &lv_font_montserrat_14,
                                   GUI_COL_ACCENT);
-    lv_obj_set_pos(s_g_tilt_val, 58, 2);
+    lv_obj_set_pos(s_g_tilt_val, 56, 2);
     s_g_tilt_meter = gimbal_meter(tilt_c, &s_g_tilt_ind);
-    lv_obj_set_pos(s_g_tilt_meter, 3, 18);
+    lv_obj_set_pos(s_g_tilt_meter, 3, 14);
+    GuiTheme_Label(tilt_c, "-45°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(tilt_c, lv_obj_get_child_cnt(tilt_c) - 1u), 2, 52);
+    GuiTheme_Label(tilt_c, "+45°", &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(tilt_c, lv_obj_get_child_cnt(tilt_c) - 1u), 78, 52);
 
     s_g_demo_t = 0.0f;
     s_g_follow_x = G_FOV_W * 0.7f;
@@ -1224,7 +1232,7 @@ static void page_gimbal_refresh(void)
     if (dt > 0u) {
         uint32_t fps = 1000u / dt;
         uint32_t us = g_gui_render_us;
-        lv_label_set_text_fmt(s_g_perf, "%ufps %.1fms", (unsigned)fps,
+        lv_label_set_text_fmt(s_g_perf, "DEMO %ufps %.1fms", (unsigned)fps,
                               (double)us / 1000.0);
     }
 }
