@@ -184,10 +184,15 @@ function Test-KeilLog {
     param([string]$LogFile)
     $txt = ""
     if (Test-Path -LiteralPath $LogFile) { $txt = Get-Content -LiteralPath $LogFile -Raw }
-    $ok = $txt -match "0 Error\(s\)"
+    # 注意：不能用 -match "0 Error(s)" 判定成功——"30 Error(s)" 含子串
+    # "0 Error(s)" 会误判 OK（2026-08-19 实测：RAM 溢出 30 Error 被判成功，
+    # 导致 2 轮 OTA 推送旧固件）。必须解析数字比较。
+    $errors = -1
+    if ($txt -match "(\d+)\s+Error\(s\)") { $errors = [int]$Matches[1] }
+    $ok = ($errors -eq 0)
     $warnings = 0
     if ($txt -match "(\d+)\s+Warning\(s\)") { $warnings = [int]$Matches[1] }
-    [pscustomobject]@{ Ok = $ok; Warnings = $warnings; Text = $txt }
+    [pscustomobject]@{ Ok = $ok; Warnings = $warnings; Errors = $errors; Text = $txt }
 }
 
 function Start-Com9Logger {

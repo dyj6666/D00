@@ -115,7 +115,10 @@ static lv_obj_t *s_c_gesture, *s_c_conf, *s_c_swl, *s_c_swr;
  *           仪表全表重绘最贵 → 4 帧降频；标题栏实时显示 fps/渲染耗时。 */
 static lv_obj_t *s_g_target, *s_g_core;        /* 目标块（apriltag 风格）+ 白心 */
 static lv_obj_t *s_g_cross_canvas;             /* 准星画布（十字+圆环+中心点，单对象） */
-static lv_color_t s_g_cross_cbuf[30 * 30];     /* 准星画布缓冲（30×30，TRUE_COLOR_ALPHA） */
+/* 准星画布缓冲：主 SRAM 已满（L6406E .data 溢出），放 CCM（CPU-only 访问，
+ * LVGL 软件绘制读缓冲安全；DMA 不可达但画布只被 CPU 读写） */
+static lv_color_t s_g_cross_cbuf[30 * 30]
+    __attribute__((section(".ccmram"), zero_init));
 static lv_obj_t *s_g_pan_meter, *s_g_tilt_meter;   /* 双轴弧形仪表 */
 static lv_meter_indicator_t *s_g_pan_ind, *s_g_tilt_ind; /* 仪表指针（直接持有） */
 static lv_obj_t *s_g_pan_val, *s_g_tilt_val;   /* 仪表数值标签 */
