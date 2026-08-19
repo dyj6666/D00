@@ -64,13 +64,18 @@ static void gui_on_key_event(const message_t *msg)
 }
 
 /* ---------------- 渲染任务：LVGL 周期驱动 + 250ms 三相轮转刷新 ---------------- */
+/* LVGL 单帧渲染耗时（µs，DWT 实测，GIMBAL 页性能显示用） */
+uint32_t g_gui_render_us;
+
 static void gui_task(void *arg)
 {
     (void)arg;
     LOG_Printf("[GUI] task enter\r\n");
     uint32_t last = 0;
     for (;;) {
+        uint32_t t0 = DWT->CYCCNT;
         lv_timer_handler();
+        g_gui_render_us = (DWT->CYCCNT - t0) / 168u;   /* cycles→µs @168MHz */
         /* 按键导航（事件总线回调置位，本任务上下文串行消费）：
          * 短按翻页、长按回主页——与触摸导航栏等效 */
         if (s_key_page_next) {

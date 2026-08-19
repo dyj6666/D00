@@ -122,10 +122,15 @@ static lv_obj_t *s_g_track_dot;                /* 跟踪状态点 */
 static lv_obj_t *s_g_dx, *s_g_dy;              /* 偏差标签 */
 static float s_g_demo_t;                       /* 演示时间（秒） */
 static float s_g_follow_x, s_g_follow_y;       /* 准星跟随位置（插值） */
-static lv_timer_t *s_g_anim_timer;             /* 动画定时器（50ms = 20fps） */
+static lv_timer_t *s_g_anim_timer;             /* 动画定时器（33ms ≈ 30fps；保留句柄供后续 pause/resume） */
+static lv_obj_t *s_g_perf;                     /* 标题栏性能显示（fps/渲染耗时） */
+static uint8_t s_g_frame_cnt;                  /* 仪表降频计数器（每 2 帧） */
+static uint32_t s_g_last_ms;                   /* 上一帧 lv_tick（fps 计算） */
 /* 准星十字静态点数组（build 时 set_points 一次，刷新只 set_pos） */
 static const lv_point_t s_g_hp[2] = {{-13, 0}, {13, 0}};
 static const lv_point_t s_g_vp[2] = {{0, -13}, {0, 13}};
+/* LVGL 单帧渲染耗时（gui_app.c 实测） */
+extern uint32_t g_gui_render_us;
 
 /* 主页 */
 static lv_obj_t *s_h_sub;                 /* 标题栏副文本（时钟） */
@@ -1045,10 +1050,10 @@ static void page_gimbal_build(void)
                    &lv_font_montserrat_16, GUI_COL_PRIMARY);
     lv_obj_align(lv_obj_get_child(s_scr_gimbal, lv_obj_get_child_cnt(s_scr_gimbal) - 1u),
                  LV_ALIGN_TOP_LEFT, 10, 6);
-    GuiTheme_Label(s_scr_gimbal, "Virtual Gimbal · DEMO",
-                   &lv_font_montserrat_12, GUI_COL_ACCENT);
-    lv_obj_align(lv_obj_get_child(s_scr_gimbal, lv_obj_get_child_cnt(s_scr_gimbal) - 1u),
-                 LV_ALIGN_TOP_RIGHT, -10, 6);
+    /* 标题栏副文本 = 实时性能显示（fps / 渲染耗时），刷新时覆盖 */
+    s_g_perf = GuiTheme_Label(s_scr_gimbal, "--fps --ms",
+                               &lv_font_montserrat_12, GUI_COL_ACCENT);
+    lv_obj_align(s_g_perf, LV_ALIGN_TOP_RIGHT, -10, 6);
 
     /* ---- 视场卡：模拟摄像头画面 ---- */
     lv_obj_t *fov = GuiTheme_Card(s_scr_gimbal, 224, 150);
@@ -1148,22 +1153,25 @@ static void page_gimbal_build(void)
     GuiTheme_DotSet(s_g_track_dot, GUI_STATE_OK);
     nav_build(s_scr_gimbal);
 
-    /* 独立动画定时器（50ms = 20fps，摆脱 250ms 三相节拍卡顿）；
-     * 回调 gimbal_anim_cb 定义于页面切换段（需 s_active），仅可见时驱动 */
-    s_g_anim_timer = lv_timer_create(gimbal_anim_cb, 50, NULL);
+    /* 独立动画定时器（33ms ≈ 30fps，刷新调度 LV_DISP_DEF_REFR_PERIOD=16ms
+     * 已是最快档；回调 gimbal_anim_cb 定义于页面切换段（需 s_active）） */
+    s_g_anim_timer = lv_timer_create(gimbal_anim_cb, 33, NULL);
+    (void)s_g_anim_timer;   /* 句柄保留：后续页面隐藏时 pause/resume 用 */
+    s_g_frame_cnt = 0;
+    s_g_last_ms = lv_tick_get();
 }
 
-/* 动画刷新（50ms 定时器驱动，20fps；仅 GIMBAL 页可见时执行） */
+/* 动画刷新（33ms 定时器驱动 ≈30fps；仅 GIMBAL 页可见时执行） */
 static void page_gimbal_refresh(void)
 {
-    s_g_demo_t += 0.05f;
+    s_g_demo_t += 0.033f;
     float t = s_g_demo_t;
     /* 目标轨迹：Lissajous（视觉演示）——sinf 由 FPU 原生支持 */
     float tx = G_FOV_W * 0.5f + G_FOV_W * 0.38f * sinf(t * 0.5236f);  /* ω=2π/12s */
     float ty = G_FOV_H * 0.5f + G_FOV_H * 0.34f * sinf(t * 0.3491f);  /* ω=2π/18s */
-    /* 准星跟随（指数插值，纯视觉平滑；20fps 下 0.35 系数跟手） */
-    s_g_follow_x += (tx - s_g_follow_x) * 0.35f;
-    s_g_follow_y += (ty - s_g_follow_y) * 0.35f;
+    /* 准星跟随（指数插值，纯视觉平滑；30fps 下 0.4 系数跟手） */
+    s_g_follow_x += (tx - s_g_follow_x) * 0.40f;
+    s_g_follow_y += (ty - s_g_follow_y) * 0.40f;
 
     lv_obj_set_pos(s_g_target, (lv_coord_t)(tx - G_TGT_HALF),
                    (lv_coord_t)(ty - G_TGT_HALF));
@@ -1176,19 +1184,21 @@ static void page_gimbal_refresh(void)
     lv_obj_set_pos(s_g_ring, (lv_coord_t)s_g_follow_x - 15,
                    (lv_coord_t)s_g_follow_y - 15);
 
-    /* 仪表联动：偏差 → PAN/TILT 角（演示线性映射） */
-    float pan = (s_g_follow_x - G_FOV_W * 0.5f) / (G_FOV_W * 0.5f) * G_PAN_MAX;
-    float tilt = -(s_g_follow_y - G_FOV_H * 0.5f) / (G_FOV_H * 0.5f) * G_TILT_MAX;
-    int16_t pan_deg = (int16_t)((pan + G_PAN_MAX) / (2.0f * G_PAN_MAX) * 180.0f);
-    int16_t tilt_deg = (int16_t)((tilt + G_TILT_MAX) / (2.0f * G_TILT_MAX) * 180.0f);
-    if (s_g_pan_ind != NULL) {
-        lv_meter_set_indicator_value(s_g_pan_meter, s_g_pan_ind, pan_deg);
+    /* 仪表联动（每 2 帧更新——lv_meter 全表重绘是最贵项，降频保帧率） */
+    if ((s_g_frame_cnt++ & 1u) == 0u) {
+        float pan = (s_g_follow_x - G_FOV_W * 0.5f) / (G_FOV_W * 0.5f) * G_PAN_MAX;
+        float tilt = -(s_g_follow_y - G_FOV_H * 0.5f) / (G_FOV_H * 0.5f) * G_TILT_MAX;
+        int16_t pan_deg = (int16_t)((pan + G_PAN_MAX) / (2.0f * G_PAN_MAX) * 180.0f);
+        int16_t tilt_deg = (int16_t)((tilt + G_TILT_MAX) / (2.0f * G_TILT_MAX) * 180.0f);
+        if (s_g_pan_ind != NULL) {
+            lv_meter_set_indicator_value(s_g_pan_meter, s_g_pan_ind, pan_deg);
+        }
+        if (s_g_tilt_ind != NULL) {
+            lv_meter_set_indicator_value(s_g_tilt_meter, s_g_tilt_ind, tilt_deg);
+        }
+        lv_label_set_text_fmt(s_g_pan_val, "%+.1f°", (double)pan);
+        lv_label_set_text_fmt(s_g_tilt_val, "%+.1f°", (double)tilt);
     }
-    if (s_g_tilt_ind != NULL) {
-        lv_meter_set_indicator_value(s_g_tilt_meter, s_g_tilt_ind, tilt_deg);
-    }
-    lv_label_set_text_fmt(s_g_pan_val, "%+.1f°", (double)pan);
-    lv_label_set_text_fmt(s_g_tilt_val, "%+.1f°", (double)tilt);
 
     int32_t dx = (int32_t)(tx - s_g_follow_x);
     int32_t dy = (int32_t)(ty - s_g_follow_y);
@@ -1196,6 +1206,17 @@ static void page_gimbal_refresh(void)
     lv_label_set_text_fmt(s_g_dy, "dy %+04d", (int)dy);
     GuiTheme_DotSet(s_g_track_dot,
                     (dx * dx + dy * dy) < 900 ? GUI_STATE_OK : GUI_STATE_WARN);
+
+    /* 实时性能显示：实际帧率（lv_tick 间隔）+ LVGL 渲染耗时 */
+    uint32_t now = lv_tick_get();
+    uint32_t dt = now - s_g_last_ms;
+    s_g_last_ms = now;
+    if (dt > 0u) {
+        uint32_t fps = 1000u / dt;
+        uint32_t us = g_gui_render_us;
+        lv_label_set_text_fmt(s_g_perf, "%ufps %.1fms", (unsigned)fps,
+                              (double)us / 1000.0);
+    }
 }
 
 /* ================================================================
