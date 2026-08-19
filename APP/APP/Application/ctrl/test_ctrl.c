@@ -284,6 +284,60 @@ static void test_pid_deadband(void)
 /* ================================================================
  * 卡尔曼家族（15）
  * ================================================================ */
+static void test_pid_fuzzy_rules(void)
+{
+    /* 深度验证模糊推理机制：全隶属单格时输出必须精确等于规则表值
+     * （e 行 ec 列：NB=-1 NS=-0.5 ZO=0 PS=0.5 PB=1） */
+    PID_Fuzzy fz = {0};
+    fz.kp0 = 1.0f; fz.ki0 = 0.1f; fz.kd0 = 0.05f;
+    fz.ke = 1.0f; fz.kec = 1.0f;
+    fz.dt = 1.0f;   /* dt=1：ec = Δe 直接可控 */
+    PID_Fuzzy_Init(&fz);
+
+    /* e=PB(1.0), ec=ZO(0) → ΔKp=表[4][2]=-0.3, ΔKi=表[4][2]=+0.3, ΔKd=0 */
+    PID_Fuzzy_Update(&fz, 1.0f);
+    PID_Fuzzy_Update(&fz, 1.0f);   /* 第二次 ec=(1-1)/1=0 → ZO 列 */
+    TEST_ASSERT_NEAR(fz.dkp, -0.3f, 1e-4f);
+    TEST_ASSERT_NEAR(fz.dki, 0.3f, 1e-4f);
+    TEST_ASSERT_NEAR(fz.dkd, 0.0f, 1e-4f);
+
+    /* e=NB(-1), ec=ZO → 对称：ΔKp=表[0][2]=+0.3 */
+    PID_Fuzzy_Init(&fz);
+    PID_Fuzzy_Update(&fz, -1.0f);
+    PID_Fuzzy_Update(&fz, -1.0f);
+    TEST_ASSERT_NEAR(fz.dkp, 0.3f, 1e-4f);
+    TEST_ASSERT_NEAR(fz.dki, -0.3f, 1e-4f);
+
+    /* e=ZO(0), ec=ZO → 表[2][2]=0 */
+    PID_Fuzzy_Init(&fz);
+    PID_Fuzzy_Update(&fz, 0.0f);
+    PID_Fuzzy_Update(&fz, 0.0f);
+    TEST_ASSERT_NEAR(fz.dkp, 0.0f, 1e-5f);
+
+    /* e=PS(0.5), ec=ZO → 表[3][2]=-0.2 */
+    PID_Fuzzy_Init(&fz);
+    PID_Fuzzy_Update(&fz, 0.5f);
+    PID_Fuzzy_Update(&fz, 0.5f);
+    TEST_ASSERT_NEAR(fz.dkp, -0.2f, 1e-4f);
+
+    /* ec 维度：e=PB, ec=PB → 表[4][4]=-0.5（误差率大 → 增益更保守） */
+    PID_Fuzzy_Init(&fz);
+    PID_Fuzzy_Update(&fz, 0.0f);
+    PID_Fuzzy_Update(&fz, 1.0f);   /* ec=(1-0)/1=1 → PB 列 */
+    TEST_ASSERT_NEAR(fz.dkp, -0.5f, 1e-4f);
+    TEST_ASSERT_TRUE(fz.dkp < -0.3f);   /* 比 ec=ZO 时更保守 */
+
+    /* 修正量有界（重心法输出界）+ 输出始终在限幅内 */
+    PID_Fuzzy_Init(&fz);
+    for (float e = -1.0f; e <= 1.0f; e += 0.25f) {
+        PID_Fuzzy_Update(&fz, e);
+        TEST_ASSERT_TRUE(fz.dkp >= -1.0f && fz.dkp <= 1.0f);
+        TEST_ASSERT_TRUE(fz.dki >= -1.0f && fz.dki <= 1.0f);
+        TEST_ASSERT_TRUE(fz.dkd >= -1.0f && fz.dkd <= 1.0f);
+        TEST_ASSERT_TRUE(fz.out >= fz.out_min && fz.out <= fz.out_max);
+    }
+}
+
 static void test_kf_1d_converge(void)
 {
     KF_1D k;
@@ -717,6 +771,7 @@ int main(void)
     RUN_TEST(test_pid_dom);
     RUN_TEST(test_pid_gainsched);
     RUN_TEST(test_pid_fuzzy);
+    RUN_TEST(test_pid_fuzzy_rules);
     RUN_TEST(test_pid_smith);
     RUN_TEST(test_pid_bangbang);
     RUN_TEST(test_pid_autotune);
