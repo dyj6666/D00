@@ -35,7 +35,9 @@
                                         * 峰值超 4KB（实测骨架 1.5KB，全量渲染更高）；
                                         * 4KB 时 bench 栈溢出踩堆 → 对象指针损坏
                                         * → lv_obj_get_parent HardFault（见日志 13.2） */
-#define GUI_PERIOD_MS   10u
+#define GUI_PERIOD_MS   5u   /* 5ms：lv_timer_handler 调度更密 → 动画帧间隔
+                              * 抖动更小（33ms 定时器在第 6-7 次 handler 精确触发）；
+                              * handler 空跑 ~20µs，CPU 增量 <1% */
 
 #define GUI_LVGL_VERSION_STR  "LVGL v8.3.5"
 

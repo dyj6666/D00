@@ -1022,7 +1022,9 @@ static void gimbal_fov_grid(lv_obj_t *parent)
     }
 }
 
-/* 弧形仪表：半圆刻度 + 指针 + 刻度标签；ind_out 返回指针句柄 */
+/* 弧形仪表：半圆刻度 + 指针 + 刻度标签；ind_out 返回指针句柄
+ * 性能：刻度数字标签关闭（label_gap=0）——文本渲染是全表重绘最贵项，
+ *       数值由旁边 s_g_*_val 标签显示，不丢失信息 */
 static lv_obj_t *gimbal_meter(lv_obj_t *parent, lv_meter_indicator_t **ind_out)
 {
     lv_obj_t *m = lv_meter_create(parent);
@@ -1031,9 +1033,9 @@ static lv_obj_t *gimbal_meter(lv_obj_t *parent, lv_meter_indicator_t **ind_out)
     lv_meter_scale_t *sc = lv_meter_add_scale(m);
     /* 半圆：范围 0-180，起始角 270（正上方）→ 顺时针扫过 */
     lv_meter_set_scale_range(m, sc, 0, 180, 270, 90);
-    lv_meter_set_scale_ticks(m, sc, 9, 2, 6, lv_color_hex(0x3A4658));
-    lv_meter_set_scale_major_ticks(m, sc, 3, 4, 12, lv_color_hex(0x6B7A90), 12);
-    *ind_out = lv_meter_add_needle_line(m, sc, 3, GUI_COL_ACCENT, -24);
+    lv_meter_set_scale_ticks(m, sc, 5, 2, 6, lv_color_hex(0x3A4658));
+    lv_meter_set_scale_major_ticks(m, sc, 3, 4, 12, lv_color_hex(0x6B7A90), 0);
+    *ind_out = lv_meter_add_needle_line(m, sc, 2, GUI_COL_ACCENT, -24);
     return m;
 }
 
@@ -1183,8 +1185,8 @@ static void page_gimbal_refresh(void)
     lv_obj_set_pos(s_g_cross_canvas, (lv_coord_t)(s_g_follow_x - 15),
                    (lv_coord_t)(s_g_follow_y - 15));
 
-    /* 仪表联动（每 4 帧更新——lv_meter 全表重绘最贵，降频保帧率） */
-    if ((s_g_frame_cnt++ & 3u) == 0u) {
+    /* 仪表联动（每 6 帧更新——lv_meter 全表重绘最贵，深降频消除帧率跳动） */
+    if ((s_g_frame_cnt++ % 6u) == 0u) {
         float pan = (s_g_follow_x - G_FOV_W * 0.5f) / (G_FOV_W * 0.5f) * G_PAN_MAX;
         float tilt = -(s_g_follow_y - G_FOV_H * 0.5f) / (G_FOV_H * 0.5f) * G_TILT_MAX;
         int16_t pan_deg = (int16_t)((pan + G_PAN_MAX) / (2.0f * G_PAN_MAX) * 180.0f);
