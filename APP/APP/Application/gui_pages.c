@@ -110,11 +110,12 @@ static lv_obj_t *s_c_gesture, *s_c_conf, *s_c_swl, *s_c_swr;
 
 /* ================= GIMBAL 云台模型页（纯视觉演示，无算法） =================
  * 视场模拟（Lissajous 目标轨迹 + 准星跟随插值）+ PAN/TILT 弧形仪表。
- * 数据仅演示用途（demo 时间步进），后续接真实视觉/IMU/控制。 */
+ * 数据仅演示用途（demo 时间步进），后续接真实视觉/IMU/控制。
+ * 性能设计：准星合并为单 lv_canvas（1 对象 vs 4 对象，失效区域收缩）；
+ *           仪表全表重绘最贵 → 4 帧降频；标题栏实时显示 fps/渲染耗时。 */
 static lv_obj_t *s_g_target, *s_g_core;        /* 目标块（apriltag 风格）+ 白心 */
-static lv_obj_t *s_g_cross_h, *s_g_cross_v;    /* 准星十字两条线 */
-static lv_obj_t *s_g_cross_dot;                /* 准星中心点 */
-static lv_obj_t *s_g_ring;                     /* 准星外圈 */
+static lv_obj_t *s_g_cross_canvas;             /* 准星画布（十字+圆环+中心点，单对象） */
+static lv_color_t s_g_cross_cbuf[30 * 30];     /* 准星画布缓冲（30×30，TRUE_COLOR_ALPHA） */
 static lv_obj_t *s_g_pan_meter, *s_g_tilt_meter;   /* 双轴弧形仪表 */
 static lv_meter_indicator_t *s_g_pan_ind, *s_g_tilt_ind; /* 仪表指针（直接持有） */
 static lv_obj_t *s_g_pan_val, *s_g_tilt_val;   /* 仪表数值标签 */
@@ -124,11 +125,8 @@ static float s_g_demo_t;                       /* 演示时间（秒） */
 static float s_g_follow_x, s_g_follow_y;       /* 准星跟随位置（插值） */
 static lv_timer_t *s_g_anim_timer;             /* 动画定时器（33ms ≈ 30fps；保留句柄供后续 pause/resume） */
 static lv_obj_t *s_g_perf;                     /* 标题栏性能显示（fps/渲染耗时） */
-static uint8_t s_g_frame_cnt;                  /* 仪表降频计数器（每 2 帧） */
+static uint8_t s_g_frame_cnt;                  /* 仪表降频计数器（每 4 帧） */
 static uint32_t s_g_last_ms;                   /* 上一帧 lv_tick（fps 计算） */
-/* 准星十字静态点数组（build 时 set_points 一次，刷新只 set_pos） */
-static const lv_point_t s_g_hp[2] = {{-13, 0}, {13, 0}};
-static const lv_point_t s_g_vp[2] = {{0, -13}, {0, 13}};
 /* LVGL 单帧渲染耗时（gui_app.c 实测） */
 extern uint32_t g_gui_render_us;
 
@@ -1085,30 +1083,14 @@ static void page_gimbal_build(void)
     lv_obj_set_style_bg_color(s_g_core, lv_color_hex(0xECEFF1), 0);
     lv_obj_set_style_bg_opa(s_g_core, LV_OPA_COVER, 0);
 
-    /* 准星：十字两条线 + 中心点 + 外圈（点数组一次性绑定，刷新只 set_pos） */
-    s_g_cross_h = lv_line_create(scene);
-    lv_obj_set_style_line_color(s_g_cross_h, GUI_COL_ACCENT, 0);
-    lv_obj_set_style_line_width(s_g_cross_h, 2, 0);
-    lv_line_set_points(s_g_cross_h, s_g_hp, 2);
-    s_g_cross_v = lv_line_create(scene);
-    lv_obj_set_style_line_color(s_g_cross_v, GUI_COL_ACCENT, 0);
-    lv_obj_set_style_line_width(s_g_cross_v, 2, 0);
-    lv_line_set_points(s_g_cross_v, s_g_vp, 2);
-    s_g_cross_dot = lv_obj_create(scene);
-    lv_obj_remove_style_all(s_g_cross_dot);
-    lv_obj_set_size(s_g_cross_dot, 4, 4);
-    lv_obj_set_style_bg_color(s_g_cross_dot, GUI_COL_ACCENT, 0);
-    lv_obj_set_style_bg_opa(s_g_cross_dot, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(s_g_cross_dot, 2, 0);
-    s_g_ring = lv_arc_create(scene);
-    lv_obj_remove_style_all(s_g_ring);
-    lv_obj_set_size(s_g_ring, 30, 30);
-    lv_obj_set_style_arc_color(s_g_ring, GUI_COL_ACCENT, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(s_g_ring, 2, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(s_g_ring, LV_OPA_70, LV_PART_MAIN);
-    lv_arc_set_rotation(s_g_ring, 0);
-    lv_arc_set_bg_angles(s_g_ring, 0, 360);
-    lv_arc_set_angles(s_g_ring, 0, 360);
+    /* 准星：单 lv_canvas（30×30 透明画布，十字+圆环+中心点一次绘制；
+     * 1 个对象平移 = 2 个失效区域，远小于 4 对象方案；缓冲受 SRAM 预算限制） */
+    s_g_cross_canvas = lv_canvas_create(scene);
+    lv_canvas_set_buffer(s_g_cross_canvas, s_g_cross_cbuf, 30, 30,
+                         LV_IMG_CF_TRUE_COLOR_ALPHA);
+    lv_obj_set_style_radius(s_g_cross_canvas, 0, 0);
+    lv_obj_set_style_bg_opa(s_g_cross_canvas, LV_OPA_TRANSP, 0);
+    lv_obj_set_pos(s_g_cross_canvas, 0, 0);
 
     /* ---- PAN/TILT 双仪表卡 ---- */
     lv_obj_t *pan_c = GuiTheme_Card(s_scr_gimbal, 108, 64);
@@ -1176,16 +1158,33 @@ static void page_gimbal_refresh(void)
     lv_obj_set_pos(s_g_target, (lv_coord_t)(tx - G_TGT_HALF),
                    (lv_coord_t)(ty - G_TGT_HALF));
 
-    /* 准星：只平移（点数组已绑定） */
-    lv_obj_set_pos(s_g_cross_h, (lv_coord_t)s_g_follow_x, (lv_coord_t)s_g_follow_y);
-    lv_obj_set_pos(s_g_cross_v, (lv_coord_t)s_g_follow_x, (lv_coord_t)s_g_follow_y);
-    lv_obj_set_pos(s_g_cross_dot, (lv_coord_t)s_g_follow_x - 2,
-                   (lv_coord_t)s_g_follow_y - 2);
-    lv_obj_set_pos(s_g_ring, (lv_coord_t)s_g_follow_x - 15,
-                   (lv_coord_t)s_g_follow_y - 15);
+    /* 准星画布：每帧重绘（透明底 + 十字圆头线 + 圆环 + 中心点）+ 单对象平移 */
+    lv_draw_line_dsc_t ld;
+    lv_draw_line_dsc_init(&ld);
+    ld.color = GUI_COL_ACCENT;
+    ld.width = 2;
+    ld.round_start = 1;
+    ld.round_end = 1;
+    lv_point_t hp[2] = {{3, 15}, {27, 15}};
+    lv_point_t vp[2] = {{15, 3}, {15, 27}};
+    lv_canvas_fill_bg(s_g_cross_canvas, GUI_COL_BG, LV_OPA_TRANSP);
+    lv_canvas_draw_line(s_g_cross_canvas, hp, 2, &ld);
+    lv_canvas_draw_line(s_g_cross_canvas, vp, 2, &ld);
+    lv_draw_arc_dsc_t ad;
+    lv_draw_arc_dsc_init(&ad);
+    ad.color = GUI_COL_ACCENT;
+    ad.width = 2;
+    lv_canvas_draw_arc(s_g_cross_canvas, 15, 15, 7, 0, 360, &ad);
+    lv_draw_rect_dsc_t rd;
+    lv_draw_rect_dsc_init(&rd);
+    rd.bg_color = GUI_COL_ACCENT;
+    rd.radius = 2;
+    lv_canvas_draw_rect(s_g_cross_canvas, 13, 13, 5, 5, &rd);
+    lv_obj_set_pos(s_g_cross_canvas, (lv_coord_t)(s_g_follow_x - 15),
+                   (lv_coord_t)(s_g_follow_y - 15));
 
-    /* 仪表联动（每 2 帧更新——lv_meter 全表重绘是最贵项，降频保帧率） */
-    if ((s_g_frame_cnt++ & 1u) == 0u) {
+    /* 仪表联动（每 4 帧更新——lv_meter 全表重绘最贵，降频保帧率） */
+    if ((s_g_frame_cnt++ & 3u) == 0u) {
         float pan = (s_g_follow_x - G_FOV_W * 0.5f) / (G_FOV_W * 0.5f) * G_PAN_MAX;
         float tilt = -(s_g_follow_y - G_FOV_H * 0.5f) / (G_FOV_H * 0.5f) * G_TILT_MAX;
         int16_t pan_deg = (int16_t)((pan + G_PAN_MAX) / (2.0f * G_PAN_MAX) * 180.0f);
