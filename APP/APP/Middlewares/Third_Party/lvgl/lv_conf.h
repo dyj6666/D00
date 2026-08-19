@@ -369,7 +369,7 @@
 /*Montserrat fonts with ASCII range and some symbols using bpp = 4
  *https://fonts.google.com/specimen/Montserrat*/
 #define LV_FONT_MONTSERRAT_8  0
-#define LV_FONT_MONTSERRAT_10 0
+#define LV_FONT_MONTSERRAT_10 1   /* GIMBAL 仪表量程标签小字 */
 #define LV_FONT_MONTSERRAT_12 1   /* GUI 次级文本/外设卡片数值小字（gui_theme 使用） */
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_16 1
