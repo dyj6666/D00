@@ -37,6 +37,7 @@
 #include "bsp_power.h"
 #include "bsp_sram.h"
 #include "bsp_w25q128.h"
+#include "audio_svc.h"
 #include "cmd_can.h"
 #include "ota_can_svc.h"
 #include "ext_store.h"
@@ -55,6 +56,9 @@ MODULE_INIT("CanBsp", 3,  BSP_CAN_Init),
 MODULE_INIT("W25Q",   3,  BSP_W25Q128_Init),
 MODULE_INIT("ExtStore",4,  ExtStore_Init),
     MODULE_INIT("USR",    3,  UsrStore_Init),
+    /* Audio prio=75（OtaTcp 之后）：启动堆峰值时 OTA/HTTP server alloc
+     * 优先成功；音频任务随后创建（曾因 prio=6 抢堆致 server alloc 失败） */
+    MODULE_INIT("Audio",  75, Audio_Init),   /* I2S2+ES8388 音频（喇叭），缓冲走 ExtMem */
     MODULE_INIT("Shell",  4,  Shell_Init),
     MODULE_INIT("CmdCan", 5,  CmdCan_Register),
     MODULE_INIT("DNS",    5,  DnsSvc_Init),

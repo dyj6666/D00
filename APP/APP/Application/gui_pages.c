@@ -20,6 +20,8 @@
 #include "bsp_rtc.h"
 #include "bsp_sram.h"
 #include "ext_mem.h"
+#include "audio_svc.h"
+#include "wav_data.h"
 #include "bsp_system.h"
 #include "bsp_w25q128.h"
 #include "cam_link.h"
@@ -104,6 +106,7 @@ static gui_data_t s_data
 /* ---------------- 页面与控件句柄 ---------------- */
 static lv_obj_t *s_scr_home, *s_scr_net, *s_scr_sys, *s_scr_cam, *s_scr_gimbal;
 static lv_obj_t *s_scr_sram;
+static lv_obj_t *s_scr_audio;
 
 /* CAM 页（摄像头链路状态） */
 static lv_obj_t *s_c_dot;                  /* 链路状态点 */
@@ -333,6 +336,7 @@ static const nav_item_t s_nav_items[] = {
     { LV_SYMBOL_WIFI " NET",   GuiPages_ShowNet },
     { LV_SYMBOL_IMAGE " CAM",  GuiPages_ShowCam },
     { LV_SYMBOL_DRIVE " SRAM", GuiPages_ShowSram },
+    { LV_SYMBOL_AUDIO " AUDIO", GuiPages_ShowAudio },
     { LV_SYMBOL_SETTINGS " SYS", GuiPages_ShowSys },
 };
 
@@ -348,8 +352,8 @@ static void nav_click(lv_event_t *e)
 static void nav_build(lv_obj_t *parent)
 {
     const uint32_t n = (uint32_t)(sizeof(s_nav_items) / sizeof(s_nav_items[0]));
-    const lv_coord_t bw = 42;                 /* 5 按钮适配 240 宽 */
-    const lv_coord_t gap = 4;
+    const lv_coord_t bw = 36;                 /* 6 按钮适配 240 宽 */
+    const lv_coord_t gap = 2;
     lv_coord_t x0 = 8;
     for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *btn = lv_btn_create(parent);
@@ -983,6 +987,237 @@ static void page_sram_refresh(void)
                           (unsigned long)st->write16_mbps,
                           (unsigned long)st->read16_mbps,
                           (unsigned long)st->copy_mbps);
+}
+
+/* ================================================================
+ * Audio 页：板载喇叭音频工作站（I2S2 + ES8388）
+ *   功能：任意频率正弦（对数滑条 20Hz~20kHz + 预设）/ 持续试听 /
+ *         WAV 播放（内置小星星）/ 喇叭音量 / 播放状态
+ *   数据源：audio_svc 服务（Audio_GetState / Audio_PlayTone / Audio_PlayWav）
+ * ================================================================ */
+#define AUDIO_FREQ_MIN      20u
+#define AUDIO_FREQ_MAX      20000u
+#define AUDIO_FREQ_SLIDER_N  100u
+
+static lv_obj_t *s_scr_audio;
+static lv_obj_t *s_a_freq;                  /* 频率大字 */
+static lv_obj_t *s_a_slider;                /* 频率对数滑条 */
+static lv_obj_t *s_a_status;                /* 状态行 */
+static lv_obj_t *s_a_vol_slider;            /* 音量滑条 */
+static lv_obj_t *s_a_vol_val;               /* 音量值 */
+static uint32_t s_a_freq_cur = 440u;        /* 当前频率 */
+
+/* 对数刻度：滑条 0~100 → 20 × 10^(v×3/100) */
+static uint32_t audio_slider_to_freq(int32_t v)
+{
+    float f = (float)AUDIO_FREQ_MIN *
+              powf(10.0f, (float)v * 3.0f / (float)AUDIO_FREQ_SLIDER_N);
+    uint32_t fr = (uint32_t)f;
+    if (fr < AUDIO_FREQ_MIN) {
+        fr = AUDIO_FREQ_MIN;
+    }
+    if (fr > AUDIO_FREQ_MAX) {
+        fr = AUDIO_FREQ_MAX;
+    }
+    return fr;
+}
+
+static int32_t audio_freq_to_slider(uint32_t freq)
+{
+    float v = log10f((float)freq / (float)AUDIO_FREQ_MIN) *
+              (float)AUDIO_FREQ_SLIDER_N / 3.0f;
+    int32_t s = (int32_t)v;
+    if (s < 0) {
+        s = 0;
+    }
+    if (s > AUDIO_FREQ_SLIDER_N) {
+        s = AUDIO_FREQ_SLIDER_N;
+    }
+    return s;
+}
+
+/* 频率滑条拖动：只更新显示，不自动播放 */
+static void audio_slider_cb(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    s_a_freq_cur = audio_slider_to_freq(lv_slider_get_value(sl));
+    lv_label_set_text_fmt(s_a_freq, "%lu Hz", (unsigned long)s_a_freq_cur);
+}
+
+/* 频率预设按钮：设频 + 立即试听（持续） */
+static void audio_preset_cb(lv_event_t *e)
+{
+    uint32_t f = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+    s_a_freq_cur = f;
+    lv_slider_set_value(s_a_slider, audio_freq_to_slider(f), LV_ANIM_OFF);
+    lv_label_set_text_fmt(s_a_freq, "%lu Hz", (unsigned long)f);
+    Audio_PlayTone(f, 0u);                  /* 持续播放 */
+}
+
+/* 试听播放/停止 */
+static void audio_play_cb(lv_event_t *e)
+{
+    (void)e;
+    Audio_PlayTone(s_a_freq_cur, 0u);
+}
+
+static void audio_stop_cb(lv_event_t *e)
+{
+    (void)e;
+    Audio_Stop();
+}
+
+/* WAV 播放/停止（内置小星星） */
+static void audio_wav_cb(lv_event_t *e)
+{
+    (void)e;
+    Audio_PlayWav(g_wav_star, g_wav_star_len);
+}
+
+/* 音量滑条（0~33） */
+static void audio_vol_cb(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    uint8_t v = (uint8_t)lv_slider_get_value(sl);
+    Audio_SetVolume(v);
+    lv_label_set_text_fmt(s_a_vol_val, "VOL %u", (unsigned)v);
+}
+
+static void page_audio_build(void)
+{
+    s_scr_audio = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_audio, GUI_COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_scr_audio, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_scr_audio, LV_OBJ_FLAG_SCROLLABLE);
+
+    GuiTheme_TitleBar(s_scr_audio, "Audio", "I2S2 + ES8388");
+
+    /* 频率卡：大字 + 对数滑条 + 播放/停止 */
+    lv_obj_t *freq_c = GuiTheme_Card(s_scr_audio, 224, 78);
+    lv_obj_set_pos(freq_c, 8, 30);
+    GuiTheme_Label(freq_c, "TONE", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_align(lv_obj_get_child(freq_c, lv_obj_get_child_cnt(freq_c) - 1u),
+                 LV_ALIGN_TOP_LEFT, 10, 6);
+    s_a_freq = GuiTheme_Label(freq_c, "440 Hz", &lv_font_montserrat_16,
+                              GUI_COL_PRIMARY);
+    lv_obj_set_pos(s_a_freq, 56, 2);
+    s_a_slider = lv_slider_create(freq_c);
+    lv_obj_set_size(s_a_slider, 150, 8);
+    lv_obj_set_pos(s_a_slider, 12, 34);
+    lv_slider_set_range(s_a_slider, 0, AUDIO_FREQ_SLIDER_N);
+    lv_slider_set_value(s_a_slider, audio_freq_to_slider(440u), LV_ANIM_OFF);
+    lv_obj_add_event_cb(s_a_slider, audio_slider_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_t *btn_play = lv_btn_create(freq_c);
+    lv_obj_remove_style_all(btn_play);
+    lv_obj_set_size(btn_play, 44, 24);
+    lv_obj_set_pos(btn_play, 168, 44);
+    lv_obj_set_style_bg_color(btn_play, GUI_COL_ACCENT, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(btn_play, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(btn_play, 6, LV_PART_MAIN);
+    lv_obj_add_event_cb(btn_play, audio_play_cb, LV_EVENT_CLICKED, NULL);
+    GuiTheme_Label(btn_play, LV_SYMBOL_PLAY, &lv_font_montserrat_12, GUI_COL_BG);
+    lv_obj_center(lv_obj_get_child(btn_play, lv_obj_get_child_cnt(btn_play) - 1u));
+    lv_obj_t *btn_stop = lv_btn_create(freq_c);
+    lv_obj_remove_style_all(btn_stop);
+    lv_obj_set_size(btn_stop, 44, 24);
+    lv_obj_set_pos(btn_stop, 168, 12);
+    lv_obj_set_style_bg_color(btn_stop, GUI_COL_WARN, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(btn_stop, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(btn_stop, 6, LV_PART_MAIN);
+    lv_obj_add_event_cb(btn_stop, audio_stop_cb, LV_EVENT_CLICKED, NULL);
+    GuiTheme_Label(btn_stop, LV_SYMBOL_STOP, &lv_font_montserrat_12, GUI_COL_BG);
+    lv_obj_center(lv_obj_get_child(btn_stop, lv_obj_get_child_cnt(btn_stop) - 1u));
+
+    /* 频率预设行 */
+    lv_obj_t *preset = GuiTheme_Card(s_scr_audio, 224, 34);
+    lv_obj_set_pos(preset, 8, 116);
+    const uint32_t preset_freqs[4] = { 220u, 440u, 880u, 2000u };
+    const char *preset_names[4] = { "220", "440", "880", "2k" };
+    for (uint32_t i = 0; i < 4u; i++) {
+        lv_obj_t *b = lv_btn_create(preset);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, 48, 24);
+        lv_obj_set_pos(b, (lv_coord_t)(6 + (lv_coord_t)i * 54), 5);
+        lv_obj_set_style_bg_color(b, GUI_COL_CARD_HI, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(b, 6, LV_PART_MAIN);
+        lv_obj_add_event_cb(b, audio_preset_cb, LV_EVENT_CLICKED,
+                            (void *)(uintptr_t)preset_freqs[i]);
+        GuiTheme_Label(b, preset_names[i], &lv_font_montserrat_12, GUI_COL_TEXT);
+        lv_obj_center(lv_obj_get_child(b, lv_obj_get_child_cnt(b) - 1u));
+    }
+
+    /* WAV 卡：内置小星星播放 */
+    lv_obj_t *wav_c = GuiTheme_Card(s_scr_audio, 224, 46);
+    lv_obj_set_pos(wav_c, 8, 158);
+    GuiTheme_Label(wav_c, LV_SYMBOL_AUDIO " WAV", &lv_font_montserrat_12,
+                   GUI_COL_TEXT_DIM);
+    lv_obj_align(lv_obj_get_child(wav_c, lv_obj_get_child_cnt(wav_c) - 1u),
+                 LV_ALIGN_TOP_LEFT, 10, 6);
+    GuiTheme_Label(wav_c, "star melody 5.2s", &lv_font_montserrat_12,
+                   GUI_COL_TEXT_DIM);
+    lv_obj_align(lv_obj_get_child(wav_c, lv_obj_get_child_cnt(wav_c) - 1u),
+                 LV_ALIGN_TOP_LEFT, 10, 26);
+    lv_obj_t *bw = lv_btn_create(wav_c);
+    lv_obj_remove_style_all(bw);
+    lv_obj_set_size(bw, 60, 26);
+    lv_obj_set_pos(bw, 120, 10);
+    lv_obj_set_style_bg_color(bw, GUI_COL_ACCENT, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bw, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(bw, 6, LV_PART_MAIN);
+    lv_obj_add_event_cb(bw, audio_wav_cb, LV_EVENT_CLICKED, NULL);
+    GuiTheme_Label(bw, "PLAY", &lv_font_montserrat_12, GUI_COL_BG);
+    lv_obj_center(lv_obj_get_child(bw, lv_obj_get_child_cnt(bw) - 1u));
+    lv_obj_t *bws = lv_btn_create(wav_c);
+    lv_obj_remove_style_all(bws);
+    lv_obj_set_size(bws, 44, 26);
+    lv_obj_set_pos(bws, 174, 10);
+    lv_obj_set_style_bg_color(bws, GUI_COL_WARN, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bws, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(bws, 6, LV_PART_MAIN);
+    lv_obj_add_event_cb(bws, audio_stop_cb, LV_EVENT_CLICKED, NULL);
+    GuiTheme_Label(bws, "STOP", &lv_font_montserrat_12, GUI_COL_BG);
+    lv_obj_center(lv_obj_get_child(bws, lv_obj_get_child_cnt(bws) - 1u));
+
+    /* 音量 + 状态卡 */
+    lv_obj_t *vol_c = GuiTheme_Card(s_scr_audio, 224, 68);
+    lv_obj_set_pos(vol_c, 8, 212);
+    s_a_vol_val = GuiTheme_Label(vol_c, "VOL --", &lv_font_montserrat_12,
+                                 GUI_COL_TEXT);
+    lv_obj_set_pos(s_a_vol_val, 10, 6);
+    s_a_vol_slider = lv_slider_create(vol_c);
+    lv_obj_set_size(s_a_vol_slider, 150, 8);
+    lv_obj_set_pos(s_a_vol_slider, 64, 8);
+    lv_slider_set_range(s_a_vol_slider, 0, 33);
+    lv_slider_set_value(s_a_vol_slider, 10, LV_ANIM_OFF);
+    lv_obj_add_event_cb(s_a_vol_slider, audio_vol_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    s_a_status = GuiTheme_Label(vol_c, "idle", &lv_font_montserrat_12,
+                                GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(s_a_status, 10, 34);
+    GuiTheme_Label(vol_c, "spk 0(max)~33(mute)",
+                   &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_align(lv_obj_get_child(vol_c, lv_obj_get_child_cnt(vol_c) - 1u),
+                 LV_ALIGN_BOTTOM_RIGHT, -6, -4);
+
+    nav_build(s_scr_audio);
+}
+
+static void page_audio_refresh(void)
+{
+    audio_state_t st;
+    Audio_GetState(&st);
+
+    lv_label_set_text_fmt(s_a_vol_val, "VOL %u", (unsigned)st.volume);
+    lv_slider_set_value(s_a_vol_slider, st.volume, LV_ANIM_OFF);
+
+    if (!st.playing) {
+        lv_label_set_text(s_a_status, "idle");
+    } else if (st.src == 2u) {
+        lv_label_set_text(s_a_status, LV_SYMBOL_AUDIO " playing WAV...");
+    } else {
+        lv_label_set_text_fmt(s_a_status, LV_SYMBOL_PLAY " tone %lu Hz",
+                              (unsigned long)st.freq_hz);
+    }
 }
 
 /* ================================================================
@@ -1727,6 +1962,7 @@ void GuiPages_ShowCam(void)  { page_show(s_scr_cam,  LV_SCR_LOAD_ANIM_MOVE_LEFT)
 void GuiPages_ShowGimbal(void) { page_show(s_scr_gimbal, LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 void GuiPages_ShowSys(void)  { page_show(s_scr_sys,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 void GuiPages_ShowSram(void) { page_show(s_scr_sram, LV_SCR_LOAD_ANIM_MOVE_LEFT); }
+void GuiPages_ShowAudio(void) { page_show(s_scr_audio, LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 
 /* 单按键/挥手翻页：按当前活动页轮换（含 CAM/GIMBAL/SRAM 页） */
 void GuiPages_PageNext(void)
@@ -1738,6 +1974,8 @@ void GuiPages_PageNext(void)
     } else if (s_active == s_scr_cam) {
         page_show(s_scr_sram, LV_SCR_LOAD_ANIM_MOVE_LEFT);
     } else if (s_active == s_scr_sram) {
+        page_show(s_scr_audio, LV_SCR_LOAD_ANIM_MOVE_LEFT);
+    } else if (s_active == s_scr_audio) {
         page_show(s_scr_gimbal, LV_SCR_LOAD_ANIM_MOVE_LEFT);
     } else if (s_active == s_scr_gimbal) {
         page_show(s_scr_sys, LV_SCR_LOAD_ANIM_MOVE_LEFT);
@@ -1761,6 +1999,7 @@ void GuiPages_Init(void)
     page_cam_build();
     page_gimbal_build();
     page_sram_build();
+    page_audio_build();
     s_active = s_scr_home;
     lv_scr_load(s_scr_home);
     gui_data_collect();   /* 首窗立即采集（CPU 基线等） */
@@ -1791,6 +2030,7 @@ void GuiPages_RefreshFast(void)
         page_home_refresh_cards(1);
         page_sys_refresh();
         page_sram_refresh();
+        page_audio_refresh();
         break;
     }
     /* CAM 页 250ms 实时刷新（仅可见时；标签开销小，保证验证跟手） */

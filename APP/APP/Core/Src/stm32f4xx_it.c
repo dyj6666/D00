@@ -24,6 +24,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "bsp_i2s.h"
 #include "stm32f4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -211,6 +212,14 @@ void DMA1_Stream1_IRQHandler(void)
 void DMA1_Stream0_IRQHandler(void)
 {
   HAL_DMA_IRQHandler(&hdma_usart5_rx);
+}
+
+/**
+  * @brief This function handles DMA1 stream4 global interrupt（音频 I2S2 TX 双缓冲）.
+  */
+void DMA1_Stream4_IRQHandler(void)
+{
+  BSP_I2S_DMA_IRQHandler();
 }
 
 /**

@@ -36,6 +36,8 @@
 #include "cam_link.h"
 #include "cmd_shell.h"
 #include "usr_store.h"
+#include "audio_svc.h"
+#include "wav_data.h"
 #include "bsp_eeprom.h"
 #include "bsp_mpu6050.h"
 #include "bsp_i2c.h"
@@ -259,6 +261,7 @@ static void cmd_gui(const char *args);
 static void cmd_touch(const char *args);
 static void cmd_cam(const char *args);
 static void cmd_beep(const char *args);
+static void cmd_audio(const char *args);
 static void cmd_power(const char *args);
 static void cmd_mpu(const char *args);
 static void cmd_can(const char *args);
@@ -634,6 +637,7 @@ static const cmd_entry_t cmd_table[] = {
     {"cam",          "Camera link <info> (OpenART UART5)", CMD_TRANSPORT_ALL, cmd_cam},
     {"usr",          "User storage <info|scan|get|set|erase|reset>", CMD_TRANSPORT_ALL, cmd_usr},
     {"beep",         "Buzzer beep <ms|test|off>", CMD_TRANSPORT_ALL, cmd_beep},
+    {"audio",        "Audio tone <freq> <ms>|stop|status", CMD_TRANSPORT_ALL, cmd_audio},
     {"power",        "Power <on|off|info> (STOP tickless)", CMD_TRANSPORT_ALL, cmd_power},
     {"mpu",          "IMU MPU6050 <info|test|cal>", CMD_TRANSPORT_ALL, cmd_mpu},
     {"can",          "CAN1 <status|reset|loop <on|off|silent>|test <n>|send <id> <hex>>", CMD_TRANSPORT_ALL, cmd_can},
@@ -1288,6 +1292,40 @@ static void cmd_can(const char *args)
     if (ms < 1 || ms > 3000) ms = 100;
       Buzzer_Beep((uint16_t)ms);
       LOG_Printf("BEEP: %d ms\r\n", ms);
+  }
+
+  /* ================== 音频命令（I2S2+ES8388 板载喇叭） ==================
+   * 用法：audio <freq> <ms>   播放正弦音（freq=1~20000Hz, ms=1~10000）
+   *       audio stop          停止
+   *       audio status        播放状态 */
+  static void cmd_audio(const char *args)
+  {
+    if (args == NULL || strcmp(args, "status") == 0) {
+        LOG_Printf("AUDIO: %s\r\n", Audio_IsPlaying() ? "playing" : "idle");
+        return;
+    }
+    if (strcmp(args, "stop") == 0) {
+        Audio_Stop();
+        LOG_Printf("AUDIO: stop\r\n");
+        return;
+    }
+    if (strcmp(args, "wav") == 0) {
+        Audio_PlayWav(g_wav_star, g_wav_star_len);
+        LOG_Printf("AUDIO: wav (star, %luB)\r\n", (unsigned long)g_wav_star_len);
+        return;
+    }
+    int freq = atoi(args);
+    const char *sp = strchr(args, ' ');
+    int ms = (sp != NULL) ? atoi(sp + 1) : 500;
+    if (freq < 1 || freq > 20000) {
+        LOG_Printf("Usage: audio <freq> <ms> | wav | stop | status\r\n");
+        return;
+    }
+    if (ms < 1 || ms > 10000) {
+        ms = 500;
+    }
+    Audio_PlayTone((uint32_t)freq, (uint32_t)ms);
+    LOG_Printf("AUDIO: tone %d Hz %d ms\r\n", freq, ms);
   }
 
   /* ================== 低功耗命令 ==================

@@ -129,8 +129,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   EventBus_Init();    // 必须在调度器启动前初始化事件总线
 
-  HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
-  __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, 500); // 设置占空比 50% (500/999)
+  /* PC6 已让位给 I2S2_MCK（音频，见 bsp_i2s）——不再启动 TIM8_CH1 PWM */
 
   global_tx_stream = xStreamBufferCreate(LOG_TX_STREAM_SIZE, 1);
   global_rx_stream = xStreamBufferCreate(LOG_RX_STREAM_SIZE, 1);
