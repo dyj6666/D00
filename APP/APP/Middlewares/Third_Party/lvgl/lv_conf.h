@@ -57,24 +57,25 @@
  *=========================*/
 
 /*1: use custom malloc/free, 0: use the built-in `lv_mem_alloc()` and `lv_mem_free()`*/
-#define LV_MEM_CUSTOM 0
+#define LV_MEM_CUSTOM 1
 #if LV_MEM_CUSTOM == 0
     /*Size of the memory available for `lv_mem_alloc()` in bytes (>= 2kB)*/
     #define LV_MEM_SIZE    (128U * 1024U)        /*[bytes]*/
-
     /*Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too.*/
-    #define LV_MEM_ADR     0x68080000             /* 外部 SRAM 128KB 池（与 Ports/lv_port_disp.c 绘制缓冲 0x680A0000 相邻，扩容前核对边界） */
-    /*Instead of an address give a memory allocator that will be called to get a memory pool for LVGL. E.g. my_malloc*/
+    #define LV_MEM_ADR     0x68080000
     #if LV_MEM_ADR == 0
         #undef LV_MEM_POOL_INCLUDE
         #undef LV_MEM_POOL_ALLOC
     #endif
-
 #else       /*LV_MEM_CUSTOM*/
-    #define LV_MEM_CUSTOM_INCLUDE <stdlib.h>   /*Header for the dynamic memory function*/
-    #define LV_MEM_CUSTOM_ALLOC   malloc
-    #define LV_MEM_CUSTOM_FREE    free
-    #define LV_MEM_CUSTOM_REALLOC realloc
+    /* D00：LVGL 内存统一走外部 SRAM 池（ext_mem，376KB @0x680A2000，
+     * 布局见 Config/mem_map.h）。ExtMem_Init 由 BSP_SRAM_Init
+     * （module priority=2）先于 GuiApp(55) 执行；池带 canary 越界
+     * 检测与运行统计，实现见 SystemServices/ext_mem.c。 */
+    #define LV_MEM_CUSTOM_INCLUDE "ext_mem.h"  /*Header for the dynamic memory function*/
+    #define LV_MEM_CUSTOM_ALLOC   ExtMem_Alloc
+    #define LV_MEM_CUSTOM_FREE    ExtMem_Free
+    #define LV_MEM_CUSTOM_REALLOC ExtMem_Realloc
 #endif     /*LV_MEM_CUSTOM*/
 
 /*Number of the intermediate memory buffer used during rendering and other internal processing mechanisms.

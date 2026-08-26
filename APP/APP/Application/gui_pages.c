@@ -18,6 +18,8 @@
 #include "app_config.h"
 #include "bsp_can.h"
 #include "bsp_rtc.h"
+#include "bsp_sram.h"
+#include "ext_mem.h"
 #include "bsp_system.h"
 #include "bsp_w25q128.h"
 #include "cam_link.h"
@@ -101,6 +103,7 @@ static gui_data_t s_data
 
 /* ---------------- 页面与控件句柄 ---------------- */
 static lv_obj_t *s_scr_home, *s_scr_net, *s_scr_sys, *s_scr_cam, *s_scr_gimbal;
+static lv_obj_t *s_scr_sram;
 
 /* CAM 页（摄像头链路状态） */
 static lv_obj_t *s_c_dot;                  /* 链路状态点 */
@@ -150,7 +153,7 @@ static uint32_t s_cv_tick;                      /* 曲线采样节拍（每 3 �
 static lv_obj_t *s_g_curve_set, *s_g_curve_y, *s_g_curve_u;  /* 曲线线对象 */
 static lv_point_t s_cv_pts_set[PID_CV_PTS], s_cv_pts_y[PID_CV_PTS],
                   s_cv_pts_u[PID_CV_PTS];
-static lv_obj_t *s_g_kp_card, *s_g_ki_card, *s_g_kd_card;   /* 参数卡（PID 模式） */
+static lv_obj_t *s_g_kp_card, *s_g_ki_card;                /* 参数卡（PID 模式，Kd 并入 Kp 卡） */
 static lv_obj_t *s_g_kp_val, *s_g_ki_val, *s_g_kd_val;
 static lv_obj_t *s_g_pan_card, *s_g_tilt_card; /* 仪表卡（非 PID 模式显示） */
 /* LVGL 单帧渲染耗时（gui_app.c 实测） */
@@ -173,6 +176,12 @@ static lv_obj_t *s_s_fw, *s_s_crash;
 static lv_obj_t *s_s_cpu_arc, *s_s_cpu_pct;
 static lv_obj_t *s_s_heap_bar, *s_s_heap_txt;
 static lv_obj_t *s_s_rows[6];             /* 状态行文本 */
+
+/* ---- SRAM 页（外部 1MB 池：ext_mem 统计 + bsp_sram 自检/基准） ---- */
+static lv_obj_t *s_m_bar;                 /* 池占用进度条 */
+static lv_obj_t *s_m_l1, *s_m_l2;         /* 池统计行 */
+static lv_obj_t *s_m_t1, *s_m_t2;         /* 自检 + FSMC 行 */
+static lv_obj_t *s_m_b1, *s_m_b2;         /* 基准行 */
 
 /* ---------------- CPU 占用：uxTaskGetSystemState 双采样差分 ----------------
  * 快照数组放 CCM：仅 CPU 访问（任务状态枚举），主 SRAM 让给 DMA/ETH */
@@ -323,6 +332,7 @@ static const nav_item_t s_nav_items[] = {
     { LV_SYMBOL_HOME " HOME",  GuiPages_ShowHome },
     { LV_SYMBOL_WIFI " NET",   GuiPages_ShowNet },
     { LV_SYMBOL_IMAGE " CAM",  GuiPages_ShowCam },
+    { LV_SYMBOL_DRIVE " SRAM", GuiPages_ShowSram },
     { LV_SYMBOL_SETTINGS " SYS", GuiPages_ShowSys },
 };
 
@@ -338,8 +348,8 @@ static void nav_click(lv_event_t *e)
 static void nav_build(lv_obj_t *parent)
 {
     const uint32_t n = (uint32_t)(sizeof(s_nav_items) / sizeof(s_nav_items[0]));
-    const lv_coord_t bw = 52;                 /* 4 按钮适配 240 宽 */
-    const lv_coord_t gap = 6;
+    const lv_coord_t bw = 42;                 /* 5 按钮适配 240 宽 */
+    const lv_coord_t gap = 4;
     lv_coord_t x0 = 8;
     for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *btn = lv_btn_create(parent);
@@ -887,6 +897,95 @@ static void page_sys_refresh(void)
 }
 
 /* ================================================================
+ * SRAM 页：外部 1MB 池（ExtMem）占用 + 上电自检 + 吞吐基准
+ * 数据源：ext_mem 统计 / bsp_sram 自检与基准（启动时 DWT 实测）
+ * ================================================================ */
+static void page_sram_build(void)
+{
+    s_scr_sram = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_scr_sram, GUI_COL_BG, 0);
+    lv_obj_set_style_bg_opa(s_scr_sram, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_scr_sram, LV_OBJ_FLAG_SCROLLABLE);
+
+    GuiTheme_TitleBar(s_scr_sram, "SRAM", "IS62WV51216 1MB");
+
+    /* 池占用卡 */
+    lv_obj_t *pool = GuiTheme_Card(s_scr_sram, 224, 86);
+    lv_obj_set_pos(pool, 8, 32);
+    GuiTheme_Label(pool, "POOL", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
+    lv_obj_align(lv_obj_get_child(pool, lv_obj_get_child_cnt(pool) - 1u),
+                 LV_ALIGN_TOP_LEFT, 10, 6);
+    s_m_bar = lv_bar_create(pool);
+    lv_obj_set_size(s_m_bar, 140, 10);
+    lv_obj_align(s_m_bar, LV_ALIGN_TOP_LEFT, 56, 8);
+    lv_obj_set_style_bg_color(s_m_bar, GUI_COL_BORDER, LV_PART_MAIN);
+    lv_obj_set_style_radius(s_m_bar, 5, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(s_m_bar, GUI_COL_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(s_m_bar, 5, LV_PART_INDICATOR);
+    lv_bar_set_range(s_m_bar, 0, 100);
+    lv_bar_set_value(s_m_bar, 0, LV_ANIM_OFF);
+    s_m_l1 = GuiTheme_Label(pool, "--", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_m_l1, 10, 28);
+    s_m_l2 = GuiTheme_Label(pool, "--", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_m_l2, 10, 52);
+
+    /* 自检 + FSMC 卡 */
+    lv_obj_t *tst = GuiTheme_Card(s_scr_sram, 224, 60);
+    lv_obj_set_pos(tst, 8, 126);
+    s_m_t1 = GuiTheme_Label(tst, "--", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_m_t1, 10, 8);
+    s_m_t2 = GuiTheme_Label(tst, "--", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_m_t2, 10, 32);
+
+    /* 基准卡 */
+    lv_obj_t *bch = GuiTheme_Card(s_scr_sram, 224, 88);
+    lv_obj_set_pos(bch, 8, 194);
+    s_m_b1 = GuiTheme_Label(bch, "--", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_m_b1, 10, 8);
+    s_m_b2 = GuiTheme_Label(bch, "--", &lv_font_montserrat_12, GUI_COL_TEXT);
+    lv_obj_set_pos(s_m_b2, 10, 32);
+    GuiTheme_Label(bch, "16bit async, no cache/DMA (arch limit)",
+                   &lv_font_montserrat_10, GUI_COL_TEXT_DIM);
+    lv_obj_set_pos(lv_obj_get_child(bch, lv_obj_get_child_cnt(bch) - 1u), 10, 60);
+
+    nav_build(s_scr_sram);
+}
+
+static void page_sram_refresh(void)
+{
+    ext_mem_stats_t ms;
+    ExtMem_GetStats(&ms);
+    const bsp_sram_status_t *st = BSP_SRAM_GetStatus();
+
+    uint32_t pct = (ms.total > 0u) ? (ms.used * 100u / ms.total) : 0u;
+    lv_bar_set_value(s_m_bar, (lv_coord_t)pct, LV_ANIM_OFF);
+    lv_label_set_text_fmt(s_m_l1, "used %lu/%luKB  peak %luKB",
+                          (unsigned long)(ms.used / 1024u),
+                          (unsigned long)(ms.total / 1024u),
+                          (unsigned long)(ms.peak / 1024u));
+    lv_label_set_text_fmt(s_m_l2, "maxfree %luKB  alloc %lu  fail %lu%s",
+                          (unsigned long)(ms.max_free / 1024u),
+                          (unsigned long)ms.alloc_cnt,
+                          (unsigned long)ms.fail_cnt,
+                          ms.canary_fail ? "  CANARY!" : "");
+    lv_label_set_text_fmt(s_m_t1, "DAT %s  ADR %s  PAT %s",
+                          st->test_dat ? "FAIL" : "PASS",
+                          st->test_adr ? "FAIL" : "PASS",
+                          st->test_pat ? "FAIL" : "PASS");
+    lv_label_set_text_fmt(s_m_t2, "FSMC %s  ADDSET %lu  DATAST %lu",
+                          st->fsmc_en ? "ON" : "OFF",
+                          (unsigned long)st->addset,
+                          (unsigned long)st->datast);
+    lv_label_set_text_fmt(s_m_b1, "W32 %lu  R32 %lu MB/s",
+                          (unsigned long)st->write32_mbps,
+                          (unsigned long)st->read32_mbps);
+    lv_label_set_text_fmt(s_m_b2, "W16 %lu  R16 %lu  CP %lu MB/s",
+                          (unsigned long)st->write16_mbps,
+                          (unsigned long)st->read16_mbps,
+                          (unsigned long)st->copy_mbps);
+}
+
+/* ================================================================
  * CAM 页：摄像头链路（UART5）实时状态——帧统计 / 手部 / 手势 / 挥手
  * 数据源：cam_link 服务层（ISR 解析帧协议，本页 250ms 刷新读取）
  * ================================================================ */
@@ -1213,7 +1312,6 @@ static void page_gimbal_build(void)
     lv_obj_set_pos(s_g_kp_card, 10, 224);
     s_g_ki_card = GuiTheme_Card(s_scr_gimbal, 106, 64);
     lv_obj_set_pos(s_g_ki_card, 124, 224);
-    s_g_kd_card = NULL;   /* Kd 并入 Kp 卡第二行 */
     /* Kp 卡：标题 + 大值 + 主按钮 + Kd 行 */
     GuiTheme_Label(s_g_kp_card, "Kp", &lv_font_montserrat_12, GUI_COL_TEXT_DIM);
     lv_obj_set_pos(lv_obj_get_child(s_g_kp_card, lv_obj_get_child_cnt(s_g_kp_card) - 1u), 6, 3);
@@ -1628,8 +1726,9 @@ void GuiPages_ShowNet(void)  { page_show(s_scr_net,  LV_SCR_LOAD_ANIM_MOVE_LEFT)
 void GuiPages_ShowCam(void)  { page_show(s_scr_cam,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 void GuiPages_ShowGimbal(void) { page_show(s_scr_gimbal, LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 void GuiPages_ShowSys(void)  { page_show(s_scr_sys,  LV_SCR_LOAD_ANIM_MOVE_LEFT); }
+void GuiPages_ShowSram(void) { page_show(s_scr_sram, LV_SCR_LOAD_ANIM_MOVE_LEFT); }
 
-/* 单按键/挥手翻页：按当前活动页轮换（含 CAM/GIMBAL 页） */
+/* 单按键/挥手翻页：按当前活动页轮换（含 CAM/GIMBAL/SRAM 页） */
 void GuiPages_PageNext(void)
 {
     if (s_active == s_scr_home) {
@@ -1637,6 +1736,8 @@ void GuiPages_PageNext(void)
     } else if (s_active == s_scr_net) {
         page_show(s_scr_cam, LV_SCR_LOAD_ANIM_MOVE_LEFT);
     } else if (s_active == s_scr_cam) {
+        page_show(s_scr_sram, LV_SCR_LOAD_ANIM_MOVE_LEFT);
+    } else if (s_active == s_scr_sram) {
         page_show(s_scr_gimbal, LV_SCR_LOAD_ANIM_MOVE_LEFT);
     } else if (s_active == s_scr_gimbal) {
         page_show(s_scr_sys, LV_SCR_LOAD_ANIM_MOVE_LEFT);
@@ -1659,6 +1760,7 @@ void GuiPages_Init(void)
     page_sys_build();
     page_cam_build();
     page_gimbal_build();
+    page_sram_build();
     s_active = s_scr_home;
     lv_scr_load(s_scr_home);
     gui_data_collect();   /* 首窗立即采集（CPU 基线等） */
@@ -1688,6 +1790,7 @@ void GuiPages_RefreshFast(void)
     default:
         page_home_refresh_cards(1);
         page_sys_refresh();
+        page_sram_refresh();
         break;
     }
     /* CAM 页 250ms 实时刷新（仅可见时；标签开销小，保证验证跟手） */
