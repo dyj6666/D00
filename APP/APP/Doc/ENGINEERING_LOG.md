@@ -3820,3 +3820,56 @@ GuiApp 任务正常（8KB 栈余 6.5KB）；三页面日常刷新正常。
 - 报告"死机"前先确认最近 10 分钟无 DAP 会话活动；禁止对运行中系统执行无 resume 的 halt；
 - 中断"停了"+PC 落在初始化代码 + 无 fault = 先怀疑 halt 残留，再怀疑固件；
 - 监控脚本的 DAP 采样必须自带恢复保障（双会话），否则监控即干扰源。
+
+### 13.4 "升级后死机/复位循环"实为 ext_mem free-list 损坏 → HardFault 软复位循环（2026-08，重点问题）
+
+**现象**：9203（外部 SRAM 池 + LVGL 后端）OTA 后系统"卡死"：屏幕无响应、ping 不通、
+串口静默；用户观察"绿灯不断闪烁"。DAP 取证 PC 反复落在 eeprom_delay_us / lcd_opt_delay
+（启动早期），CFSR/HFSR=0（非 fault 是 hang），IWDGRSTF=0（被软件 RMVF 清除，误判无复位）。
+
+**排查过程（多轮被推翻的方向）**：
+1. **EEPROM 软件 I2C 卡死假说**：PC 在 eeprom_delay_us/iic_wait_ack，SDA 无 ACK、总线电平
+   正常（IDR 翻转）、GPIO 配置正常（开漏+上拉）。加 guard 迭代上限 + 探测前总线恢复 +
+   快速降级（9204/9205/9206）均无效——**推翻**（EEPROM 慢速是"复位循环中每次启动的必经
+   之路"，非根因）；
+2. **DWT CYCCNT 冻结假说**：eeprom_delay_us 忙等不退出 → 疑 CYCCNT 不计数。resume-sleep-halt
+   实测 300ms 窗口 +51M 周期（满速）、DEMCR/CTRL 使能位正确——**推翻**；后续发现取证会话
+   注入 DBGMCU_CR=0x7F（WFI 假计数），一度误导；
+3. **tickless/调度器假说**：CYCCNT 慢采样 → 疑任务阻塞+空闲 WFI。SysTick CTRL=0x07（正常）、
+   时钟树 PLL 正常、pxCurrentTCB=startupTask（在运行）——**推翻**；
+4. **二分定位**：git stash 后 9202 干净版正常 → 我的改动是根因 → 逐步加回：
+   mem_map（正常）→ Sram/ExtMem/LV_MEM_CUSTOM（正常）→ gui_pages 改动（**复现卡死**）→
+   "代码保留不接线"（正常）→ 只接 page_sram_build（正常）→ 只接 page_sram_refresh（**复现**）；
+5. **BKP 崩溃摘要一锤定音**：RTC 备份寄存器（ERR_BKP_*）显示 SRC=ERR_SRC_HARDFAULT(2)、
+   PC=0x0802552A=blk_size、LR=0x080161B1=ExtMem_GetStats 内部、Task=GuiApp、SEQ=468
+   （**已崩溃 468 次 = 软复位循环铁证**）。
+
+**根因机理**：
+- page_sram_refresh（每 750ms，RefreshFast 相 2）调用 ExtMem_GetStats 遍历 free-list；
+- LVGL（LV_MEM_CUSTOM=1）全部对象在 ExtMem 池（0x680A2000，376KB），池内 free-list
+  链被 LVGL 侧越界写破坏（next 偏移指向池外）；
+- 遍历到非法地址 → blk_size 读越界 → **HardFault** → ERR_HandleAssert 软复位自愈 →
+  复位循环；每次复位后启动，EEPROM 探测在软复位残留下慢速（多次 ACK 超时），SysMon
+  未初始化无喂狗 → IWDG 咬 → 再次复位——"卡死在 EEPROM"是循环必经之路的采样假象。
+
+**解决方案（已落地，commit 9208）**：
+1. ext_mem 遍历加固：blk_valid（池内范围 + 8 对齐 + 头魔数）校验，链损坏时停止遍历
+   并计数 canary_fail，不再 HardFault；
+2. ExtMem_Realloc 非法指针防御：非池内指针直接返回 NULL（杜绝 memcpy 越界）；
+3. page_sram_refresh 保持每 750ms（GetStats 已安全）；SRAM 页显示 canary_fail 供观测。
+
+**验证数据**：
+- 加固后 9208：ping 正常、串口 `Boot complete`/`GUI task enter`、`last build 9208`、
+  FreeRTOS 堆余量 3KB→8.6KB（LVGL 移出主堆）；连续运行稳定（多次验证 20s+ 均 True）；
+- ext_mem 主机单测 9/9（含非法指针防御、32 位回绕、压力碎片）；
+- OTA 正式推送 9208 后 PARAM last_build_no=0x23F8，屏幕 build 号更新。
+
+**经验沉淀**：
+- 复位循环中"采样到的卡死点"是必经之路而非根因；先读 BKP 崩溃摘要（SRC/PC/Task/SEQ）
+  再决定排查方向，可省数小时；
+- 内存池遍历/重分配必须防御损坏（范围+魔数校验），池使用者（LVGL）的越界写只能靠
+  池自身的 canary/防御暴露，不能依赖"不会发生"；
+- 二分定位固件回归：git stash 全量还原 → 确认基线正常 → 按"功能块"逐步加回，每步
+  独立构建烧录验证；"代码保留不接线"是区分编译影响与运行时影响的利器；
+- DAP 取证会话注入 DBGMCU_CR=0x7F 会使 CYCCNT/WFI 测量失真（假满速），测量前必须
+  显式清零并在同会话内完成。
