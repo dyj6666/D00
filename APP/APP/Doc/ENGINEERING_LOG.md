@@ -3873,3 +3873,20 @@ GuiApp 任务正常（8KB 栈余 6.5KB）；三页面日常刷新正常。
   独立构建烧录验证；"代码保留不接线"是区分编译影响与运行时影响的利器；
 - DAP 取证会话注入 DBGMCU_CR=0x7F 会使 CYCCNT/WFI 测量失真（假满速），测量前必须
   显式清零并在同会话内完成。
+
+### 13.5 板载音频点亮：I2S2 + ES8388 → 喇叭（WAV/tone，2026-08）
+
+**结论**：探索者 V3 板载 ES8388 Codec（非旧版 WM8978），I2S2 走 PB12/PB13 +
+PC2/PC3/PC6（SDOUT=PC2 用 AF6-I2S2ext），控制走 PB8/PB9 软 I2C（与 AT24C02 共总线，
+探索者原厂设计）。**零硬件改动**：PC6 让位 I2S2_MCK（移除 main.c 无主 TIM8 PWM），
+PB8/PB9 分时复用。
+
+**关键教训（堆峰值）**：audio 任务（prio=6，2KB 栈）导致启动堆峰值超限 →
+`[OTA-TCP] server alloc failed` → 后续 OTA 推送失败。修复：任务栈 1KB + 模块
+优先级 75（OtaTcp 之后创建），server alloc 优先成功。**新增常驻任务前须评估
+FreeRTOS 堆峰值（OTA/HTTP server 是最后分配的大块）**。
+
+**实现**：bsp_i2s（DMA1_S4/CH0 双缓冲循环 + TC 中断 100Hz 填充）、bsp_es8388
+（软 I2C + DAC→喇叭）、audio_svc（正弦相位累加合成 + WAV 解析/采样率切换/
+双缓冲流式；缓冲走 ExtMem 池）、Audio GUI 页（对数频率滑条 20Hz~20kHz/预设/
+WAV/音量）、内置小星星 WAV（gen_wav.py 生成，16kHz）。
