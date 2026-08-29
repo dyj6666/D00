@@ -127,10 +127,12 @@ CORE_REGS = ["r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
 # OpenOCD session helper
 # ----------------------------------------------------------------------
 DBGMCU_CR = 0xE0042004  # STM32F4 debug control register
-# sleep/stop/standby(bit0-2) + IWDG(bit5=0x20) + WWDG(bit6=0x40) freeze on halt。
-# 注意：0x1F 曾漏掉 bit5/bit6——IWDG 未冻结，halt 超过看门狗周期即复位
-# （实测每次 DAP 会话后板子重启、启动流程 PC 采样污染）。0x7F 全冻结。 */
-DBG_FREEZE_ALL = 0x7F
+# F407 (RM0090) 位布局：DBG_STOP/STANDBY/SLEEP(bit0-2) + DBG_IWDG_STOP(bit8=0x100)
+# + DBG_WWDG_STOP(bit9=0x200)。旧值 0x7F 按 F1 布局假设 bit5/6 为 IWDG/WWDG，
+# 在 F407 上实际未冻结看门狗——halt 超过 IWDG 周期(1s)即复位，导致长取证会话
+# （多 mdw）在重启窗口读到全零外设寄存器（实测 S4CR/I2SCFGR=0 假象）。
+# 0x37F = 调试模式(0x7) + IWDG(0x100) + WWDG(0x200)。
+DBG_FREEZE_ALL = 0x37F
 
 
 def run_ocd(commands, timeout=30):
