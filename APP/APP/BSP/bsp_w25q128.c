@@ -276,7 +276,11 @@ static int w25_wait_busy(uint32_t tmo_ms)
         if (elapsed >= tmo_ms) {
             return BSP_W25Q_ERR_TIMEOUT;
         }
-        HAL_Delay(2u);
+        {   /* 自旋 2ms（不依赖 HAL tick——tick 异常时 HAL_Delay 无限等待） */
+            volatile uint32_t n = 2u * 16800u;
+            while (n--) {
+            }
+        }
         elapsed += 2u;
         if ((elapsed & 0x3Fu) == 0u) {   /* 每 ~128ms 喂狗，防长擦除复位 */
             BSP_Watchdog_Refresh();

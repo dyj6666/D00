@@ -61,7 +61,11 @@ void BSP_LCD_ScanDir(uint8_t dir)
 void BSP_LCD_Clear(uint16_t color)
 {
     lcd_clear(color);
-    HAL_Delay(40);   /* 全屏清屏后等待面板刷新（~60Hz 两帧），防撕裂残留 */
+    /* 自旋延时（不依赖 HAL tick——tick 异常时 HAL_Delay 会无限等待）：
+     * 全屏清屏后等待面板刷新（~60Hz 两帧），防撕裂残留 */
+    volatile uint32_t n = 40u * 16800u;
+    while (n--) {
+    }
 }
 
 void BSP_LCD_Fill(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,

@@ -13,7 +13,12 @@ void BSP_SystemReset(void)
 
 void BSP_DelayMs(uint32_t ms)
 {
-    HAL_Delay(ms);
+    /* 自旋延时（不依赖 HAL tick）：tick 异常（上下电后中断瘫痪）时
+     * HAL_Delay 会无限等待，导致启动早期（ETH PHY 复位/蜂鸣器等）
+     * 卡死——LCD 初始化永远不执行 → 白屏 */
+    volatile uint32_t n = ms * 16800u;
+    while (n--) {
+    }
 }
 
 uint32_t BSP_GetTick(void)

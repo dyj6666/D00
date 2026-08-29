@@ -117,7 +117,12 @@ void HAL_ETH_MspInit(ETH_HandleTypeDef *heth)
 
     /* PHY 硬件复位（YT8512C，低电平复位脉冲） */
     HAL_GPIO_WritePin(PHY_RESET_GPIO_Port, PHY_RESET_Pin, GPIO_PIN_RESET);
-    HAL_Delay(10);
+    {   /* 自旋延时 10ms（不依赖 HAL tick——上下电后 tick 可能瘫痪，
+         * HAL_Delay 会无限等待导致启动卡死、LCD 永不初始化 → 白屏） */
+        volatile uint32_t n = 10u * 16800u;
+        while (n--) {
+        }
+    }
     HAL_GPIO_WritePin(PHY_RESET_GPIO_Port, PHY_RESET_Pin, GPIO_PIN_SET);
 
     /* ETH 全局中断 */

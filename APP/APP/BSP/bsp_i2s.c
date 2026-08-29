@@ -154,11 +154,18 @@ uint8_t BSP_I2S_Init(uint32_t samplerate)
 
 void BSP_I2S_Play(uint16_t *buf0, uint16_t *buf1, uint16_t num)
 {
-    HAL_DMAEx_MultiBufferStart(&s_txdma, (uint32_t)buf0,
-                               (uint32_t)&I2S_SPI->DR, (uint32_t)buf1, num);
+    /* HAL_DMAEx_MultiBufferStart 成功后将 State=BUSY、Lock=LOCKED 且**不释放**；
+     * 若不清零，第二次 Play 会在 __HAL_LOCK/State 检查处直接 HAL_BUSY 返回，
+     * DMA 静默不启动（重复播放/连续音效全失效）。故每次启动前显式复位。 */
+    s_txdma.State = HAL_DMA_STATE_READY;
+    __HAL_UNLOCK(&s_txdma);
+
     __HAL_DMA_CLEAR_FLAG(&s_txdma, I2S_TX_DMA_TC_FLAG);
     __HAL_DMA_ENABLE_IT(&s_txdma, DMA_IT_TC);
-    __HAL_DMA_ENABLE(&s_txdma);
+    /* 先使能 TC 中断再启动 DMA：首个缓冲完成事件不被丢失
+     * （原顺序 DMA 先跑、中断后开，首 TC 落在窗口外被 CLEAR 丢弃）。 */
+    HAL_DMAEx_MultiBufferStart(&s_txdma, (uint32_t)buf0,
+                               (uint32_t)&I2S_SPI->DR, (uint32_t)buf1, num);
 }
 
 void BSP_I2S_Stop(void)
