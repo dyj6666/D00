@@ -23,6 +23,7 @@
 #include "bsp_i2s.h"
 #include "ext_mem.h"
 #include "logger.h"
+#include "wav_data.h"
 
 #define AUDIO_SAMPLE_RATE   48000u
 #define AUDIO_BUF_SAMPLES   480u            /* 10ms/缓冲 @48k */
@@ -369,6 +370,6 @@ void Audio_Init(void)
 
     LOG_Printf("[AUD] ready: I2S2 48kHz + ES8388 -> speaker (buf=ExtMem)\r\n");
 
-    /* 启动提示音（验证链路 + 用户可闻确认） */
-    Audio_PlayTone(1000u, 150u);
+    /* 开机旋律（天空之城主题前奏 + 和弦；系统启动完成后响起） */
+    Audio_PlayWav(g_wav_startup, g_wav_startup_len);
 }
