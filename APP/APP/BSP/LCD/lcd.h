@@ -1,4 +1,4 @@
-﻿/**
+/**
  ****************************************************************************************************
  * @file        lcd.h
  * @author      正点原子团队(ALIENTEK)
@@ -75,7 +75,15 @@ static inline void sys_gpio_pin_set(GPIO_TypeDef *port, uint16_t pin,
     HAL_GPIO_WritePin(port, pin, x ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }
 
-#define delay_ms   HAL_Delay
+/* LCD 毫秒延时：自旋实现（不依赖 HAL tick）——LCD 初始化期间即使
+ * tick 异常（启动早期/死机前兆）也能完成时序等待，防初始化卡死白屏 */
+static inline void lcd_delay_ms(uint32_t ms)
+{
+    volatile uint32_t n = ms * 16800u;   /* ~168MHz 粗粒度毫秒延时 */
+    while (n--) {
+    }
+}
+#define delay_ms   lcd_delay_ms
 
 static inline void delay_us(uint32_t us)
 {

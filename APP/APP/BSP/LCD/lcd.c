@@ -683,8 +683,20 @@ void lcd_init(void)
     /* 使能BANK,区域x */
     LCD_FSMC_BCRX |= 1 << 0;    /* 使能BANK，区域x */
 
-    lcd_opt_delay(0X1FFFF);     /* 初始化FSMC后,必须等待一定时间才能开始初始化 */
+    /* 上电/复位后 LCD 稳定等待：ST7789 要求 RST 释放后 ≥120ms。
+     * 实测软复位（下方 0x01）可救活上电半死 LCD，等待无需 1s——
+     * 350ms（0x00800000 ≈ 8.4M 次循环 × 7 周期 ≈ 350ms）兼顾时序与启动速度。 */
+    lcd_opt_delay(0x00800000);
 
+    /* ST7789 软复位（0x01）：上电后外部 RST（与 NRST 共用）时序可能无效
+     * （POR 释放时 VDD 未稳 → LCD 未真正复位 → 半死状态命令不响应 → 白屏）。
+     * 软复位强制 LCD 内部复位，等 175ms（0x00400000 ≈ 4.2M × 7 ≈ 175ms，
+     * 覆盖数据手册软复位后 ≥120ms 要求）。仅写命令（FSMC 写不挂起）。 */
+    lcd_wr_regno(0x01);   /* SWRESET */
+    lcd_opt_delay(0x00400000);
+
+#if 0   /* ===== 上电白屏诊断：跳过 ID 读取（FSMC 读可能挂起→系统卡死）=====
+         * 本板固定 ST7789 240x320，直接初始化已知屏（仅写不读） */
     /* 尝试9341 ID的读取 */
     lcd_wr_regno(0XD3);
     lcddev.id = lcd_rd_data();  /* dummy read */
@@ -767,7 +779,14 @@ void lcd_init(void)
             }
         }
     }
+#endif  /* ===== 上电白屏诊断结束：跳过 ID 读取 ===== */
 
+    /* 固定 ST7789 直接初始化（诊断分支：跳过 ID 读取——上电后 FSMC 读
+     * 可能挂起导致系统卡死白屏；本板固定 240x320 ST7789，仅写不读） */
+    lcddev.id = 0x7789;
+    LOG_Printf("LCD ID:%x (fixed ST7789)\r\n", lcddev.id);
+    lcd_ex_st7789_reginit();
+#if 0   /* 原 ID 分支（诊断期间禁用） */
     /* 特别注意, 如果在main函数里面屏蔽串口1初始化, 则会卡死在printf
      * 里面(卡死在f_putc函数), 所以, 必须初始化串口1, 或者屏蔽掉下面
      * 这行 printf 语句 !!!!!!!
@@ -831,6 +850,7 @@ void lcd_init(void)
         LCD_FSMC_BWTRX |= 1 << 0;       /* 地址建立时间(ADDSET)为1个HCLK = 6ns */
         LCD_FSMC_BWTRX |= 1 << 8;       /* 数据保存时间(DATAST)为1个HCLK = 6ns */
     }
+#endif  /* 原 ID 分支禁用结束 */
 
     lcd_display_dir(0); /* 默认为竖屏 */
     LCD_BL(1);          /* 点亮背光 */
