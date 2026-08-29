@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Linux 内核知识结构图（终极版）</title>
+<style>
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: #f2f4f8; margin: 0; padding: 28px; color: #1f1f1f; }
+  h1 { text-align: center; color: #17365d; margin-bottom: 4px; }
+  .sub { text-align: center; color: #666; margin-bottom: 20px; font-size: 14px; }
+  .card { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,.08); padding: 20px; margin: 0 auto 24px auto; max-width: 2640px; }
+  .card h2 { color: #17365d; font-size: 20px; margin: 0 0 12px 0; }
+  .mermaid { text-align: center; }
+  .mermaid svg { max-width: 100%; height: auto; }
+  footer { text-align: center; color: #999; font-size: 12px; margin-top: 8px; }
+
+  #stage { position: relative; overflow: hidden; border: 1px solid #e0e0e0; border-radius: 8px;
+           background: #fff; cursor: grab; height: 74vh; }
+  #stage.dragging { cursor: grabbing; }
+  #view { transform-origin: 0 0; }
+  #view svg { display: block; max-width: none; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+  .toolbar button { padding: 4px 14px; border: 1px solid #ccc; background: #fafafa; border-radius: 6px;
+                    cursor: pointer; font-size: 14px; }
+  .toolbar button:hover { background: #eef3fb; }
+  .toolbar .hint { color: #888; font-size: 12px; margin-left: auto; }
+
+</style>
+</head>
+<body>
+<h1>🐧 Linux 内核知识结构图（终极版）</h1>
+<div class="sub">图上滚轮缩放 · 按住左键拖拽平移 · 自底向上：硬件 → 体系结构 → 内核核心 → 系统调用 → 用户空间</div>
+
+<div class="card">
+  <h2>📊 矢量总览图（滚轮/按钮缩放，拖拽平移）</h2>
+  <div class="toolbar">
+    <button onclick="zoomBy(1.3)">＋ 放大</button>
+    <button onclick="zoomBy(1/1.3)">－ 缩小</button>
+    <button onclick="setZoom(1)">100%</button>
+    <button onclick="fit()">适应窗口</button>
+    <span class="hint">提示：在图上滚动滚轮缩放 · 按住左键拖拽平移</span>
+  </div>
+  <div id="stage">
+    <div id="view">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2600 2160" width="2600" height="2160">
+<rect width="2600" height="2160" fill="#FFFFFF"/>
+<text x="1300.0" y="64.1" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="46" fill="#17365D" text-anchor="middle">Linux 内核知识结构图（终极版）</text>
+<text x="1300.0" y="105.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="20" fill="#595959" text-anchor="middle">自底向上：硬件 → 体系结构 → 内核核心 → 系统调用 → 用户空间</text>
+<rect x="100" y="130" width="2400" height="180" rx="16" fill="#F7F9FB" stroke="#595959" stroke-width="3"/>
+<text x="120" y="151.8" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="28" fill="#17365D" text-anchor="start">① 用户空间 User Space</text>
+<rect x="140" y="185" width="560" height="105" rx="12" fill="#DEEBF7" stroke="#2E75B6" stroke-width="2"/>
+<text x="420" y="232.1" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="26" fill="#1F1F1F" text-anchor="middle">应用程序 / 服务</text>
+<text x="420" y="269.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="18" fill="#1F1F1F" text-anchor="middle">Apache · MySQL · GUI</text>
+<rect x="730" y="185" width="560" height="105" rx="12" fill="#DEEBF7" stroke="#2E75B6" stroke-width="2"/>
+<text x="1010" y="232.1" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="26" fill="#1F1F1F" text-anchor="middle">标准 C 库</text>
+<text x="1010" y="269.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="18" fill="#1F1F1F" text-anchor="middle">glibc / musl · 系统调用封装</text>
+<rect x="1320" y="185" width="560" height="105" rx="12" fill="#DEEBF7" stroke="#2E75B6" stroke-width="2"/>
+<text x="1600" y="232.1" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="26" fill="#1F1F1F" text-anchor="middle">Shell 与系统工具</text>
+<text x="1600" y="269.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="18" fill="#1F1F1F" text-anchor="middle">bash · 常用命令 · 工具链</text>
+<rect x="1910" y="185" width="560" height="105" rx="12" fill="#DEEBF7" stroke="#2E75B6" stroke-width="2"/>
+<text x="2190" y="232.1" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="26" fill="#1F1F1F" text-anchor="middle">运行时</text>
+<text x="2190" y="269.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="18" fill="#1F1F1F" text-anchor="middle">JVM / 语言运行时 / 容器编排</text>
+<rect x="950" y="340" width="700" height="110" rx="12" fill="#E2EFDA" stroke="#538135" stroke-width="2"/>
+<text x="1300" y="384.1" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="26" fill="#1F1F1F" text-anchor="middle">② 系统调用接口 SCI + vDSO</text>
+<text x="1300" y="418.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="18" fill="#1F1F1F" text-anchor="middle">open · read · write · fork · execve · mmap · ioctl · epoll · io_uring</text>
+<text x="1300" y="441.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="18" fill="#1F1F1F" text-anchor="middle">vDSO 快速路径 · 软中断陷入 (syscall / int 0x80)</text>
+<line x1="1300" y1="314" x2="1300" y2="336" stroke="#404040" stroke-width="3"/>
+<polygon points="1300,336 1291.8,321.0 1308.2,321.0" fill="#404040"/>
+<rect x="100" y="480" width="2400" height="1330" rx="16" fill="#F7F7F7" stroke="#404040" stroke-width="3"/>
+<text x="120" y="501.8" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="28" fill="#17365D" text-anchor="start">③ 内核核心 Kernel Core（内核态：Ring0 / EL1）</text>
+<rect x="140" y="570" width="1130" height="215" rx="12" fill="#FCE4D6" stroke="#C55A11" stroke-width="2.5"/>
+<text x="156" y="607.7" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="22" fill="#C55A11" text-anchor="start">进程与调度</text>
+<rect x="154" y="665" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="170" y="698.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">进程管理</text>
+<text x="1240" y="697.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">task_struct · fork/exit · 线程 · namespace</text>
+<rect x="154" y="723" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="170" y="756.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">调度器</text>
+<text x="1240" y="755.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">EEVDF(CFS) · 实时/Deadline · 负载均衡 · PREEMPT_RT</text>
+<rect x="1330" y="570" width="1130" height="215" rx="12" fill="#FFF2CC" stroke="#BF9000" stroke-width="2.5"/>
+<text x="1346" y="607.7" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="22" fill="#BF9000" text-anchor="start">内存管理</text>
+<rect x="1344" y="636" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="669.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">虚拟内存</text>
+<text x="2430" y="668.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">页表 · MMU · 缺页 · COW</text>
+<rect x="1344" y="694" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="727.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">物理内存</text>
+<text x="2430" y="726.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">伙伴系统 · slab/slub · CMA · HugePage</text>
+<rect x="1344" y="752" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="785.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">页缓存与回收</text>
+<text x="2430" y="784.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">page cache · swap/zram · KSM · OOM</text>
+<rect x="140" y="805" width="1130" height="215" rx="12" fill="#E2EFDA" stroke="#538135" stroke-width="2.5"/>
+<text x="156" y="842.7" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="22" fill="#538135" text-anchor="start">文件系统与存储</text>
+<rect x="154" y="871" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="170" y="904.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">VFS 抽象</text>
+<text x="1240" y="903.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">dentry · inode · file · super_block</text>
+<rect x="154" y="929" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="170" y="962.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">具体文件系统</text>
+<text x="1240" y="961.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">ext4 · xfs · btrfs · proc/sysfs · tmpfs</text>
+<rect x="154" y="987" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="170" y="1020.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">块层与 IO</text>
+<text x="1240" y="1019.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">bio · I/O 调度 · io_uring · DMA</text>
+<rect x="1330" y="805" width="1130" height="215" rx="12" fill="#DDEBF7" stroke="#2E75B6" stroke-width="2.5"/>
+<text x="1346" y="842.7" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="22" fill="#2E75B6" text-anchor="start">网络协议栈</text>
+<rect x="1344" y="871" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="904.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">网络分层</text>
+<text x="2430" y="903.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">socket · TCP/UDP · IP · 邻居子系统</text>
+<rect x="1344" y="929" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="962.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">转发与过滤</text>
+<text x="2430" y="961.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">netfilter/iptables · TC · 路由</text>
+<rect x="1344" y="987" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="1020.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">高速数据面</text>
+<text x="2430" y="1019.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">NAPI · XDP · eBPF · DPDK</text>
+<rect x="140" y="1040" width="1130" height="215" rx="12" fill="#E4DFEC" stroke="#7030A0" stroke-width="2.5"/>
+<text x="156" y="1077.7" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="22" fill="#7030A0" text-anchor="start">并发与通信</text>
+<rect x="154" y="1135" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="170" y="1168.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">进程间通信</text>
+<text x="1240" y="1167.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">管道 · 信号 · SysV · futex · socket</text>
+<rect x="154" y="1193" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="170" y="1226.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">同步机制</text>
+<text x="1240" y="1225.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">原子 · 自旋锁 · 互斥锁 · RCU · seqlock · 内存屏障</text>
+<rect x="1330" y="1040" width="1130" height="215" rx="12" fill="#FBE5D6" stroke="#C55A11" stroke-width="2.5"/>
+<text x="1346" y="1077.7" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="22" fill="#C55A11" text-anchor="start">中断与时间</text>
+<rect x="1344" y="1135" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="1168.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">中断子系统</text>
+<text x="2430" y="1167.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">上半部/下半部 · softirq · workqueue · threaded IRQ</text>
+<rect x="1344" y="1193" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="1226.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">时间管理</text>
+<text x="2430" y="1225.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">jiffies · hrtimer · clockevent · NO_HZ</text>
+<rect x="140" y="1275" width="1130" height="215" rx="12" fill="#D9E2F3" stroke="#1F4E79" stroke-width="2.5"/>
+<text x="156" y="1312.7" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="22" fill="#1F4E79" text-anchor="start">驱动与虚拟化</text>
+<rect x="154" y="1370" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="170" y="1403.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">设备驱动</text>
+<text x="1240" y="1402.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">字符/块/网络 · 驱动模型 · 设备树/ACPI · DMA</text>
+<rect x="154" y="1428" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="170" y="1461.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">虚拟化与容器</text>
+<text x="1240" y="1460.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">KVM · virtio · vfio · cgroup v2 · namespace</text>
+<rect x="1330" y="1275" width="1130" height="215" rx="12" fill="#EDEDED" stroke="#7F7F7F" stroke-width="2.5"/>
+<text x="1346" y="1312.7" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="22" fill="#7F7F7F" text-anchor="start">安全与电源</text>
+<rect x="1344" y="1370" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="1403.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">安全框架</text>
+<text x="2430" y="1402.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">LSM · SELinux/AppArmor · lockdown · 密钥环</text>
+<rect x="1344" y="1428" width="1102" height="48" rx="8" fill="#FFFFFF" stroke="#BFBFBF" stroke-width="1.5"/>
+<text x="1360" y="1461.3" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="21" fill="#1F1F1F" text-anchor="start">电源管理</text>
+<text x="2430" y="1460.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#404040" text-anchor="end">cpuidle · cpufreq · runtime PM · suspend</text>
+<rect x="140" y="1630" width="2320" height="170" rx="12" fill="#FBFBFB" stroke="#808080" stroke-width="2"/>
+<text x="160" y="1650.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="24" fill="#595959" text-anchor="start">横切关注点（贯穿所有子系统）</text>
+<rect x="160" y="1670" width="740" height="110" rx="12" fill="#E1F5F5" stroke="#00838F" stroke-width="2" stroke-dasharray="14 9"/>
+<text x="530" y="1723.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="24" fill="#1F1F1F" text-anchor="middle">内核初始化</text>
+<text x="530" y="1761.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#1F1F1F" text-anchor="middle">start_kernel → init 进程</text>
+<rect x="940" y="1670" width="740" height="110" rx="12" fill="#E1F5F5" stroke="#00838F" stroke-width="2" stroke-dasharray="14 9"/>
+<text x="1310" y="1723.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="24" fill="#1F1F1F" text-anchor="middle">调试与观测</text>
+<text x="1310" y="1761.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#1F1F1F" text-anchor="middle">printk · ftrace · kprobe · perf · eBPF/BTF · kgdb · KUnit</text>
+<rect x="1720" y="1670" width="740" height="110" rx="12" fill="#E1F5F5" stroke="#00838F" stroke-width="2" stroke-dasharray="14 9"/>
+<text x="2090" y="1723.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="24" fill="#1F1F1F" text-anchor="middle">构建与开发</text>
+<text x="2090" y="1761.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#1F1F1F" text-anchor="middle">Kconfig · Kbuild · LLVM/Clang · 编码规范</text>
+<line x1="1300" y1="454" x2="1300" y2="476" stroke="#404040" stroke-width="3"/>
+<polygon points="1300,476 1291.8,461.0 1308.2,461.0" fill="#404040"/>
+<line x1="2380" y1="1479" x2="2380" y2="1626" stroke="#404040" stroke-width="3" stroke-dasharray="14 9"/>
+<polygon points="2380,1626 2371.8,1611.0 2388.2,1611.0" fill="#404040"/>
+<rect x="100" y="1830" width="2400" height="140" rx="16" fill="#F7F9FB" stroke="#595959" stroke-width="3"/>
+<text x="120" y="1851.8" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="28" fill="#17365D" text-anchor="start">④ 体系结构层 arch/</text>
+<rect x="850" y="1870" width="900" height="80" rx="12" fill="#E2EFDA" stroke="#538135" stroke-width="2"/>
+<text x="1300" y="1908.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="24" fill="#1F1F1F" text-anchor="middle">x86 / ARM / RISC-V</text>
+<text x="1300" y="1936.0" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#1F1F1F" text-anchor="middle">启动汇编 · 页表/MMU · APIC/GIC · 原子与屏障实现</text>
+<line x1="1300" y1="1814" x2="1300" y2="1826" stroke="#404040" stroke-width="3"/>
+<polygon points="1300,1826 1291.8,1811.0 1308.2,1811.0" fill="#404040"/>
+<rect x="100" y="1990" width="2400" height="140" rx="16" fill="#F7F9FB" stroke="#595959" stroke-width="3"/>
+<text x="120" y="2011.8" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="28" fill="#17365D" text-anchor="start">⑤ 硬件层 Hardware</text>
+<rect x="850" y="2030" width="900" height="80" rx="12" fill="#D9D9D9" stroke="#595959" stroke-width="2"/>
+<text x="1300" y="2068.4" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="24" fill="#1F1F1F" text-anchor="middle">CPU · 内存 · 磁盘 · 网卡 · 外设</text>
+<text x="1300" y="2095.9" font-family="Microsoft YaHei, SimHei, sans-serif" font-size="17" fill="#1F1F1F" text-anchor="middle">中断控制器 · DMA · 总线 · 时钟</text>
+<line x1="1300" y1="1974" x2="1300" y2="1986" stroke="#404040" stroke-width="3"/>
+<polygon points="1300,1986 1291.8,1971.0 1308.2,1971.0" fill="#404040"/>
+</svg>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>🎨 Mermaid 实时渲染（联网自动加载）</h2>
+  <pre class="mermaid">
+%%{init: {&quot;theme&quot;: &quot;dark&quot;}}%%
+flowchart TB
+    subgraph USR[&quot;① 用户空间 User Space&quot;]
+        APP[&quot;应用程序 / 服务&lt;br/&gt;Apache · MySQL · GUI&quot;]
+        LIBC[&quot;标准 C 库&lt;br/&gt;glibc / musl&quot;]
+        SH[&quot;Shell 与系统工具&quot;]
+        RT[&quot;运行时&lt;br/&gt;JVM / 语言运行时 / 容器编排&quot;]
+    end
+
+    SCI[&quot;② 系统调用接口 SCI + vDSO&lt;br/&gt;open · read · write · fork · execve · mmap · ioctl · epoll · io_uring&quot;]
+
+    subgraph KERNEL[&quot;③ 内核核心 Kernel Core（Ring0 / EL1）&quot;]
+        subgraph PROC[&quot;进程与调度&quot;]
+            PM[&quot;进程管理&lt;br/&gt;task_struct · fork/exit · 线程 · namespace&quot;]
+            SCH[&quot;调度器&lt;br/&gt;EEVDF(CFS) · 实时/Deadline · 负载均衡 · PREEMPT_RT&quot;]
+        end
+        subgraph MEM[&quot;内存管理&quot;]
+            MM1[&quot;虚拟内存&lt;br/&gt;页表 · MMU · 缺页 · COW&quot;]
+            MM2[&quot;物理内存&lt;br/&gt;伙伴系统 · slab/slub · CMA · HugePage&quot;]
+            MM3[&quot;页缓存与回收&lt;br/&gt;page cache · swap/zram · KSM · OOM&quot;]
+        end
+        subgraph FST[&quot;文件系统与存储&quot;]
+            VFS[&quot;VFS 抽象&lt;br/&gt;dentry · inode · file · super_block&quot;]
+            FS2[&quot;具体文件系统&lt;br/&gt;ext4 · xfs · btrfs · proc/sysfs · tmpfs&quot;]
+            BIO[&quot;块层与 IO&lt;br/&gt;bio · I/O 调度 · io_uring · DMA&quot;]
+        end
+        subgraph NET[&quot;网络协议栈&quot;]
+            N1[&quot;网络分层&lt;br/&gt;socket · TCP/UDP · IP · 邻居子系统&quot;]
+            N2[&quot;转发与过滤&lt;br/&gt;netfilter/iptables · TC · 路由&quot;]
+            N3[&quot;高速数据面&lt;br/&gt;NAPI · XDP · eBPF · DPDK&quot;]
+        end
+        subgraph IPC_SYNC[&quot;并发与通信&quot;]
+            IPC[&quot;进程间通信&lt;br/&gt;管道 · 信号 · SysV · futex · socket&quot;]
+            SYNC[&quot;同步机制&lt;br/&gt;原子 · 自旋锁 · 互斥锁 · RCU · seqlock · 内存屏障&quot;]
+        end
+        subgraph IRQ_T[&quot;中断与时间&quot;]
+            IRQ[&quot;中断子系统&lt;br/&gt;上半部/下半部 · softirq · workqueue · threaded IRQ&quot;]
+            TIME[&quot;时间管理&lt;br/&gt;jiffies · hrtimer · clockevent · NO_HZ&quot;]
+        end
+        subgraph DRV_V[&quot;驱动与虚拟化&quot;]
+            DRV[&quot;设备驱动&lt;br/&gt;字符/块/网络 · 驱动模型 · 设备树/ACPI · DMA&quot;]
+            VM[&quot;虚拟化与容器&lt;br/&gt;KVM · virtio · vfio · cgroup v2 · namespace&quot;]
+        end
+        subgraph SEC_P[&quot;安全与电源&quot;]
+            SEC[&quot;安全框架&lt;br/&gt;LSM · SELinux/AppArmor · lockdown · 密钥环&quot;]
+            PWR[&quot;电源管理&lt;br/&gt;cpuidle · cpufreq · runtime PM · suspend&quot;]
+        end
+        subgraph XCUT[&quot;横切关注点&quot;]
+            INIT[&quot;内核初始化&lt;br/&gt;start_kernel → init&quot;]
+            DBG[&quot;调试与观测&lt;br/&gt;printk · ftrace · kprobe · perf · eBPF/BTF · kgdb · KUnit&quot;]
+            BLD[&quot;构建与开发&lt;br/&gt;Kconfig · Kbuild · LLVM/Clang · 编码规范&quot;]
+        end
+    end
+
+    subgraph ARCH[&quot;④ 体系结构层 arch/&quot;]
+        AR[&quot;x86 / ARM / RISC-V&lt;br/&gt;启动汇编 · 页表/MMU · APIC/GIC · 原子与屏障实现&quot;]
+    end
+
+    HW[&quot;⑤ 硬件层&lt;br/&gt;CPU · 内存 · 磁盘 · 网卡 · 外设 · DMA · 总线&quot;]
+
+    APP --&gt; LIBC
+    LIBC --&gt; SCI
+    SH -.-&gt; SCI
+    RT -.-&gt; SCI
+    SCI --&gt; KERNEL
+    KERNEL --&gt; AR
+    AR --&gt; HW
+    XCUT -.-&gt; PROC
+
+  </pre>
+</div>
+
+<footer>生成于 VS Code 工作台 · 配套文档：linux_kernel_structure.md（源码目录地图 / 学习路径 / 工具链）</footer>
+<script>
+(function(){
+  var stage = document.getElementById('stage');
+  var view = document.getElementById('view');
+  var SVG_W = 2600, SVG_H = 2160;
+  var scale = 1, tx = 0, ty = 0;
+  function apply(){ view.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')'; }
+  function zoomAt(mx, my, f){
+    var ns = Math.max(0.1, Math.min(8, scale * f));
+    tx = mx - (mx - tx) * (ns / scale);
+    ty = my - (my - ty) * (ns / scale);
+    scale = ns; apply();
+  }
+  window.zoomBy = function(f){ var r = stage.getBoundingClientRect(); zoomAt(r.width/2, r.height/2, f); };
+  window.setZoom = function(s){ var r = stage.getBoundingClientRect(); zoomAt(r.width/2, r.height/2, s/scale); };
+  window.fit = function(){
+    var r = stage.getBoundingClientRect();
+    var s = Math.min(r.width / SVG_W, r.height / SVG_H, 1);
+    scale = s; tx = (r.width - SVG_W * s) / 2; ty = (r.height - SVG_H * s) / 2; apply();
+  };
+  stage.addEventListener('wheel', function(e){
+    e.preventDefault();
+    var r = stage.getBoundingClientRect();
+    zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.15 : 1/1.15);
+  }, { passive: false });
+  var drag = null;
+  stage.addEventListener('mousedown', function(e){
+    drag = { x: e.clientX, y: e.clientY, tx: tx, ty: ty };
+    stage.classList.add('dragging'); e.preventDefault();
+  });
+  window.addEventListener('mousemove', function(e){
+    if (!drag) return;
+    tx = drag.tx + e.clientX - drag.x; ty = drag.ty + e.clientY - drag.y; apply();
+  });
+  window.addEventListener('mouseup', function(){ drag = null; stage.classList.remove('dragging'); });
+  window.fit();
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: "dark" });</script>
+</body>
+</html>
