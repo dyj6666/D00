@@ -64,7 +64,7 @@
 
 /*==================== 性能监视 ====================*/
 /* FPS/CPU 叠加显示：右上角小字，界面验收时开，量产可关 */
-#define LV_USE_PERF_MONITOR      1
+#define LV_USE_PERF_MONITOR      0      /* 关掉角落浮窗：优雅优先，FPS 在 SYSTEM 页可见 */
 #define LV_USE_MEM_MONITOR       0
 #define LV_USE_REFR_DEBUG        0
 
