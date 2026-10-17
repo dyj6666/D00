@@ -11,6 +11,7 @@ idf_component_register(
     SRCS
         "src/ui_port.c"
         "src/ui_dashboard.c"
+        "src/img_ldd.c"
     INCLUDE_DIRS
         "include"
     REQUIRES

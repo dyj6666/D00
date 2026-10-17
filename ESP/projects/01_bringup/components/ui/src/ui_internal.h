@@ -27,6 +27,12 @@ void ui_dashboard_request(int8_t dir);
 /** 当前页索引 */
 uint8_t ui_dashboard_page(void);
 
+/** 绝对跳页（页签/热区用） */
+void ui_dashboard_goto(uint8_t page);
+
+/** 瞬时跳页（无动画） */
+void ui_dashboard_show(uint8_t page);
+
 #ifdef __cplusplus
 }
 #endif

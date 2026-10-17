@@ -499,7 +499,7 @@ static void ui_debug_shot_cb(lv_timer_t *t)
     lv_timer_t *self = t;
     if (stage == 0) {
         if (ui_dashboard_page() == 0U) {
-            ui_dashboard_request(1);       /* HOME -> FACE */
+            ui_dashboard_show(1);          /* 瞬时切到 FACE（改 2 可抓 LDD 插画页） */
         }
         stage = 1;
         lv_timer_set_period(self, 2500);   /* 等唤醒动画跑完再抓，避免抓到闭眼帧 */
