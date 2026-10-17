@@ -1,16 +1,20 @@
 /* ================================================================
- * ui_dashboard.c —— 应用界面（320x240 精致仪表盘）
+ * ui_dashboard.c —— 应用界面（320x240 / 象牙白 + 香槟金 奢侈表盘风）
  *
- * 设计语言（目标：顶级优雅，而非"开发板的仪表盘"）：
- *   · 色彩：近黑底 + 单一香槟金强调色 + 冷蓝辅助；其余全是灰阶。
- *           颜色只用来标注"这是重点"，不参与装饰。
- *   · 结构：8px 网格对齐；主次靠字号与灰度分层，不靠色块。
- *   · 分隔：1px 细线（hairline）代替阴影与描边——既克制又不发光。
- *   · 层级：小号大写字母 + 字距（cap）作标签；大号数字作主角；单位弱化。
- *   · 动效：数值 320ms ease-out 补间；切页 OVER 滑动 260ms；页签下划线指示。
- *   · 性能：全程无 shadow / 无渐变 / 无实心大色块，绘制成本低于旧版。
+ * 设计语言（目标：奢华、尊贵、优雅；观感要"亮"，不能"暗"）：
+ *   · 底色：暖象牙白 #F7F1E6 —— 高端表盘/信纸质感，比冷黑更贵气也更亮；
+ *   · 强调：香槟金 #B08A2E（仅用于强调与刻度），数据辅色用深祖母绿 #2E6B5A；
+ *   · 文字：浓咖啡 #2A2118 作主色（高对比、显精致），沙棕 #A08C6B 作标签；
+ *   · 结构：内嵌 1px 沙金细框（像装裱的画框/表圈）＋ 细线分区，不用阴影；
+ *   · 层级：40px 时间作主角，28px 数值，12px 大写+字距作标签（cap）；
+ *   · 数值面板：米白面板 + 细沙边框，把三项指标"装"起来，视觉更安定；
+ *   · 性能：全部纯色填充，无阴影/无渐变/无大字号字距慢路径，整屏仍在总线极限。
  *
- * 页面：HOME（时间 + 三项指标）/ MOTION（运动曲线 + 数值）/ SYSTEM（内存 + 系统）
+ * 数据稳定性（本次重点修）：
+ *   ① 滑动平均（EMA）压掉传感器噪声；
+ *   ② 死区（滞回）——只有变化超过阈值才更新，避免末位来回跳；
+ *   ③ 显示值没变就不刷新字符串（减少重绘）；
+ *   ④ 补间从"当前显示值"出发（旧版每次从 0 开始，视觉上就是在乱跳）。
  * ================================================================ */
 #include "ui/ui.h"
 #include "ui_internal.h"
@@ -27,26 +31,29 @@
 #include "esp_log.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *TAG = "UI/UI";
 
-/* ---------------- 调色板（唯一事实源） ---------------- */
-#define C_BG        lv_color_hex(0x0B0E13)      /* 底：近黑带一点冷 */
-#define C_LINE      lv_color_hex(0x1E2530)      /* 细线 / 轨道 */
-#define C_TEXT      lv_color_hex(0xE9EEF5)      /* 主文字：近白 */
-#define C_SUB       lv_color_hex(0x8C99AB)      /* 次文字 */
-#define C_FAINT     lv_color_hex(0x59657A)      /* 标签 / 单位 */
-#define C_ACC       lv_color_hex(0xD9B98C)      /* 主强调：香槟金 */
-#define C_ACC2      lv_color_hex(0x6FA8FF)      /* 辅助：冷蓝（仅曲线） */
-#define C_OK        lv_color_hex(0x7BE0B0)      /* 正常 */
-#define C_WARN      lv_color_hex(0xE8A86B)      /* 警告 */
-#define C_ERR       lv_color_hex(0xE8738C)      /* 错误 */
+/* ---------------- 调色板（象牙白 + 香槟金） ---------------- */
+#define C_BG        lv_color_hex(0xF7F1E6)      /* 暖象牙白底 */
+#define C_PANEL     lv_color_hex(0xFFFCF5)      /* 面板：比底色更亮一点 */
+#define C_FRAME     lv_color_hex(0xDCCBA6)      /* 沙金细框 / 分区线 */
+#define C_TEXT      lv_color_hex(0x2A2118)      /* 主文字：浓咖啡 */
+#define C_SUB       lv_color_hex(0x6B5B45)      /* 次文字 */
+#define C_FAINT     lv_color_hex(0xA08C6B)      /* 标签 / 单位：沙棕 */
+#define C_GOLD      lv_color_hex(0xB08A2E)      /* 香槟金：强调 */
+#define C_EMER      lv_color_hex(0x2E6B5A)      /* 祖母绿：数据辅助 */
+#define C_TERRA     lv_color_hex(0xA8523A)      /* 陶土红：第三路数据 */
+#define C_OK        lv_color_hex(0x3E8B63)
+#define C_WARN      lv_color_hex(0xB07A2A)
+#define C_ERR       lv_color_hex(0xA8452F)
 
 #define PAGE_COUNT  3
-#define TAB_H       32
-#define TAB_Y       (BSP_LCD_HEIGHT - TAB_H)
-#define PAD         16
+#define TAB_Y       204
+#define TAB_H       (BSP_LCD_HEIGHT - TAB_Y)
+#define PAD         20
 #define CONTENT_W   (BSP_LCD_WIDTH - PAD * 2)
 
 /* ---------------- 状态 ---------------- */
@@ -62,7 +69,7 @@ static lv_obj_t *s_tab_und[PAGE_COUNT][PAGE_COUNT];
 static lv_obj_t *s_lbl_time;
 static lv_obj_t *s_lbl_date;
 static lv_obj_t *s_val_temp;
-static lv_obj_t *s_val_light;
+static lv_obj_t *s_val_lux;
 static lv_obj_t *s_val_motion;
 static lv_obj_t *s_dot_motion;
 
@@ -80,38 +87,41 @@ static lv_obj_t *s_val_ps;
 static lv_obj_t *s_val_fps;
 static lv_obj_t *s_val_mod;
 
-/* 前向声明 */
 static void nav_timer_cb(lv_timer_t *t);
 
 /* ================================================================
  *                        基础绘制件
  * ================================================================ */
 
-/** 透明容器（只做布局锚点/点击热区，不参与视觉） */
-static lv_obj_t *mk_box(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
-                        lv_coord_t w, lv_coord_t h)
+/** 基础容器（可控底色/边框/圆角；透明传 LV_OPA_TRANSP） */
+static lv_obj_t *mk_obj(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
+                        lv_coord_t w, lv_coord_t h, lv_color_t bg, lv_opa_t opa,
+                        lv_color_t border, lv_coord_t border_w, lv_coord_t radius)
 {
     lv_obj_t *o = lv_obj_create(parent);
     lv_obj_set_size(o, w, h);
     lv_obj_align(o, LV_ALIGN_TOP_LEFT, x, y);
     lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, LV_PART_MAIN);
-    lv_obj_set_style_border_width(o, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(o, bg, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(o, opa, LV_PART_MAIN);
+    lv_obj_set_style_radius(o, radius, LV_PART_MAIN);
     lv_obj_set_style_pad_all(o, 0, LV_PART_MAIN);
+    lv_obj_set_style_border_color(o, border, LV_PART_MAIN);
+    lv_obj_set_style_border_width(o, border_w, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(o, 0, LV_PART_MAIN);
     return o;
 }
 
-/** 1px 细线：替代阴影与描边，克制且不发光 */
-static lv_obj_t *mk_hairline(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w)
+/** 细线（分隔/刻度） */
+static void mk_rule(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t w,
+                    lv_color_t color)
 {
-    lv_obj_t *o = mk_box(parent, x, y, w, 1);
-    lv_obj_set_style_bg_color(o, C_LINE, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_MAIN);
-    return o;
+    lv_obj_t *o = mk_obj(parent, x, y, w, 1, color, LV_OPA_COVER, color, 0, 0);
+    BSP_UNUSED(o);
 }
 
-/** 文本标签 */
+/** 文本 */
 static lv_obj_t *mk_text(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
                          const lv_font_t *font, lv_color_t color, const char *txt)
 {
@@ -123,7 +133,7 @@ static lv_obj_t *mk_text(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
     return l;
 }
 
-/** 小号大写标签 + 字距（"精致感"最廉价也最有效的来源） */
+/** 小号大写标签 + 字距（仅小字号用；大字号加字距会走进排版慢路径） */
 static lv_obj_t *mk_cap(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, const char *txt)
 {
     lv_obj_t *l = mk_text(parent, x, y, &lv_font_montserrat_12, C_FAINT, txt);
@@ -131,17 +141,14 @@ static lv_obj_t *mk_cap(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, const char
     return l;
 }
 
-/** 6px 状态圆点 */
-static lv_obj_t *mk_dot(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color)
+/** 小圆点（状态指示 / 金色装饰） */
+static lv_obj_t *mk_dot(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_coord_t d,
+                        lv_color_t color)
 {
-    lv_obj_t *o = mk_box(parent, x, y, 6, 6);
-    lv_obj_set_style_radius(o, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(o, color, LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, LV_PART_MAIN);
-    return o;
+    return mk_obj(parent, x, y, d, d, color, LV_OPA_COVER, color, 0, (lv_coord_t)(d / 2));
 }
 
-/** 4px 细轨道（无夸张圆角） */
+/** 细轨道（4px） */
 static lv_obj_t *mk_bar(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
                         lv_coord_t w, lv_color_t color)
 {
@@ -151,15 +158,18 @@ static lv_obj_t *mk_bar(lv_obj_t *parent, lv_coord_t x, lv_coord_t y,
     lv_bar_set_range(b, 0, 100);
     lv_bar_set_value(b, 0, LV_ANIM_OFF);
     lv_obj_clear_flag(b, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(b, C_LINE, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(b, C_FRAME, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(b, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(b, 2, LV_PART_MAIN);
     lv_obj_set_style_bg_color(b, color, LV_PART_INDICATOR);
     lv_obj_set_style_radius(b, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_shadow_width(b, 0, LV_PART_MAIN);
     return b;
 }
 
-/* ---------------- 数值补间：让数字"滑"到新值而不是跳变 ---------------- */
+/* ================================================================
+ *                     数值补间（从当前值出发）
+ * ================================================================ */
 typedef struct {
     lv_obj_t   *label;
     const char *suffix;
@@ -183,20 +193,34 @@ static void num_tween_cb(void *var, int32_t v)
     num_tween_apply((num_tween_t *)var, v);
 }
 
-static void num_tween(lv_obj_t *label, int32_t from, int32_t to,
-                      uint8_t decimals, const char *suffix, uint32_t ms)
+/**
+ * @brief  个位数显（关键：from 传"当前显示值"，不再每次从 0 开始）
+ * @param  shown  调用者的"当前显示值"（单位同 to；<0 表示首帧）
+ */
+static void num_set(lv_obj_t *label, int32_t *shown, int32_t to,
+                    uint8_t decimals, const char *suffix, uint32_t ms)
 {
     static num_tween_t s_slots[4];
     static uint8_t s_slot = 0;
 
+    if (shown != NULL && *shown == to) {
+        return;                       /* 显示值没变：不刷新、不重绘 */
+    }
+    int32_t from = (shown != NULL && *shown >= 0) ? *shown : to;
+    if (shown != NULL) {
+        *shown = to;
+    }
+
     num_tween_t *t = &s_slots[s_slot];
     s_slot = (uint8_t)((s_slot + 1U) % 4U);
-
     t->label    = label;
     t->suffix   = suffix;
     t->decimals = decimals;
 
-    num_tween_apply(t, to);          /* 先落终值：动画只做视觉修饰 */
+    if (from == to) {
+        num_tween_apply(t, to);
+        return;
+    }
 
     lv_anim_t a;
     lv_anim_init(&a);
@@ -206,6 +230,7 @@ static void num_tween(lv_obj_t *label, int32_t from, int32_t to,
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_set_exec_cb(&a, num_tween_cb);
     lv_anim_start(&a);
+    num_tween_apply(t, to);           /* 终值先落地，动画只做视觉修饰 */
 }
 
 /* ================================================================
@@ -213,11 +238,17 @@ static void num_tween(lv_obj_t *label, int32_t from, int32_t to,
  * ================================================================ */
 static void chrome_build(lv_obj_t *scr)
 {
-    mk_dot(scr, PAD, 15, C_ACC);                          /* 一点强调色，克制 */
-    lv_obj_t *brand = mk_text(scr, PAD + 12, 9, &lv_font_montserrat_12, C_SUB, "AI BOX");
+    /* 内嵌画框：像装裱的画/表圈，是"贵气"最有效的结构性细节 */
+    lv_obj_t *frame = mk_obj(scr, 6, 6, BSP_LCD_WIDTH - 12, BSP_LCD_HEIGHT - 12,
+                             C_BG, LV_OPA_TRANSP, C_FRAME, 1, 14);
+    BSP_UNUSED(frame);
+
+    mk_dot(scr, PAD, 15, 5, C_GOLD);
+    lv_obj_t *brand = mk_text(scr, PAD + 10, 9, &lv_font_montserrat_12, C_SUB, "AI BOX");
     lv_obj_set_style_text_letter_space(brand, 2, LV_PART_MAIN);
 
-    mk_hairline(scr, 0, TAB_Y, BSP_LCD_WIDTH);            /* 分页区上边线 */
+    mk_rule(scr, PAD, 30, CONTENT_W, C_FRAME);       /* 页眉下的沙金细线 */
+    mk_rule(scr, 0, TAB_Y - 1, BSP_LCD_WIDTH, C_FRAME);
 }
 
 static void tab_click_cb(lv_event_t *e)
@@ -239,26 +270,22 @@ static void tabs_build(lv_obj_t *scr, uint8_t self)
     };
 
     for (uint8_t i = 0; i < PAGE_COUNT; i++) {
-        /* 点击热区：整列可点，不需要可见底框 */
-        lv_obj_t *hit = mk_box(scr, (lv_coord_t)(i * step), TAB_Y, step, TAB_H);
+        lv_obj_t *hit = mk_obj(scr, (lv_coord_t)(i * step), TAB_Y, step, TAB_H,
+                               C_BG, LV_OPA_TRANSP, C_BG, 0, 0);
         lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(hit, tab_click_cb, LV_EVENT_CLICKED, (void *)(lv_uintptr_t)i);
 
         lv_obj_t *l = lv_label_create(scr);
         lv_label_set_text(l, names[i]);
         lv_obj_set_style_text_font(l, &lv_font_montserrat_12, LV_PART_MAIN);
-
+        lv_obj_set_style_text_letter_space(l, 1, LV_PART_MAIN);
         lv_obj_set_style_text_color(l, (i == self) ? C_TEXT : C_FAINT, LV_PART_MAIN);
         lv_obj_align(l, LV_ALIGN_TOP_MID,
-                     (lv_coord_t)(centers[i] - BSP_LCD_WIDTH / 2), TAB_Y + 8);
+                     (lv_coord_t)(centers[i] - BSP_LCD_WIDTH / 2), TAB_Y + 7);
 
-        /* 活动项下划线（2px） */
-        lv_obj_t *u = mk_box(scr, (lv_coord_t)(centers[i] - 14), TAB_Y + 23, 28, 2);
-        lv_obj_set_style_radius(u, 1, LV_PART_MAIN);
-        if (i == self) {
-            lv_obj_set_style_bg_color(u, C_ACC, LV_PART_MAIN);
-            lv_obj_set_style_bg_opa(u, LV_OPA_COVER, LV_PART_MAIN);
-        }
+        lv_obj_t *u = mk_obj(scr, (lv_coord_t)(centers[i] - 13), TAB_Y + 22, 26, 2,
+                             (i == self) ? C_GOLD : C_BG,
+                             (i == self) ? LV_OPA_COVER : LV_OPA_TRANSP, C_GOLD, 0, 1);
 
         s_tab_lbl[self][i] = l;
         s_tab_und[self][i] = u;
@@ -274,24 +301,31 @@ static void page_home_build(void)
 
     chrome_build(scr);
 
-    /* 主角：时间（大字号 + 微字距） */
-    s_lbl_time = mk_text(scr, PAD, 34, &lv_font_montserrat_40, C_TEXT, "--:--");
+    /* 主角：时间（浓咖啡大字，象牙底上对比极强） */
+    s_lbl_time = mk_text(scr, PAD, 36, &lv_font_montserrat_40, C_TEXT, "--:--");
+    s_lbl_date = mk_text(scr, PAD + 2, 84, &lv_font_montserrat_12, C_FAINT, "---- - -- - --");
 
-    s_lbl_date = mk_text(scr, PAD + 2, 82, &lv_font_montserrat_12, C_FAINT, "---- - -- - --");
+    /* 数值面板：米白底 + 细沙边框，把三项指标"装"起来 */
+    lv_obj_t *panel = mk_obj(scr, PAD, 108, CONTENT_W, 88, C_PANEL, LV_OPA_COVER, C_FRAME, 1, 12);
+    BSP_UNUSED(panel);
 
-    mk_hairline(scr, PAD, 110, CONTENT_W);
+    /* 三栏分隔（竖细线，比空着更有秩序感） */
+    mk_rule(scr, PAD + 90, 118, 1, C_FRAME);
+    mk_rule(scr, PAD + 180, 118, 1, C_FRAME);
 
-    /* 三项指标：CAP 标签 / 大数值 / 弱化单位 */
-    mk_cap(scr, PAD, 124, "TEMP");
-    s_val_temp = mk_text(scr, PAD, 140, &lv_font_montserrat_28, C_ACC, "--.-");
-    mk_text(scr, PAD + 70, 152, &lv_font_montserrat_12, C_FAINT, "C");
+    /* TEMP：金数值 + 沙棕单位 */
+    mk_cap(scr, PAD + 14, 118, "TEMP");
+    s_val_temp = mk_text(scr, PAD + 14, 134, &lv_font_montserrat_28, C_TEXT, "--.-");
+    mk_text(scr, PAD + 76, 148, &lv_font_montserrat_12, C_GOLD, "C");
 
-    mk_cap(scr, PAD + 104, 124, "LUX");
-    s_val_light = mk_text(scr, PAD + 104, 140, &lv_font_montserrat_28, C_TEXT, "----");
+    /* LUX */
+    mk_cap(scr, PAD + 104, 118, "LUX");
+    s_val_lux = mk_text(scr, PAD + 104, 134, &lv_font_montserrat_28, C_TEXT, "----");
 
-    mk_cap(scr, PAD + 208, 124, "MOTION");
-    s_dot_motion = mk_dot(scr, PAD + 208, 145, C_OK);
-    s_val_motion = mk_text(scr, PAD + 208, 157, &lv_font_montserrat_14, C_SUB, "steady");
+    /* MOTION：状态点 + 文字 */
+    mk_cap(scr, PAD + 194, 118, "MOTION");
+    s_dot_motion = mk_dot(scr, PAD + 194, 140, 7, C_OK);
+    s_val_motion = mk_text(scr, PAD + 194, 152, &lv_font_montserrat_14, C_SUB, "steady");
 
     tabs_build(scr, 0);
 }
@@ -304,35 +338,35 @@ static void page_motion_build(void)
     lv_obj_t *scr = s_scr[1];
 
     chrome_build(scr);
-    mk_cap(scr, PAD, 32, "MOTION VECTOR");
+    mk_cap(scr, PAD, 40, "MOTION VECTOR");
 
     s_chart = lv_chart_create(scr);
-    lv_obj_set_size(s_chart, CONTENT_W, 116);
-    lv_obj_align(s_chart, LV_ALIGN_TOP_LEFT, PAD, 50);
+    lv_obj_set_size(s_chart, CONTENT_W, 110);
+    lv_obj_align(s_chart, LV_ALIGN_TOP_LEFT, PAD, 58);
     lv_obj_clear_flag(s_chart, LV_OBJ_FLAG_SCROLLABLE);
     lv_chart_set_type(s_chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(s_chart, 64);
     lv_chart_set_range(s_chart, LV_CHART_AXIS_PRIMARY_Y, -200, 200);
     lv_chart_set_div_line_count(s_chart, 4, 8);
-    /* 透明底 + 极淡网格：曲线浮在底色上，最干净的画法 */
+    /* 透明底 + 沙金极淡网格：曲线像画在纸上 */
     lv_obj_set_style_bg_opa(s_chart, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(s_chart, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(s_chart, 0, LV_PART_MAIN);
-    lv_obj_set_style_line_color(s_chart, C_LINE, LV_PART_MAIN);      /* 网格线 */
-    lv_obj_set_style_line_width(s_chart, 2, LV_PART_ITEMS);           /* 曲线粗细 */
-    lv_obj_set_style_size(s_chart, 0, LV_PART_INDICATOR);             /* 不画数据点 */
+    lv_obj_set_style_line_color(s_chart, C_FRAME, LV_PART_MAIN);
+    lv_obj_set_style_line_width(s_chart, 2, LV_PART_ITEMS);
+    lv_obj_set_style_size(s_chart, 0, LV_PART_INDICATOR);
 
-    s_ser[0] = lv_chart_add_series(s_chart, C_ACC2, LV_CHART_AXIS_PRIMARY_Y);
-    s_ser[1] = lv_chart_add_series(s_chart, C_OK,   LV_CHART_AXIS_PRIMARY_Y);
-    s_ser[2] = lv_chart_add_series(s_chart, C_ACC,  LV_CHART_AXIS_PRIMARY_Y);
+    s_ser[0] = lv_chart_add_series(s_chart, C_EMER,  LV_CHART_AXIS_PRIMARY_Y);
+    s_ser[1] = lv_chart_add_series(s_chart, C_GOLD,  LV_CHART_AXIS_PRIMARY_Y);
+    s_ser[2] = lv_chart_add_series(s_chart, C_TERRA, LV_CHART_AXIS_PRIMARY_Y);
 
-    mk_hairline(scr, PAD, 172, CONTENT_W);
+    mk_rule(scr, PAD, 174, CONTENT_W, C_FRAME);
 
-    mk_cap(scr, PAD, 180, "ACC G");
+    mk_cap(scr, PAD, 182, "ACC G");
     s_val_acc = mk_text(scr, PAD, 194, &lv_font_montserrat_14, C_SUB, "--  --  --");
 
-    mk_cap(scr, PAD + 168, 180, "GYRO DPS");
-    s_val_gyro = mk_text(scr, PAD + 168, 194, &lv_font_montserrat_14, C_SUB, "--  --  --");
+    mk_cap(scr, PAD + 160, 182, "GYRO DPS");
+    s_val_gyro = mk_text(scr, PAD + 160, 194, &lv_font_montserrat_14, C_SUB, "--  --  --");
 
     tabs_build(scr, 1);
 }
@@ -346,27 +380,25 @@ static void page_system_build(void)
     const lv_coord_t val_x = PAD + CONTENT_W - 150;
 
     chrome_build(scr);
-    mk_cap(scr, PAD, 32, "MEMORY");
+    mk_cap(scr, PAD, 40, "MEMORY");
 
-    /* INTERNAL RAM：左标签 / 右对齐数值 / 下面细轨道 */
-    mk_text(scr, PAD, 50, &lv_font_montserrat_12, C_SUB, "Internal");
-    s_val_ram = mk_text(scr, val_x, 50, &lv_font_montserrat_12, C_FAINT, "--");
+    mk_text(scr, PAD, 58, &lv_font_montserrat_12, C_SUB, "Internal");
+    s_val_ram = mk_text(scr, val_x, 58, &lv_font_montserrat_12, C_FAINT, "--");
     lv_obj_set_style_width(s_val_ram, 150, LV_PART_MAIN);
     lv_obj_set_style_text_align(s_val_ram, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    s_bar_ram = mk_bar(scr, PAD, 68, CONTENT_W, C_ACC);
+    s_bar_ram = mk_bar(scr, PAD, 76, CONTENT_W, C_GOLD);
 
-    /* PSRAM */
-    mk_text(scr, PAD, 84, &lv_font_montserrat_12, C_SUB, "PSRAM");
-    s_val_ps = mk_text(scr, val_x, 84, &lv_font_montserrat_12, C_FAINT, "--");
+    mk_text(scr, PAD, 92, &lv_font_montserrat_12, C_SUB, "PSRAM");
+    s_val_ps = mk_text(scr, val_x, 92, &lv_font_montserrat_12, C_FAINT, "--");
     lv_obj_set_style_width(s_val_ps, 150, LV_PART_MAIN);
     lv_obj_set_style_text_align(s_val_ps, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
-    s_bar_ps = mk_bar(scr, PAD, 102, CONTENT_W, C_ACC2);
+    s_bar_ps = mk_bar(scr, PAD, 110, CONTENT_W, C_EMER);
 
-    mk_hairline(scr, PAD, 120, CONTENT_W);
+    mk_rule(scr, PAD, 128, CONTENT_W, C_FRAME);
 
-    mk_cap(scr, PAD, 128, "SYSTEM");
-    s_val_fps = mk_text(scr, PAD, 144, &lv_font_montserrat_14, C_SUB, "fps --");
-    s_val_mod = mk_text(scr, PAD, 166, &lv_font_montserrat_12, C_FAINT, "--");
+    mk_cap(scr, PAD, 136, "SYSTEM");
+    s_val_fps = mk_text(scr, PAD, 152, &lv_font_montserrat_14, C_SUB, "fps --");
+    s_val_mod = mk_text(scr, PAD, 174, &lv_font_montserrat_12, C_FAINT, "--");
     lv_obj_set_style_width(s_val_mod, CONTENT_W, LV_PART_MAIN);
     lv_label_set_long_mode(s_val_mod, LV_LABEL_LONG_WRAP);
 
@@ -374,42 +406,113 @@ static void page_system_build(void)
 }
 
 /* ================================================================
- *                        数据刷新
+ *                        数据刷新（含平滑与死区）
  * ================================================================ */
+#define TEMP_EMA_ALPHA      0.12f    /* 温度：慢跟随（时间常数约 2s） */
+#define TEMP_DEADBAND       0.25f    /* 温度死区：0.25℃ 内的抖动不显示（末位不跳） */
+#define LUX_EMA_ALPHA       0.12f    /* 光照：更慢跟随，抗闪 */
+#define LUX_DEADBAND_REL    0.04f    /* 光照死区：变化小于 4% 不更新 */
+
+static float   s_temp_f  = 0.0f;
+static int32_t s_temp_shown = -1;    /* 当前显示值（0.1℃） */
+static float   s_lux_f   = 0.0f;
+static int32_t s_lux_shown = -1;
+static bool    s_smooth_init = false;
+
 static void home_timer_cb(lv_timer_t *t)
 {
     BSP_UNUSED(t);
 
+    /* ---- 时间 ---- */
     bsp_datetime_t dt;
     if (bsp_rtc_get(&dt) == ESP_OK) {
-        lv_label_set_text_fmt(s_lbl_time, "%02u:%02u", dt.hour, dt.minute);
-        lv_label_set_text_fmt(s_lbl_date, "%04u - %02u - %02u", dt.year, dt.month, dt.day);
+        static uint8_t last_min = 0xFFU;
+        static uint16_t last_day = 0xFFFFU;
+        uint16_t day = (uint16_t)(dt.year * 1000U + dt.month * 40U + dt.day);
+        if (dt.minute != last_min) {
+            last_min = dt.minute;
+            lv_label_set_text_fmt(s_lbl_time, "%02u:%02u", dt.hour, dt.minute);
+        }
+        if (day != last_day) {
+            last_day = day;
+            lv_label_set_text_fmt(s_lbl_date, "%04u - %02u - %02u", dt.year, dt.month, dt.day);
+        }
     }
 
+    /* ---- 温度：EMA + 死区 + 只在变化时补间 ---- */
     float c = 0.0f;
     if (bsp_temperature_read(&c) == ESP_OK) {
-        int32_t tenths = (int32_t)(c * 10.0f);
+        if (!s_smooth_init) {
+            s_temp_f = c;
+        } else {
+            s_temp_f += (c - s_temp_f) * TEMP_EMA_ALPHA;
+        }
+        int32_t tenths = (int32_t)(s_temp_f * 10.0f + ((s_temp_f >= 0.0f) ? 0.5f : -0.5f));
         if (tenths < 0) {
             tenths = 0;
         } else if (tenths > 900) {
             tenths = 900;
         }
-        num_tween(s_val_temp, 0, tenths, 1, "", 320);
+        /* 死区：与已显示值差不到 0.15℃ 就当没变，避免末位来回跳 */
+        if ((s_temp_shown < 0) ||
+            (abs(tenths - s_temp_shown) >= (int32_t)(TEMP_DEADBAND * 10.0f))) {
+            num_set(s_val_temp, &s_temp_shown, tenths, 1, "", 300);
+        }
     }
 
+    /* ---- 光照：EMA + 相对死区 + 量化到 10 ---- */
     uint16_t als = 0;
     if (bsp_light_read_als(&als) == ESP_OK) {
-        num_tween(s_val_light, 0, (int32_t)(als > 9999U ? 9999U : als), 0, "", 320);
+        if (!s_smooth_init) {
+            s_lux_f = (float)als;
+        } else {
+            s_lux_f += ((float)als - s_lux_f) * LUX_EMA_ALPHA;
+        }
+        /* 量化到 10，进一步压掉末位跳动 */
+        int32_t lux = (int32_t)((s_lux_f + 5.0f) / 10.0f) * 10;
+        if (lux < 0) {
+            lux = 0;
+        } else if (lux > 99990) {
+            lux = 99990;
+        }
+        bool changed = (s_lux_shown < 0) ||
+                       (abs(lux - s_lux_shown) >=
+                        (int32_t)((float)(s_lux_shown > 0 ? s_lux_shown : 10) * LUX_DEADBAND_REL));
+        if (changed) {
+            num_set(s_val_lux, &s_lux_shown, lux, 0, "", 300);
+        }
     }
+    s_smooth_init = true;
 
+    /* ---- 姿态状态：加滞回，避免临界点来回闪 ---- */
     bsp_imu_data_t imu;
     bool ok = (bsp_imu_read(&imu) == ESP_OK);
     float mag2 = ok ? (imu.acc_g.x * imu.acc_g.x + imu.acc_g.y * imu.acc_g.y +
                        imu.acc_g.z * imu.acc_g.z) : 0.0f;
-    bool moving = ok && ((mag2 > 1.35f) || (mag2 < 0.65f));
-    lv_obj_set_style_bg_color(s_dot_motion, ok ? (moving ? C_WARN : C_OK) : C_ERR, LV_PART_MAIN);
-    lv_label_set_text(s_val_motion, !ok ? "n/a" : (moving ? "moving" : "steady"));
-    lv_obj_set_style_text_color(s_val_motion, ok ? C_SUB : C_ERR, LV_PART_MAIN);
+    static bool last_moving = false;
+    bool moving = last_moving;
+    if (ok) {
+        if (mag2 > 1.45f) {
+            moving = true;
+        } else if (mag2 < 0.75f) {
+            moving = true;
+        } else if (mag2 > 0.85f && mag2 < 1.25f) {
+            moving = false;                       /* 只有明显回到静止区才转回 */
+        }
+        last_moving = moving;
+    }
+    /* 只有"状态"真的变了才刷：状态灯与文字都按显示值做差分 */
+    static int8_t last_state = -1;              /* -1 未初始化；0 静止；1 运动；2 不可用 */
+    int8_t state = !ok ? 2 : (moving ? 1 : 0);
+    if (state != last_state) {
+        last_state = state;
+        lv_obj_set_style_bg_color(s_dot_motion,
+                                  (state == 2) ? C_ERR : (state == 1) ? C_WARN : C_OK,
+                                  LV_PART_MAIN);
+        lv_label_set_text(s_val_motion,
+                          (state == 2) ? "n/a" : (state == 1) ? "moving" : "steady");
+        lv_obj_set_style_text_color(s_val_motion, (state == 2) ? C_ERR : C_SUB, LV_PART_MAIN);
+    }
 }
 
 static void motion_timer_cb(lv_timer_t *t)
@@ -485,7 +588,7 @@ static void sync_tabs(void)
             bool active = (i == s_page);
             lv_obj_set_style_text_color(s_tab_lbl[p][i], active ? C_TEXT : C_FAINT, LV_PART_MAIN);
             if (s_tab_und[p][i] != NULL) {
-                lv_obj_set_style_bg_color(s_tab_und[p][i], active ? C_ACC : C_BG, LV_PART_MAIN);
+                lv_obj_set_style_bg_color(s_tab_und[p][i], active ? C_GOLD : C_BG, LV_PART_MAIN);
                 lv_obj_set_style_bg_opa(s_tab_und[p][i],
                                         active ? LV_OPA_COVER : LV_OPA_TRANSP, LV_PART_MAIN);
             }
@@ -520,7 +623,7 @@ void ui_dashboard_build(void)
     lv_timer_create(system_timer_cb, 1000, NULL);
     lv_timer_create(nav_timer_cb, 40, NULL);
 
-    ESP_LOGI(TAG, "dashboard built: %d pages (elegant dark)", PAGE_COUNT);
+    ESP_LOGI(TAG, "dashboard built: %d pages (ivory + champagne gold)", PAGE_COUNT);
 }
 
 void ui_dashboard_switch(int8_t dir)
@@ -539,7 +642,7 @@ void ui_dashboard_switch(int8_t dir)
     sync_tabs();
     lv_scr_load_anim(s_scr[s_page],
                      (dir > 0) ? LV_SCR_LOAD_ANIM_OVER_LEFT : LV_SCR_LOAD_ANIM_OVER_RIGHT,
-                     260, 0, false);
+                     240, 0, false);
 }
 
 void ui_dashboard_request(int8_t dir)
