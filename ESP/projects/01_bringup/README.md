@@ -426,3 +426,24 @@ components/ui/            端口层 + 应用界面
 | UI_BUF_LINES（ui_port.c） | 60 行 | 加大可减少分块数，但已实测无收益（瓶颈在渲染） |
 | CONFIG_SPIRAM_MEMTEST | y | 关闭可省 ~0.46s 启动时间 |
 | LV_USE_PERF_MONITOR（lv_conf.h） | 1 | 量产可关，省一点 CPU |
+
+### 11.6 性能账本（15MHz i80 / 320x240，真机实测）
+
+| 基准 | 数值 | 含义 |
+| --- | --- | --- |
+| 总线天花板 | 10 ms/帧 → 100 fps | 8080 8bit@15MHz 的物理极限 |
+| 框架地板 | 10 ms/帧 → 100 fps | 极简页面整屏重绘 = 总线时间，**框架零开销** |
+| 本仪表盘整屏重绘 | 17 ms/帧 → 58 fps | 瓶颈=渲染 16ms（flush_cb 实测 0ms） |
+| 局部刷新 | 单块 38.4KB ≈ 2.6ms | 时间/温度/光照 250ms 更新，**已达天花板** |
+
+上电自动打印（UI_STARTUP_BENCH 可关）：
+`
+PERF bus-only full frame : 10 ms -> 100 fps (hard ceiling)
+PERF lvgl full redraw   : 17 ms -> 58 fps
+PERF breakdown          : flush_cb 0 ms (4 calls/frame) + render 16 ms
+PERF plain screen       : 10 ms -> 100 fps (framework floor)
+PERF widget cost         : big-label(+0 ms) arc(+0 ms) over plain 10 ms
+`
+
+**结论**：实时交互（局部刷新）已在总线极限；整屏动效 58fps。
+再往上需要牺牲视觉精致度（去圆角/渐变）或超规格总线（20MHz）。

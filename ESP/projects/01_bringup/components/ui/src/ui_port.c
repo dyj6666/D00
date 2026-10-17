@@ -47,6 +47,7 @@ static const char *TAG = "UI";
 #define UI_TASK_STACK       (12 * 1024)
 #define UI_TASK_PRIO        5
 #define UI_TASK_CORE        1                           /* UI 独占 core1 */
+#define UI_STARTUP_BENCH    1                           /* 上电跑一次性能基准（回归对比用；量产可关） */
 
 /* ---------------- 显示缓冲（内部 RAM，DMA 可达） ---------------- */
 static lv_color_t s_buf0[UI_BUF_PIXELS] __attribute__((aligned(8)));
@@ -56,11 +57,27 @@ static lv_disp_draw_buf_t s_draw_buf;
 static lv_disp_drv_t      s_disp_drv;
 static lv_indev_drv_t     s_indev_drv;
 
-static volatile bool     s_flush_busy  = false;  /* 有一笔 DMA 在途 */
 static volatile uint32_t s_frame_count = 0;      /* 统计窗口内完成的上屏次数 */
 static uint32_t          s_fps         = 0;
 static volatile bool     s_running     = false;
 static TaskHandle_t      s_task        = NULL;
+
+/* ---------------- 在途交易追踪（允许两笔并飞）----------------
+ * i80 队列是先进先出，所以用一个单生产者/单消费者的环形队列配对：
+ *   提交时(UI 任务) push 缓冲号；完成时(ISR) pop 队首 → 清对应缓冲的忙标志。
+ * 这样"渲染下一块"与"搬运当前块"完全重叠，且不会踩到仍在搬运的缓冲。
+ */
+#define UI_MAX_INFLIGHT  4
+static volatile uint8_t  s_inflight[UI_MAX_INFLIGHT];
+static volatile uint32_t s_in_head = 0;
+static volatile uint32_t s_in_tail = 0;
+static volatile uint8_t  s_buf_busy[2] = { 0, 0 };
+
+/* ---------------- 耗时归因（每次 flush 内部 / 两次 flush 之间的渲染）---------------- */
+static volatile uint64_t s_flush_us_acc  = 0;   /* flush_cb 内部总耗时（含等待/提交） */
+static volatile uint64_t s_render_us_acc = 0;   /* 两次 flush 之间的渲染耗时 */
+static volatile uint32_t s_flush_calls   = 0;
+static volatile uint64_t s_last_exit_us  = 0;
 
 /* ---------------- 日志转发到 ESP_LOG ---------------- */
 static void ui_log_cb(const char *buf)
@@ -71,7 +88,10 @@ static void ui_log_cb(const char *buf)
 /* ---------------- 传输完成（ISR 上下文） ---------------- */
 static void IRAM_ATTR ui_flush_done_isr(void)
 {
-    s_flush_busy = false;
+    if (s_in_head != s_in_tail) {
+        s_buf_busy[s_inflight[s_in_head]] = 0;      /* 队首那笔搬完了 */
+        s_in_head = (s_in_head + 1U) % UI_MAX_INFLIGHT;
+    }
     s_frame_count++;
     /* 立刻放行 LVGL：允许它复用刚搬完的缓冲，渲染流水线不中断 */
     lv_disp_flush_ready(&s_disp_drv);
@@ -80,19 +100,41 @@ static void IRAM_ATTR ui_flush_done_isr(void)
 /* ---------------- 显示刷新回调 ---------------- */
 static void ui_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px_map)
 {
-    /* 单笔在途约束：上一笔没搬完就等它（用 BSP 的信号量，CPU 让出） */
-    while (s_flush_busy) {
-        (void)bsp_lcd_wait_flush_done(100);
+    const uint64_t t_enter = esp_timer_get_time();
+    if (s_last_exit_us != 0U) {
+        s_render_us_acc += t_enter - s_last_exit_us;   /* 上一笔提交完 → 本次渲染结束 */
     }
 
-    s_flush_busy = true;
+    const uint8_t idx = (px_map == s_buf1) ? 1U : 0U;
+
+    /* 只有"该缓冲自己的上一笔"还没搬完才需要等。
+     * ⚠ 必须等 BSP 的完成信号量（ISR 唤醒，微秒级），不能用 vTaskDelay(1)——
+     * 1000Hz tick 下那等于每次硬等 1ms。 */
+    while (s_buf_busy[idx]) {
+        if (bsp_lcd_wait_flush_done(50) != ESP_OK) {
+            break;                          /* 超时兜底：宁可冒险也不死锁 */
+        }
+    }
+
+    s_buf_busy[idx] = 1U;
+    s_inflight[s_in_tail] = idx;
+    s_in_tail = (s_in_tail + 1U) % UI_MAX_INFLIGHT;
+
     esp_err_t err = bsp_lcd_draw_bitmap_async((uint16_t)area->x1, (uint16_t)area->y1,
                                               (uint16_t)(area->x2 + 1), (uint16_t)(area->y2 + 1),
                                               (const uint16_t *)px_map);
     if (err != ESP_OK) {
-        s_flush_busy = false;
-        lv_disp_flush_ready(drv);          /* 提交失败也必须放行，否则 LVGL 卡死 */
+        /* 提交失败：撤销这次在途登记并放行，避免死锁 */
+        if (s_in_head != s_in_tail) {
+            s_in_head = (s_in_head + 1U) % UI_MAX_INFLIGHT;
+        }
+        s_buf_busy[idx] = 0U;
+        lv_disp_flush_ready(drv);
     }
+
+    s_flush_us_acc += esp_timer_get_time() - t_enter;
+    s_flush_calls++;
+    s_last_exit_us = esp_timer_get_time();
 }
 
 /* ---------------- 触摸输入回调 ---------------- */
@@ -132,6 +174,26 @@ static void ui_perf_selftest_cb(lv_timer_t *t)
 {
     lv_timer_del(t);
 
+#if UI_STARTUP_BENCH
+
+    /* ---- ① 纯总线吞吐：整屏 150KB 一次 DMA（不经过 LVGL），这是硬上限 ---- */
+    const uint16_t *fb = bsp_lcd_fb();
+    uint32_t bus_ms = 0;
+    if (fb != NULL) {
+        const int bn = 3;
+        uint32_t b0 = (uint32_t)(esp_timer_get_time() / 1000);
+        for (int i = 0; i < bn; i++) {
+            (void)bsp_lcd_draw_bitmap(0, 0, BSP_LCD_WIDTH, BSP_LCD_HEIGHT, fb);
+        }
+        bus_ms = ((uint32_t)(esp_timer_get_time() / 1000) - b0) / (uint32_t)bn;
+    }
+
+    /* ---- ② LVGL 全屏重绘：渲染 + 上屏（含双缓冲重叠）+ 耗时归因 ---- */
+    s_flush_us_acc = 0;
+    s_render_us_acc = 0;
+    s_flush_calls = 0;
+    s_last_exit_us = 0;
+
     const int n = 20;
     uint32_t t0 = (uint32_t)(esp_timer_get_time() / 1000);
     for (int i = 0; i < n; i++) {
@@ -141,15 +203,101 @@ static void ui_perf_selftest_cb(lv_timer_t *t)
     uint32_t ms = (uint32_t)(esp_timer_get_time() / 1000) - t0;
     uint32_t per = ms / (uint32_t)n;
 
+    const uint32_t flush_ms  = (uint32_t)(s_flush_us_acc / 1000U / (uint64_t)n);
+    const uint32_t render_ms = (uint32_t)(s_render_us_acc / 1000U / (uint64_t)n);
+    const uint32_t calls     = s_flush_calls / (uint32_t)n;
+
     lv_mem_monitor_t mon;
     lv_mem_monitor(&mon);
 
-    ESP_LOGI(TAG, "PERF full-screen redraw: %lu ms/frame -> %lu fps (bus limit ~65 fps @10MHz)",
-             (unsigned long)per, (unsigned long)((per > 0U) ? (1000U / per) : 0UL));
+    ESP_LOGI(TAG, "PERF bus-only full frame : %lu ms -> %lu fps (hard ceiling)",
+             (unsigned long)bus_ms, (unsigned long)((bus_ms > 0U) ? (1000U / bus_ms) : 0UL));
+    ESP_LOGI(TAG, "PERF lvgl full redraw   : %lu ms -> %lu fps", (unsigned long)per,
+             (unsigned long)((per > 0U) ? (1000U / per) : 0UL));
+    ESP_LOGI(TAG, "PERF breakdown          : flush_cb %lu ms (%lu calls/frame) + render %lu ms",
+             (unsigned long)flush_ms, (unsigned long)calls, (unsigned long)render_ms);
     ESP_LOGI(TAG, "PERF mem: internal heap free=%u B | LVGL heap %u%% used (%u/%u B)",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)mon.used_pct,
              (unsigned)(mon.total_size - mon.free_size), (unsigned)mon.total_size);
+
+    /* ---- ③ 极简页面基准：纯色背景 + 一个标签，隔离"框架开销"与"界面内容开销" ---- */
+    lv_obj_t *keep = lv_scr_act();
+    lv_obj_t *tmp = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(tmp, lv_color_hex(0x101010), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(tmp, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(tmp, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(tmp, 0, LV_PART_MAIN);
+    lv_obj_t *lb = lv_label_create(tmp);
+    lv_label_set_text(lb, "PERF");
+    lv_obj_center(lb);
+    lv_scr_load(tmp);
+
+    uint32_t t1 = (uint32_t)(esp_timer_get_time() / 1000);
+    for (int i = 0; i < n; i++) {
+        lv_obj_invalidate(tmp);
+        lv_refr_now(NULL);
+    }
+    uint32_t plain_ms = ((uint32_t)(esp_timer_get_time() / 1000) - t1) / (uint32_t)n;
+
+    lv_scr_load(keep);
+    lv_obj_del(tmp);
+
+    ESP_LOGI(TAG, "PERF plain screen        : %lu ms -> %lu fps (framework floor)",
+             (unsigned long)plain_ms, (unsigned long)((plain_ms > 0U) ? (1000U / plain_ms) : 0UL));
+
+    /* ---- ④ 单项控件开销：大字标签 / 圆弧（找出内容里的"耗电大户"）---- */
+    /* 4a：40px 大字（5 个字形，抗锯齿混合面积大） */
+    lv_obj_t *tmp2 = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(tmp2, lv_color_hex(0x101010), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(tmp2, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(tmp2, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(tmp2, 0, LV_PART_MAIN);
+    lv_obj_t *big = lv_label_create(tmp2);
+    lv_obj_set_style_text_font(big, &lv_font_montserrat_40, LV_PART_MAIN);
+    lv_label_set_text(big, "12:34");
+    lv_obj_center(big);
+    lv_scr_load(tmp2);
+
+    uint32_t t2 = (uint32_t)(esp_timer_get_time() / 1000);
+    for (int i = 0; i < n; i++) {
+        lv_obj_invalidate(tmp2);
+        lv_refr_now(NULL);
+    }
+    uint32_t big_ms = ((uint32_t)(esp_timer_get_time() / 1000) - t2) / (uint32_t)n;
+    lv_scr_load(keep);            /* 先切回原屏，再删临时屏（删活动屏会崩） */
+    lv_obj_del(tmp2);
+
+    /* 4b：圆弧（抗锯齿 + 三角函数逐像素） */
+    lv_obj_t *tmp3 = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(tmp3, lv_color_hex(0x101010), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(tmp3, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_border_width(tmp3, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(tmp3, 0, LV_PART_MAIN);
+    lv_obj_t *arc = lv_arc_create(tmp3);
+    lv_obj_set_size(arc, 74, 74);
+    lv_obj_center(arc);
+    lv_arc_set_range(arc, 0, 600);
+    lv_arc_set_value(arc, 250);
+    lv_obj_set_style_arc_width(arc, 6, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc, 6, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(0x303030), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(arc, lv_color_hex(0xffb454), LV_PART_INDICATOR);
+    lv_scr_load(tmp3);
+
+    uint32_t t3 = (uint32_t)(esp_timer_get_time() / 1000);
+    for (int i = 0; i < n; i++) {
+        lv_obj_invalidate(tmp3);
+        lv_refr_now(NULL);
+    }
+    uint32_t arc_ms = ((uint32_t)(esp_timer_get_time() / 1000) - t3) / (uint32_t)n;
+    lv_scr_load(keep);            /* 同上：先切回再删 */
+    lv_obj_del(tmp3);
+
+    ESP_LOGI(TAG, "PERF widget cost         : big-label(+%ld ms) arc(+%ld ms) over plain %lu ms",
+             (long)big_ms - (long)plain_ms, (long)arc_ms - (long)plain_ms,
+             (unsigned long)plain_ms);
+#endif
 }
 
 /* ---------------- LVGL 刷新任务 ---------------- */

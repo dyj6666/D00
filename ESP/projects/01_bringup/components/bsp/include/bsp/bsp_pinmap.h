@@ -66,7 +66,7 @@ extern "C" {
 #define BSP_LCD_PIN_D6          GPIO_NUM_9
 #define BSP_LCD_PIN_D7          GPIO_NUM_46
 
-#define BSP_LCD_PCLK_HZ         (10000000U)         /* 8080 像素时钟 10MHz */
+#define BSP_LCD_PCLK_HZ         (15000000U)         /* 8080 像素时钟 15MHz（ST7789 写周期下限 66ns≈15.1MHz） */
 
 /* ================= 独立 GPIO ================= */
 

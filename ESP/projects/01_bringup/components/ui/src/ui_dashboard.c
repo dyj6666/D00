@@ -213,6 +213,8 @@ static void page_home_build(void)
     lv_obj_align(s_led_imu, LV_ALIGN_TOP_MID, 0, 20);
     lv_led_set_color(s_led_imu, COL_GREEN);
     lv_led_set_brightness(s_led_imu, 220);
+    /* lv_led 默认用 shadow 模糊伪造发光 —— 逐像素模糊极贵，状态灯平涂即可 */
+    lv_obj_set_style_shadow_width(s_led_imu, 0, LV_PART_MAIN);
     s_lbl_imu = mk_label(c3, &lv_font_montserrat_14, COL_GREEN, "OK");
     lv_obj_align(s_lbl_imu, LV_ALIGN_BOTTOM_MID, 0, -2);
 
