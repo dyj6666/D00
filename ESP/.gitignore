@@ -1,9 +1,33 @@
 # ESP 子空间：大体积资料（PDF 约 75MB/例程 3GB 原盘）本地保留不入库；
-# 仅 README/流程文档/笔记入库。
+# 仅 README/流程文档/笔记/工程源码入库。
 *
 !README.md
 !.gitignore
 !docs/
+!docs/*.md
 !docs/ESP-IDF开发流程.md
 !notes/
 !notes/DEV_NOTES.md
+
+# ---------------- 工程源码入库（体积小、需版本管理） ----------------
+!projects/
+!projects/**
+
+# 但构建产物与本机生成配置一律不入库（可由 sdkconfig.defaults 再生）
+projects/**/build/
+projects/**/sdkconfig
+projects/**/sdkconfig.old
+projects/**/managed_components/
+projects/**/dependencies.lock
+projects/**/*.bin
+projects/**/*.elf
+projects/**/*.map
+# clangd / IntelliSense 索引缓存（目录规则须用 /** 才能匹配到文件内容）
+projects/**/.cache/**
+# 临时调试脚本
+projects/**/_mon.py
+# 字模生成脚本的 Python 字节码缓存
+projects/**/__pycache__/**
+
+# .vscode 工程配置入库（含本机路径，换机需改；作为调试/烧录配置留档）
+

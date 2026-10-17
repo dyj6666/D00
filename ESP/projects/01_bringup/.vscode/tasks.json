@@ -1,0 +1,138 @@
+{
+    // ================================================================
+    // VS Code 任务：全部通过 idf.ps1 调用
+    //
+    // 为什么不用 ESP-IDF 扩展的 ${config:idf.*} 变量直接拼 idf.py？
+    //   idf.ps1 已固化两个中文 Windows 上必踩的坑：
+    //     ① 选中 IDF 自带 Python 3.11（否则误用系统 3.12 → 找不到虚拟环境）
+    //     ② 设置 PYTHONUTF8=1（否则 GBK 解码崩溃）
+    //   任务写入的是"一定能跑"的命令，不依赖扩展状态。
+    //
+    // 用法：Ctrl+Shift+B 直接编译；Ctrl+Shift+P → Run Task 选其它任务
+    // ================================================================
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "ESP: Build",
+            "detail": "编译工程（idf.py build）",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\idf.ps1",
+                "build"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": [
+                {
+                    "owner": "cpp",
+                    "fileLocation": ["relative", "${workspaceFolder}"],
+                    "pattern": {
+                        "regexp": "^\\.\\.(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                        "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+                    }
+                },
+                {
+                    "owner": "cpp",
+                    "fileLocation": "absolute",
+                    "pattern": {
+                        "regexp": "^[^\\.](.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                        "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+                    }
+                }
+            ]
+        },
+        {
+            "label": "ESP: Flash",
+            "detail": "烧录到 COM14（UART，460800）",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\idf.ps1",
+                "-p", "COM14", "-b", "460800", "flash"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP: Monitor",
+            "detail": "串口监视（退出 Ctrl+]）",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\idf.ps1",
+                "-p", "COM14", "monitor"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP: Flash + Monitor",
+            "detail": "一键烧录并监视（最常用）",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\idf.ps1",
+                "-p", "COM14", "-b", "460800", "flash", "monitor"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP: Clean (fullclean)",
+            "detail": "彻底清理构建目录",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\idf.ps1",
+                "fullclean"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP: Menuconfig",
+            "detail": "打开 SDK 配置菜单",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\idf.ps1",
+                "menuconfig"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP: Erase Flash",
+            "detail": "擦除整片 Flash（慎用，会清空 NVS）",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}\\idf.ps1",
+                "-p", "COM14", "erase-flash"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP: Chip Info",
+            "detail": "用 esptool 读取芯片信息（验证下载链路）",
+            "type": "shell",
+            "command": "powershell",
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-Command",
+                "& 'E:\\ESP-IDF\\Espressif\\python_env\\idf5.2_py3.11_env\\Scripts\\python.exe' -m esptool --port COM14 --chip esp32s3 chip_id; & 'E:\\ESP-IDF\\Espressif\\python_env\\idf5.2_py3.11_env\\Scripts\\python.exe' -m esptool --port COM14 flash_id"
+            ],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": []
+        }
+    ]
+}

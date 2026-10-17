@@ -1,0 +1,80 @@
+{
+  "idf.espIdfPathWin": "E:/ESP-IDF/Espressif/frameworks/esp-idf-v5.2.1",
+  "idf.toolsPathWin": "E:/ESP-IDF/Espressif",
+  "idf.pythonInstallPath": "E:/ESP-IDF/Espressif/tools/idf-python/3.11.2/python.exe",
+  "idf.gitPathWin": "E:/ESP-IDF/Espressif/tools/idf-git/2.39.2/cmd/git.exe",
+
+  "idf.adapterTargetName": "esp32s3",
+  "idf.flashType": "JTAG",
+  "idf.portWin": "COM14",
+  "idf.port": "COM9",
+  "idf.flashBaudRate": "460800",
+  "idf.monitorBaudRate": "115200",
+  "idf.buildPath": "${workspaceFolder}/build",
+
+  "idf.openOcdConfigs": [
+    "board/esp32s3-builtin.cfg"
+  ],
+
+  "idf.customExtraVars": {
+    "0": "{",
+    "1": "\"",
+    "2": "P",
+    "3": "Y",
+    "4": "T",
+    "5": "H",
+    "6": "O",
+    "7": "N",
+    "8": "U",
+    "9": "T",
+    "10": "F",
+    "11": "8",
+    "12": "\"",
+    "13": ":",
+    "14": " ",
+    "15": "\"",
+    "16": "1",
+    "17": "\"",
+    "18": ",",
+    "19": " ",
+    "20": "\"",
+    "21": "P",
+    "22": "Y",
+    "23": "T",
+    "24": "H",
+    "25": "O",
+    "26": "N",
+    "27": "I",
+    "28": "O",
+    "29": "E",
+    "30": "N",
+    "31": "C",
+    "32": "O",
+    "33": "D",
+    "34": "I",
+    "35": "N",
+    "36": "G",
+    "37": "\"",
+    "38": ":",
+    "39": " ",
+    "40": "\"",
+    "41": "u",
+    "42": "t",
+    "43": "f",
+    "44": "-",
+    "45": "8",
+    "46": "\"",
+    "47": "}",
+    "IDF_TARGET": "esp32s3"
+  },
+
+  "C_Cpp.intelliSenseEngine": "default",
+
+  "search.exclude": {
+    "**/build": true
+  },
+  "files.watcherExclude": {
+    "**/build/**": true
+  },
+  "idf.currentSetup": "E:/ESP-IDF/Espressif/frameworks/esp-idf-v5.2.1/"
+}

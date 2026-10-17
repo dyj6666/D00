@@ -1,0 +1,50 @@
+# ================================================================
+# bringup default config (values taken from the vendor AI BOX1 example)
+#
+# !! THIS FILE MUST STAY PURE ASCII !!
+# IDF's kconfgen parses sdkconfig files with the system locale codec
+# (GBK on this PC); UTF-8 CJK bytes cause:
+#   UnicodeDecodeError: 'gbk' codec can't decode byte 0x.. in position ..
+# Keep all comments in English/ASCII.
+# ================================================================
+
+# ---------------- Target ----------------
+CONFIG_IDF_TARGET="esp32s3"
+
+# ---------------- CPU ----------------
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+
+# ---------------- Flash: 16MB + custom partition table ----------------
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-16MiB.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_PARTITION_TABLE_MD5=y
+
+# ---------------- PSRAM: 8MB Octal @80MHz (key config for N16R8) ----------------
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_TYPE_AUTO=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MEMTEST=y
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+CONFIG_SPIRAM_CLK_IO=30
+CONFIG_SPIRAM_CS_IO=26
+
+# ---------------- Console: UART0 115200 + USB Serial/JTAG fallback ----------------
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_NUM=0
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# ---------------- FreeRTOS: 1kHz tick (same as vendor examples) ----------------
+CONFIG_FREERTOS_HZ=1000
+
+# ---------------- Log: INFO level by default ----------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

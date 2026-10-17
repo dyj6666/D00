@@ -31,6 +31,12 @@ ESP/
 │   ├── esp32-s3_datasheet_cn.pdf / TRM / WROOM 手册
 │   └── 初学者入门必看.txt
 ├── notes/                 # 开发笔记
+├── projects/              # ★ 工程区（每个实验/阶段一个工程，编号递增）
+│   └── 01_bringup/        # 环境自检工程：芯片/Flash/PSRAM/MAC/NVS/心跳任务
+│                          #   ├─ CMakeLists.txt / sdkconfig.defaults（16MB+Octal PSRAM+240MHz）
+│                          #   ├─ partitions-16MiB.csv（nvs/phy/factory/vfs/storage）
+│                          #   ├─ main/main.c（自检固件）
+│                          #   └─ README.md（编译烧录步骤 + 期望日志）
 └── .gitignore
 ```
 
@@ -61,8 +67,25 @@ ESP/
 
 ## 开发计划
 
-- [ ] 环境验证：跑通 v5.2.1 例程（hello_world → 串口输出）
+- [x] **工程骨架**：`projects/01_bringup`（自建，非例程拷贝；芯片/Flash/PSRAM/MAC/NVS/心跳自检）
+- [x] **编译验证**：`idf.py build` 通过（app 239.8KB / bootloader 21.1KB，88% 分区空闲）
+- [ ] 烧录验证：`.\idf.ps1 -p COM14 flash monitor`，核对自检日志（Flash 16MB / PSRAM 8MB Octal / MAC / NVS）
+- [ ] UART 收发验证（`04_uart` 例程）+ 与 MCU 串口桥雏形
 - [ ] WiFi 例程（sta 连接）+ 与 MCU 串口桥
 - [ ] BLE 例程 + 数据桥
 - [ ] 语音（麦克风/唤醒词）例程
 - [ ] 与 MCU 联调：WiFi/BLE/语音 → MCU 动作
+
+## 环境备忘（踩坑记录）
+
+> ⭐ **已封装成一键脚本**：`projects\01_bringup\idf.ps1`——自动处理下面 ①② 两项，
+> 用法 `. \idf.ps1 build` / `.\idf.ps1 -p COM14 flash monitor`。
+
+| 现象 | 原因 | 解法 |
+| --- | --- | --- |
+| ① `export.ps1` 报 `python_env\idf5.2_py3.12_env\... doesn't exist` + `Cannot import module "click"` | export 选中了系统 Python 3.12（`D:\Python`），而虚拟环境 `idf5.2_py3.11_env` 是用 IDF 自带 3.11.2 建的 | 调 export 前把 `E:\ESP-IDF\Espressif\tools\idf-python\3.11.2` 及其 `Scripts` 放到 PATH **最前** |
+| ② `UnicodeDecodeError: 'gbk' codec can't decode byte 0x..` | 中文 Windows 下 Python 默认 GBK 编码，读 UTF-8 的 sdkconfig/构建日志即崩 | 设 `$env:PYTHONUTF8='1'`；且 **sdkconfig.defaults 保持纯 ASCII（禁止中文注释）** |
+| ③ `error: 'ESP_RST_EFUSE' undeclared` 等 | 该枚举是 IDF 5.3+ 才有，5.2.1 无 | 用 `default:` 兜底，勿引用新版本 API |
+| ④ `Not using an unsupported version of tool cmake found in PATH: 3.28.1` | 系统 cmake 与 IDF 不匹配 | 属提示；export.ps1 会把 IDF 自带 cmake 3.24.0 置于 PATH 前 |
+| ⑤ 终端里 `idf.py` 找不到 | 未激活 IDF 环境 | 先 `. E:\ESP-IDF\Espressif\frameworks\esp-idf-v5.2.1\export.ps1`（或用 ①→`idf.ps1`） |
+| ⑥ openthread 子模块报 `dubious ownership` git 警告 | git 安全目录限制 | 可忽略；或按提示 `git config --global --add safe.directory ...` |
