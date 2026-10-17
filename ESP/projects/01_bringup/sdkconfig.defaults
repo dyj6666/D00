@@ -46,9 +46,6 @@ CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 # ---------------- FreeRTOS: 1kHz tick (same as vendor examples) ----------------
 CONFIG_FREERTOS_HZ=1000
 
-# ---------------- newlib: LF only (binary screenshot dump needs no CR insertion) ----------------
-CONFIG_NEWLIB_STDOUT_LINE_ENDING_LF=y
-
 # ---------------- Log: INFO level by default ----------------
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 

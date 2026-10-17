@@ -16,7 +16,6 @@
  *   ③ 显示值没变就不刷新字符串（减少重绘）；
  *   ④ 补间从"当前显示值"出发（旧版每次从 0 开始，视觉上就是在乱跳）。
  * ================================================================ */
-#include "img_ldd.h"
 #include "ui/ui.h"
 #include "ui_internal.h"
 
@@ -55,7 +54,7 @@ static const char *TAG = "UI/UI";
 #define C_INK       lv_color_hex(0x241C14)      /* 眼睛墨色（比正文更深一点） */
 #define C_BLUSH     lv_color_hex(0xE8B79C)      /* 腮红 */
 
-#define PAGE_COUNT  5
+#define PAGE_COUNT  4
 #define TAB_Y       204
 #define TAB_H       (BSP_LCD_HEIGHT - TAB_Y)
 #define PAD         20
@@ -93,7 +92,6 @@ static lv_obj_t *s_val_fps;
 static lv_obj_t *s_val_mod;
 
 static void nav_timer_cb(lv_timer_t *t);
-static void sync_tabs(void);
 
 /* ================================================================
  *                        基础绘制件
@@ -267,7 +265,7 @@ static void tab_click_cb(lv_event_t *e)
 
 static void tabs_build(lv_obj_t *scr, uint8_t self)
 {
-    static const char *const names[PAGE_COUNT] = { "HOME", "FACE", "LDD", "MOTION", "SYSTEM" };
+    static const char *const names[PAGE_COUNT] = { "HOME", "FACE", "MOTION", "SYSTEM" };
     const lv_coord_t step = BSP_LCD_WIDTH / PAGE_COUNT;
     const lv_coord_t centers[PAGE_COUNT] = {
         (lv_coord_t)(step / 2),
@@ -382,7 +380,7 @@ static void page_motion_build(void)
  * ================================================================ */
 static void page_system_build(void)
 {
-    lv_obj_t *scr = s_scr[4];
+    lv_obj_t *scr = s_scr[3];
     const lv_coord_t val_x = PAD + CONTENT_W - 150;
 
     chrome_build(scr);
@@ -833,62 +831,6 @@ static void face_timer_cb(lv_timer_t *t)
 }
 
 /* ================================================================
- *                        第 3 页：LDD（全屏插画）
- *
- * 一张 320x240 的 RGB565 位图铺满整屏（含标题），不做页眉页签，
- * 保持插画的完整构图；点一下屏幕回到 HOME（K1/K2 也能切走）。
- * · 图片由 tools/img2c.py 从 PNG 生成：换图只需替换 tools/ldd.png 再跑一次脚本；
- * · 显示成本 = 一次 150KB blit，与填充整屏相当，静态页几乎不耗 CPU。
- * ================================================================ */
-static void ldd_click_cb(lv_event_t *e)
-{
-    BSP_UNUSED(e);
-    ui_dashboard_goto(0);          /* 点画面任意处回主页 */
-}
-
-static void page_ldd_build(void)
-{
-    lv_obj_t *scr = s_scr[2];
-
-    lv_obj_t *img = lv_img_create(scr);
-    lv_img_set_src(img, &img_ldd);
-    lv_obj_align(img, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_radius(img, 0, LV_PART_MAIN);
-    lv_obj_set_style_border_width(img, 0, LV_PART_MAIN);
-
-    /* 整屏点击热区（透明），点哪都能回主页 */
-    lv_obj_t *hit = mk_obj(scr, 0, 0, BSP_LCD_WIDTH, BSP_LCD_HEIGHT,
-                           C_BG, LV_OPA_TRANSP, C_BG, 0, 0);
-    lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(hit, ldd_click_cb, LV_EVENT_CLICKED, NULL);
-}
-
-/** 瞬时跳页（无动画；调试抓图/需要确定性时用） */
-void ui_dashboard_show(uint8_t page)
-{
-    if (page >= PAGE_COUNT) {
-        return;
-    }
-    s_page = page;
-    sync_tabs();
-    lv_scr_load(s_scr[page]);
-}
-
-/** 绝对跳页（页签/点击热区用） */
-void ui_dashboard_goto(uint8_t page)
-{
-    if (page >= PAGE_COUNT || page == s_page) {
-        return;
-    }
-    const int8_t dir = (page > s_page) ? 1 : -1;
-    s_page = page;
-    sync_tabs();
-    lv_scr_load_anim(s_scr[s_page],
-                     (dir > 0) ? LV_SCR_LOAD_ANIM_OVER_LEFT : LV_SCR_LOAD_ANIM_OVER_RIGHT,
-                     260, 0, false);
-}
-/* ================================================================
  *                        数据刷新（含平滑与死区）
  * ================================================================ */
 #define TEMP_EMA_ALPHA      0.12f    /* 温度：慢跟随（时间常数约 2s） */
@@ -1095,7 +1037,6 @@ void ui_dashboard_build(void)
 
     page_home_build();
     page_face_build();
-    page_ldd_build();
     page_motion_build();
     page_system_build();
 

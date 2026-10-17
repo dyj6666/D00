@@ -589,39 +589,3 @@ RGB565 ≈ 79KB PSRAM，运行时零计算）：
 
 > 眉、睫毛、虹膜、高光等写实元素全部去掉——卡通表情靠**形状 + 挤压弹跳**做萌感，
 > 不靠细节堆砌。这一版才是"表情包"，不会吓人。
-
-### 11.13 全屏插画页（LDD）+ 图片管线
-
-**结论：能做出「黑底线稿插画」这种画面**，但正确做法是**位图管线**，不是用 LVGL 图元去描线
-（一张线稿有几百条细曲线 + 花 + 文字，用图元重画不现实、也难维护）。
-
-| 环节 | 做法 |
-| --- | --- |
-| 转换 | 	ools/img2c.py：PNG → Lanczos 高质量缩放 → RGB565 C 数组 + lv_img_dsc_t |
-| 存放 | 直接编进 flash（320x240 = **150 KB**；分区余量 55% ≈ 1.11 MB，足够放 6~7 张） |
-| 显示 | 第 3 个页签 **LDD**：整屏一张图（无页眉/页签，保留完整构图），点屏幕任意处回 HOME |
-| 适配 | --fit contain（等比缩放 + 黑边，原图本身就黑底，黑边看不出来）或 cover（铺满但裁切上下） |
-
-**换图流程（一条命令）**：
-
-`powershell
-# 1) 把你的图存成 tools/ldd.png（任意尺寸，脚本会自动缩放）
-# 2) 转成 C 数组
-D:\Python\python.exe tools\img2c.py --src tools/ldd.png --name img_ldd `
-    --out-c components/ui/src/img_ldd.c --out-h components/ui/include/img_ldd.h `
-    --w 320 --h 240 --fit contain
-# 3) 编译烧录
-.\idf.ps1 build; .\idf.ps1 -p COM9 flash
-`
-
-	ools/make_ldd_placeholder.py 生成的是**占位线稿**（黑底白线 + 百合 + 标题框），
-仅用于验证通路；真图放进去即可替换（已验证转换器精度：C 数组 vs 期望图 MAE=3.45）。
-
-**踩坑记录**：
-1. img2c 生成的 .c 里 #include 的头文件必须能被组件找到——
-   头文件放在 components/ui/include/ 根目录（而不是 include/ui/）才能用裸名字包含；
-2. **截图工具的二进制流会被 newlib 的换行转换破坏**：ESP-IDF 默认
-   CONFIG_NEWLIB_STDOUT_LINE_ENDING_CRLF=y，会把二进制里的 0x0A 插成 0x0D 0x0A →
-   越靠后的行越错位。已改为 LF 模式（CONFIG_NEWLIB_STDOUT_LINE_ENDING_LF=y）；
-3. 仍存在的已知限制：115200 下长突发可能丢字节，抓图偶发错位（不影响屏上实际显示）；
-   需要更高保真度可把控制台波特率提高或改用十六进制帧传输。
