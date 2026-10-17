@@ -31,6 +31,7 @@
 #include "esp_random.h"
 #include "esp_log.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -409,39 +410,269 @@ static void page_system_build(void)
 }
 
 /* ================================================================
- *                        第 2 页：FACE（大眼睛表情）
+ *                        第 2 页：FACE（立体杏仁眼 · 动态表情）
  *
- * 做法：全部用 LVGL 基础控件 + 动画，不占 flash 图片资源。
- *   眼睛 = 深色大圆（radius=CIRCLE），眨眼时收缩高度 → 子控件被裁掉，
- *          视觉上就是眼睑合上；睁开用 ease-out，闭眼用 ease-in，非常顺。
- *   视线 = 眼内高光小圆做小幅位移（saccade），带随机性，像活的。
- *   表情 = 笑弧(arc) 与 O 嘴(圆环) 交叉淡入淡出 + 腮红透明度呼吸。
- *   省电：只在 FACE 页运行；离开该页后不产生任何重绘。
+ * 为什么不用圆点：圆点做不出"人眼"。这里改为**程序化渲染眼部位图**：
+ *   · 杏仁形开窗：上眼睑是较陡的椭圆弧（k=0.60），下眼睑较缓（k=1.10），
+ *     两端收到眼角 → 真正的杏仁/叶形轮廓；
+ *   · 立体感：巩膜上暗下亮的竖向渐变 + 上眼睑内侧阴影 + 眼睑折痕（眼外上方
+ *     的柔和暗带）+ 下眼睑一道浅浅的高光；
+ *   · 虹膜：径向渐变（中心暖棕 → 边缘深棕）+ 外圈 limbal 暗环 + 瞳孔 +
+ *     一颗大柔光高光和一颗小锐光高光 → 湿亮的"有神"感；
+ *   · 眨眼：另存一帧"闭合眼（含睫毛线）"，用透明度交叉淡入/淡出 —— 相当于
+ *     sprite 动画，比压缩变形自然得多；
+ *   · 视线：整颗眼球小幅平移（±3px/±1px）＋ 眨眼帧不参与，读起来就是"瞥一眼"；
+ *   · 眉毛：细圆弧，惊讶上扬、开心下压 → 情绪全在眉毛上。
+ *
+ * 位图在开机时算一次（4 帧 112x88 RGB565 ≈ 79KB PSRAM），运行时零计算开销。
  * ================================================================ */
-#define EYE_W        66
-#define EYE_H        70
-#define EYE_Y        56
-#define EYE_LX       88
-#define EYE_RX       166
-#define GLINT_BIG    18
+#define EYE_IMG_W   104
+#define EYE_IMG_H   88
+
+#define EYE_LX      48               /* 左眼左上角（屏幕坐标） */
+#define EYE_RX      168
+#define EYE_Y       46
+
+#define BROW_W      56
+#define BROW_H      22
+#define BROW_LX     (EYE_LX + 24)
+#define BROW_RX     (EYE_RX + 24)
+#define BROW_Y      (EYE_Y - 14)
+
+#define CHEEK_Y      150
 #define MOUTH_X      131
 #define MOUTH_Y      128
 #define MOUTH_W      58
 
-static lv_obj_t *s_eye[2];
-static lv_obj_t *s_glint_big[2];
-static lv_obj_t *s_glint_small[2];
+static lv_obj_t *s_eye_open[2];
+static lv_obj_t *s_eye_lid[2];        /* 闭合眼睑帧（叠在上面，平时全透明） */
+static lv_obj_t *s_brow[2];
 static lv_obj_t *s_cheek[2];
-static lv_obj_t *s_mouth;        /* 笑弧 */
-static lv_obj_t *s_mouth_o;      /* 惊讶的 O 嘴 */
+static lv_obj_t *s_mouth;
+static lv_obj_t *s_mouth_o;
 
-static int32_t  s_open_pct = 100;      /* 双眼张开度 % */
-static bool     s_face_busy;           /* 正在眨眼/做表情，避免叠加 */
+static lv_img_dsc_t s_eye_dsc[2][2];  /* [眼][0=睁开, 1=闭合] */
+static bool s_face_assets_ok;
+
+static int32_t  s_gaze_x[2];
+static bool     s_face_busy;
+static bool     s_face_visited;      /* 是否已经在 FACE 页（用于"醒來"动画） */
 static uint32_t s_next_blink_ms;
 static uint32_t s_next_action_ms;
 static uint32_t s_busy_until_ms;
+static int32_t  s_brow_dy;            /* 眉毛位移（情绪） */
 
-/* ---------------- 动画小工具（显式给出 from/to，避免读不到当前值） ---------------- */
+/* ---------------- 颜色打包 ---------------- */
+static inline uint16_t face_rgb565(int r, int g, int b)
+{
+    if (r < 0) { r = 0; } else if (r > 255) { r = 255; }
+    if (g < 0) { g = 0; } else if (g > 255) { g = 255; }
+    if (b < 0) { b = 0; } else if (b > 255) { b = 255; }
+    return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | ((b >> 3)));
+}
+
+/* ---------------- 程序化渲染一只眼 ----------------
+ * open_ratio：1.0 = 全开；0.0 = 闭合（只剩一条含睫毛的眼缝）
+ */
+static void face_render_eye(uint16_t *dst, float open_ratio)
+{
+    const int W = EYE_IMG_W;
+    const int H = EYE_IMG_H;
+
+    const float cx = (W - 1) * 0.5f;
+    const float cy = (H - 1) * 0.50f;
+    const float hw = cx - 2.0f;
+    const float h_up  = 0.42f * H * open_ratio;      /* 上眼睑弧高 */
+    const float h_low = 0.30f * H * open_ratio;      /* 下眼睑弧高 */
+
+    const float iris_r  = 0.30f * H;
+    const float pupil_r = 0.42f * iris_r;
+    const float iris_cx = cx;
+    const float iris_cy = cy - 0.10f * h_up;
+
+    /* 背景（象牙白，与屏幕底色一致，图片可做成不透明） */
+    const int bg_r = 247, bg_g = 243, bg_b = 231;
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            /* ---- 2x2 超采样求杏仁开窗覆盖率 ---- */
+            float cov = 0.0f;
+            float sh_top = 0.0f;
+            float lash = 0.0f;
+
+            for (int sy = 0; sy < 2; sy++) {
+                for (int sx = 0; sx < 2; sx++) {
+                    const float px = (float)x + 0.25f + 0.5f * (float)sx;
+                    const float py = (float)y + 0.25f + 0.5f * (float)sy;
+                    const float u = (px - cx) / hw;
+                    const float u2 = u * u;
+                    if (u2 >= 1.0f) {
+                        continue;
+                    }
+                    const float k = sqrtf(1.0f - u2);
+                    const float y_up = -h_up * powf(k, 0.60f);
+                    const float y_dn =  h_low * powf(k, 1.10f);
+                    const float dy = py - cy;
+                    if (dy >= y_up && dy <= y_dn) {
+                        cov += 0.25f;
+                        const float span = (y_dn - y_up) + 0.001f;
+                        const float t = (dy - y_up) / span;
+                        if (t < 0.28f) {                       /* 上眼睑内阴影 */
+                            sh_top += 0.25f * (1.0f - t / 0.28f);
+                        }
+                        if ((dy - y_up) < 3.2f) {              /* 睫毛线 */
+                            lash += 0.25f;
+                        }
+                    }
+                }
+            }
+
+            int r = bg_r, g = bg_g, b = bg_b;
+
+            if (cov > 0.0f) {
+                /* ---- 巩膜：上暗下亮的竖向渐变 ---- */
+                float grad = 0.84f + 0.16f * ((float)y / (float)H);
+                float sr = 255.0f * grad;
+                float sg = 250.0f * grad;
+                float sb = 240.0f * grad;
+
+                /* 上眼睑阴影 */
+                const float sh = sh_top / (cov + 0.001f);
+                const float shade = 1.0f - 0.38f * sh;
+                sr *= shade;
+                sg *= shade;
+                sb *= shade;
+
+                /* ---- 虹膜（径向渐变 + limbal 暗环）---- */
+                const float dx = (float)x - iris_cx;
+                const float dyy = (float)y - iris_cy;
+                const float dr = sqrtf(dx * dx + dyy * dyy);
+                if (dr < iris_r + 1.5f) {
+                    float a = (iris_r + 1.5f - dr) / 1.5f;   /* 边缘 1.5px 抗锯齿 */
+                    if (a > 1.0f) { a = 1.0f; }
+                    const float t = (dr < iris_r) ? (dr / iris_r) : 1.0f;
+                    /* 中心暖棕 → 边缘深棕 */
+                    float ir = 176.0f - 108.0f * t;
+                    float ig = 132.0f -  84.0f * t;
+                    float ib =  90.0f -  58.0f * t;
+                    if (t > 0.88f) {                          /* limbal 暗环 */
+                        const float k2 = 1.0f - (t - 0.88f) / 0.12f * 0.55f;
+                        ir *= k2;
+                        ig *= k2;
+                        ib *= k2;
+                    }
+                    sr = sr * (1.0f - a) + ir * a;
+                    sg = sg * (1.0f - a) + ig * a;
+                    sb = sb * (1.0f - a) + ib * a;
+                }
+
+                /* ---- 瞳孔 ---- */
+                if (dr < pupil_r + 1.2f) {
+                    float a = (pupil_r + 1.2f - dr) / 1.2f;
+                    if (a > 1.0f) { a = 1.0f; }
+                    sr = sr * (1.0f - a) + 16.0f * a;
+                    sg = sg * (1.0f - a) + 14.0f * a;
+                    sb = sb * (1.0f - a) + 13.0f * a;
+                }
+
+                /* ---- 高光：一大（柔）一小（锐）---- */
+                {
+                    const float hx1 = iris_cx - iris_r * 0.38f;
+                    const float hy1 = iris_cy - iris_r * 0.42f;
+                    const float hr1 = iris_r * 0.34f;
+                    float d1 = sqrtf((x - hx1) * (x - hx1) + (y - hy1) * (y - hy1));
+                    if (d1 < hr1) {
+                        float a = 1.0f - d1 / hr1;
+                        a = a * a * 0.92f;
+                        sr = sr * (1.0f - a) + 255.0f * a;
+                        sg = sg * (1.0f - a) + 253.0f * a;
+                        sb = sb * (1.0f - a) + 246.0f * a;
+                    }
+                    const float hx2 = iris_cx + iris_r * 0.34f;
+                    const float hy2 = iris_cy + iris_r * 0.46f;
+                    const float hr2 = iris_r * 0.16f;
+                    float d2 = sqrtf((x - hx2) * (x - hx2) + (y - hy2) * (y - hy2));
+                    if (d2 < hr2) {
+                        float a = 1.0f - d2 / hr2;
+                        a *= 0.75f;
+                        sr = sr * (1.0f - a) + 255.0f * a;
+                        sg = sg * (1.0f - a) + 255.0f * a;
+                        sb = sb * (1.0f - a) + 250.0f * a;
+                    }
+                }
+
+                /* ---- 睫毛线（上眼睑最外侧一道深色）---- */
+                if (lash > 0.0f) {
+                    const float a = (lash / (cov + 0.001f)) * 0.85f;
+                    sr = sr * (1.0f - a) + 42.0f * a;
+                    sg = sg * (1.0f - a) + 33.0f * a;
+                    sb = sb * (1.0f - a) + 26.0f * a;
+                }
+
+                /* 合成到背景（边缘抗锯齿） */
+                r = (int)(bg_r + (sr - bg_r) * cov);
+                g = (int)(bg_g + (sg - bg_g) * cov);
+                b = (int)(bg_b + (sb - bg_b) * cov);
+            } else {
+                /* 眼外：上眼睑折痕的柔和暗带 + 下眼睑的水光（立体感的关键） */
+                const float u = ((float)x - cx) / hw;
+                const float u2 = u * u;
+                if (u2 < 1.0f) {
+                    const float k = sqrtf(1.0f - u2);
+                    const float y_up = cy - h_up * powf(k, 0.60f);
+                    const float y_dn = cy + h_low * powf(k, 1.10f);
+                    const float d_up = y_up - (float)y;      /* 折痕：上方为正 */
+                    const float d_dn = (float)y - y_dn;      /* 水光：下方为正 */
+                    if (d_up > 0.0f && d_up < 7.0f) {
+                        const float a = (1.0f - d_up / 7.0f) * 0.16f;
+                        r = (int)(bg_r * (1.0f - a) + 200.0f * a);
+                        g = (int)(bg_g * (1.0f - a) + 186.0f * a);
+                        b = (int)(bg_b * (1.0f - a) + 166.0f * a);
+                    } else if (d_dn > 0.0f && d_dn < 2.5f) {
+                        const float a = (1.0f - d_dn / 2.5f) * 0.55f;
+                        r = (int)(bg_r * (1.0f - a) + 255.0f * a);
+                        g = (int)(bg_g * (1.0f - a) + 252.0f * a);
+                        b = (int)(bg_b * (1.0f - a) + 244.0f * a);
+                    }
+                }
+            }
+
+            dst[(size_t)y * W + x] = face_rgb565(r, g, b);
+        }
+    }
+}
+
+/* ---------------- 生成 4 帧位图（2 眼 x 睁开/闭合）---------------- */
+static bool face_build_assets(void)
+{
+    if (s_face_assets_ok) {
+        return true;
+    }
+    const size_t px = (size_t)EYE_IMG_W * EYE_IMG_H;
+
+    for (int e = 0; e < 2; e++) {
+        for (int k = 0; k < 2; k++) {
+            uint16_t *buf = (uint16_t *)heap_caps_malloc(px * sizeof(uint16_t),
+                                                         MALLOC_CAP_SPIRAM);
+            if (buf == NULL) {
+                ESP_LOGE(TAG, "eye bitmap alloc failed");
+                return false;
+            }
+            face_render_eye(buf, (k == 0) ? 1.0f : 0.05f);
+
+            s_eye_dsc[e][k].header.always_zero = 0;
+            s_eye_dsc[e][k].header.w = EYE_IMG_W;
+            s_eye_dsc[e][k].header.h = EYE_IMG_H;
+            s_eye_dsc[e][k].header.cf = LV_IMG_CF_TRUE_COLOR;
+            s_eye_dsc[e][k].data_size = (uint32_t)(px * sizeof(uint16_t));
+            s_eye_dsc[e][k].data = (const uint8_t *)buf;
+        }
+    }
+    s_face_assets_ok = true;
+    return true;
+}
+
+/* ---------------- 动画小工具 ---------------- */
 static void face_opa_cb(void *var, int32_t v)
 {
     lv_obj_set_style_opa((lv_obj_t *)var, (lv_opa_t)v, LV_PART_MAIN);
@@ -452,7 +683,8 @@ static void face_arcw_cb(void *var, int32_t v)
     lv_obj_set_style_arc_width((lv_obj_t *)var, (lv_coord_t)v, LV_PART_MAIN);
 }
 
-static void face_anim_opa(lv_obj_t *o, int32_t from, int32_t to, uint32_t ms, uint32_t delay)
+static void face_anim_opa(lv_obj_t *o, int32_t from, int32_t to, uint32_t ms,
+                          uint32_t delay, lv_anim_path_cb_t path)
 {
     lv_anim_t a;
     lv_anim_init(&a);
@@ -460,152 +692,176 @@ static void face_anim_opa(lv_obj_t *o, int32_t from, int32_t to, uint32_t ms, ui
     lv_anim_set_values(&a, from, to);
     lv_anim_set_time(&a, ms);
     lv_anim_set_delay(&a, delay);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_set_path_cb(&a, path);
     lv_anim_set_exec_cb(&a, face_opa_cb);
     lv_anim_start(&a);
 }
 
-static void face_anim_xy(lv_obj_t *o, int32_t x, int32_t y, uint32_t ms)
+static void face_anim_x(lv_obj_t *o, int32_t to, uint32_t ms, uint32_t delay,
+                        lv_anim_path_cb_t path)
 {
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, o);
-    lv_anim_set_values(&a, lv_obj_get_x(o), x);
-    lv_anim_set_time(&a, ms);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_x);
-    lv_anim_start(&a);
-
-    lv_anim_t b;
-    lv_anim_init(&b);
-    lv_anim_set_var(&b, o);
-    lv_anim_set_values(&b, lv_obj_get_y(o), y);
-    lv_anim_set_time(&b, ms);
-    lv_anim_set_path_cb(&b, lv_anim_path_ease_out);
-    lv_anim_set_exec_cb(&b, (lv_anim_exec_xcb_t)lv_obj_set_y);
-    lv_anim_start(&b);
-}
-
-/* 双眼张开度：直接改高度（子控件自动被裁剪） */
-static void face_open_set(int32_t pct)
-{
-    if (pct < 0) {
-        pct = 0;
-    } else if (pct > 110) {
-        pct = 110;
-    }
-    s_open_pct = pct;
-    lv_coord_t h = (lv_coord_t)((EYE_H * pct) / 100);
-    if (h < 6) {
-        h = 6;
-    }
-    for (int i = 0; i < 2; i++) {
-        lv_obj_set_style_height(s_eye[i], h, LV_PART_MAIN);
-    }
-}
-
-static void face_open_cb(void *var, int32_t v)
-{
-    BSP_UNUSED(var);
-    face_open_set(v);
-}
-
-static void face_open_anim(int32_t to, uint32_t ms, uint32_t delay,
-                           lv_anim_path_cb_t path, lv_anim_ready_cb_t ready)
-{
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, NULL);
-    lv_anim_set_values(&a, s_open_pct, to);
+    lv_anim_set_values(&a, lv_obj_get_x(o), to);
     lv_anim_set_time(&a, ms);
     lv_anim_set_delay(&a, delay);
     lv_anim_set_path_cb(&a, path);
-    lv_anim_set_exec_cb(&a, face_open_cb);
-    if (ready != NULL) {
-        lv_anim_set_ready_cb(&a, ready);
-    }
+    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_x);
     lv_anim_start(&a);
 }
 
-/* ---------------- 表情动作 ---------------- */
-static void face_blink_reopen(lv_anim_t *a)
+static void face_anim_y(lv_obj_t *o, int32_t to, uint32_t ms, uint32_t delay,
+                        lv_anim_path_cb_t path)
 {
-    BSP_UNUSED(a);
-    s_open_pct = 0;
-    face_open_anim(100, 150, 0, lv_anim_path_ease_out, NULL);
-    s_face_busy = false;
-    s_busy_until_ms = lv_tick_get() + 200;
-    s_next_blink_ms = lv_tick_get() + 2200 + (esp_random() % 2600U);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, o);
+    lv_anim_set_values(&a, lv_obj_get_y(o), to);
+    lv_anim_set_time(&a, ms);
+    lv_anim_set_delay(&a, delay);
+    lv_anim_set_path_cb(&a, path);
+    lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)lv_obj_set_y);
+    lv_anim_start(&a);
 }
 
+/** 眼睑开合：0 = 全睁（闭合帧全透明），255 = 全闭 */
+static void face_lids_set(int32_t lid_opa)
+{
+    for (int i = 0; i < 2; i++) {
+        if (s_eye_lid[i] != NULL) {
+            lv_obj_set_style_opa(s_eye_lid[i], (lv_opa_t)lid_opa, LV_PART_MAIN);
+        }
+    }
+}
+
+/** 眉毛整体上/下移（情绪） */
+static void face_brows_set(int32_t dy)
+{
+    s_brow_dy = dy;
+    for (int i = 0; i < 2; i++) {
+        if (s_brow[i] != NULL) {
+            lv_obj_align(s_brow[i], LV_ALIGN_TOP_LEFT,
+                         (i == 0) ? BROW_LX : BROW_RX, BROW_Y + dy);
+        }
+    }
+}
+
+/* ---------------- 表情动作 ---------------- */
 static void face_do_blink(void)
 {
     s_face_busy = true;
-    s_busy_until_ms = lv_tick_get() + 400;
-    face_open_anim(0, 70, 0, lv_anim_path_ease_in, face_blink_reopen);
+    s_busy_until_ms = lv_tick_get() + 460;
+    face_lids_set(0);
+
+    /* 眨眼：眼皮快速落下（ease-in），再稍慢抬起（ease-out） */
+    for (int i = 0; i < 2; i++) {
+        face_anim_opa(s_eye_lid[i], 0, 255, 80, 0, lv_anim_path_ease_in);
+        face_anim_opa(s_eye_lid[i], 255, 0, 150, 110, lv_anim_path_ease_out);
+    }
+
+    /* 25% 概率连眨两下（真人常这样，机器感立刻消失） */
+    if ((esp_random() % 100U) < 25U) {
+        for (int i = 0; i < 2; i++) {
+            face_anim_opa(s_eye_lid[i], 0, 255, 70, 330, lv_anim_path_ease_in);
+            face_anim_opa(s_eye_lid[i], 255, 0, 140, 430, lv_anim_path_ease_out);
+        }
+        s_busy_until_ms += 320;
+    }
+
+    s_next_blink_ms = lv_tick_get() + 2100U + (esp_random() % 2800U);
+}
+
+/** 刚切到 FACE 页：从闭眼慢慢睁开（"醒来"），并轻轻抬一下眉毛 */
+static void face_wakeup(void)
+{
+    s_face_busy = true;
+    s_busy_until_ms = lv_tick_get() + 900;
+    for (int i = 0; i < 2; i++) {
+        face_anim_opa(s_eye_lid[i], 255, 0, 260, 60, lv_anim_path_ease_out);
+    }
+    face_lids_set(255);
+    face_brows_set(-3);
+}
+
+static void face_gaze(void)
+{
+    /* 两段式扫视：先 130ms 快速跳到目标（saccade），停 260ms 再微调 2px，
+     * 最后 300ms 滑回中位——真人眼球就是这样"跳-停-调"的。 */
+    const int32_t dx = ((int32_t)(esp_random() % 5U) - 2) * 3;   /* -6..+6 */
+    const int32_t dy = (int32_t)(esp_random() % 3U) - 1;         /* -1..+1 */
+
+    for (int i = 0; i < 2; i++) {
+        const lv_coord_t x0 = (i == 0) ? EYE_LX : EYE_RX;
+        const int32_t x1 = (int32_t)x0 + dx;
+        const int32_t x2 = (int32_t)x0 + dx + ((dx >= 0) ? 2 : -2);
+
+        face_anim_x(s_eye_open[i], x1, 130, 0, lv_anim_path_ease_out);
+        face_anim_y(s_eye_open[i], EYE_Y + dy, 130, 0, lv_anim_path_ease_out);
+        face_anim_x(s_eye_open[i], x2, 90, 300, lv_anim_path_ease_in_out);
+        face_anim_x(s_eye_open[i], x0, 300, 900, lv_anim_path_ease_in_out);
+        face_anim_y(s_eye_open[i], EYE_Y, 300, 900, lv_anim_path_ease_in_out);
+    }
+    face_brows_set(s_brow_dy);
 }
 
 static void face_happy(void)
 {
     s_face_busy = true;
-    s_busy_until_ms = lv_tick_get() + 1800;
+    s_busy_until_ms = lv_tick_get() + 1900;
 
-    face_open_anim(55, 170, 0, lv_anim_path_ease_out, NULL);        /* 眯眼 */
-    face_open_anim(100, 240, 1500, lv_anim_path_ease_in, NULL);     /* 复原 */
+    /* 眯眼：闭合帧淡到 45%（半闭 = 笑眼） */
+    for (int i = 0; i < 2; i++) {
+        face_anim_opa(s_eye_lid[i], 0, 115, 200, 0, lv_anim_path_ease_out);
+        face_anim_opa(s_eye_lid[i], 115, 0, 260, 1500, lv_anim_path_ease_in);
+    }
+    /* 眉毛下压（笑的时候眉毛会一起松下来） */
+    face_brows_set(3);
+    /* 嘴角下移 + 加粗；腮红加深 */
+    face_anim_y(s_mouth, MOUTH_Y + 5, 300, 0, lv_anim_path_ease_out);
+    face_anim_y(s_mouth, MOUTH_Y, 300, 1500, lv_anim_path_ease_in);
+    {
+        lv_anim_t w;
+        lv_anim_init(&w);
+        lv_anim_set_var(&w, s_mouth);
+        lv_anim_set_values(&w, 5, 8);
+        lv_anim_set_time(&w, 300);
+        lv_anim_set_path_cb(&w, lv_anim_path_ease_out);
+        lv_anim_set_exec_cb(&w, face_arcw_cb);
+        lv_anim_start(&w);
 
-    /* 笑得更开：嘴下移 + 加粗；腮红加深 */
-    face_anim_xy(s_mouth, MOUTH_X, MOUTH_Y + 5, 300);
-    lv_anim_t w;
-    lv_anim_init(&w);
-    lv_anim_set_var(&w, s_mouth);
-    lv_anim_set_values(&w, 5, 7);
-    lv_anim_set_time(&w, 300);
-    lv_anim_set_path_cb(&w, lv_anim_path_ease_out);
-    lv_anim_set_exec_cb(&w, face_arcw_cb);
-    lv_anim_start(&w);
-
-    face_anim_opa(s_cheek[0], 95, 130, 300, 0);
-    face_anim_opa(s_cheek[1], 95, 130, 300, 0);
-
-    face_anim_xy(s_mouth, MOUTH_X, MOUTH_Y, 300);
-    lv_anim_t w2;
-    lv_anim_init(&w2);
-    lv_anim_set_var(&w2, s_mouth);
-    lv_anim_set_values(&w2, 7, 5);
-    lv_anim_set_time(&w2, 300);
-    lv_anim_set_delay(&w2, 1500);
-    lv_anim_set_path_cb(&w2, lv_anim_path_ease_in);
-    lv_anim_set_exec_cb(&w2, face_arcw_cb);
-    lv_anim_start(&w2);
-    face_anim_opa(s_cheek[0], 130, 95, 300, 1500);
-    face_anim_opa(s_cheek[1], 130, 95, 300, 1500);
+        lv_anim_t w2;
+        lv_anim_init(&w2);
+        lv_anim_set_var(&w2, s_mouth);
+        lv_anim_set_values(&w2, 8, 5);
+        lv_anim_set_time(&w2, 300);
+        lv_anim_set_delay(&w2, 1500);
+        lv_anim_set_path_cb(&w2, lv_anim_path_ease_in);
+        lv_anim_set_exec_cb(&w2, face_arcw_cb);
+        lv_anim_start(&w2);
+    }
+    face_anim_opa(s_cheek[0], 95, 140, 300, 0, lv_anim_path_ease_out);
+    face_anim_opa(s_cheek[1], 95, 140, 300, 0, lv_anim_path_ease_out);
+    face_anim_opa(s_cheek[0], 140, 95, 300, 1500, lv_anim_path_ease_in);
+    face_anim_opa(s_cheek[1], 140, 95, 300, 1500, lv_anim_path_ease_in);
 }
 
 static void face_surprise(void)
 {
     s_face_busy = true;
-    s_busy_until_ms = lv_tick_get() + 1400;
+    s_busy_until_ms = lv_tick_get() + 1500;
 
-    face_anim_opa(s_mouth, 255, 0, 120, 0);         /* 笑弧淡出 */
-    face_anim_opa(s_mouth_o, 0, 255, 120, 0);       /* O 嘴淡入 */
-    face_anim_opa(s_cheek[0], 95, 140, 200, 0);
-    face_anim_opa(s_cheek[1], 95, 140, 200, 0);
+    face_lids_set(0);
+    face_brows_set(-6);                    /* 眉毛上扬 = 惊讶 */
+    face_anim_opa(s_mouth, 255, 0, 130, 0, lv_anim_path_ease_in);
+    face_anim_opa(s_mouth_o, 0, 255, 130, 0, lv_anim_path_ease_out);
+    face_anim_opa(s_cheek[0], 95, 60, 200, 0, lv_anim_path_ease_out);
+    face_anim_opa(s_cheek[1], 95, 60, 200, 0, lv_anim_path_ease_out);
 
-    face_anim_opa(s_mouth, 0, 255, 180, 900);
-    face_anim_opa(s_mouth_o, 255, 0, 180, 900);
-    face_anim_opa(s_cheek[0], 140, 95, 200, 900);
-    face_anim_opa(s_cheek[1], 140, 95, 200, 900);
-}
-
-static void face_look(void)
-{
-    /* 视线游移：高光在眼内小幅平移，正负随机；两秒内自己滑回去 */
-    const int32_t dx = (int32_t)(esp_random() % 9U) - 4;    /* -4..+4 */
-    const int32_t dy = (int32_t)(esp_random() % 5U) - 2;    /* -2..+2 */
-    for (int i = 0; i < 2; i++) {
-        face_anim_xy(s_glint_big[i], 14 + dx, 14 + dy, 240);
-        face_anim_xy(s_glint_small[i], 34 + dx / 2, 40 + dy / 2, 240);
-    }
+    face_anim_opa(s_mouth, 0, 255, 200, 1000, lv_anim_path_ease_in);
+    face_anim_opa(s_mouth_o, 255, 0, 200, 1000, lv_anim_path_ease_in);
+    face_anim_opa(s_cheek[0], 60, 95, 200, 1000, lv_anim_path_ease_in);
+    face_anim_opa(s_cheek[1], 60, 95, 200, 1000, lv_anim_path_ease_in);
 }
 
 /* ---------------- 页构建 ---------------- */
@@ -615,30 +871,56 @@ static void page_face_build(void)
 
     chrome_build(scr);
 
-    for (int i = 0; i < 2; i++) {
-        const lv_coord_t x = (i == 0) ? EYE_LX : EYE_RX;
-        s_eye[i] = mk_obj(scr, x, EYE_Y, EYE_W, EYE_H,
-                          C_INK, LV_OPA_COVER, C_INK, 0, LV_RADIUS_CIRCLE);
-        if (s_eye[i] == NULL) {
-            continue;
-        }
-        s_glint_big[i] = mk_obj(s_eye[i], 14, 14, GLINT_BIG, GLINT_BIG,
-                                C_BG, LV_OPA_COVER, C_BG, 0, LV_RADIUS_CIRCLE);
-        s_glint_small[i] = mk_obj(s_eye[i], 40, 44, 8, 8,
-                                  C_BG, LV_OPA_COVER, C_BG, 0, LV_RADIUS_CIRCLE);
+    if (!face_build_assets()) {
+        /* 位图生成失败：退化为提示文字，不影响其它页 */
+        mk_text(scr, 100, 110, &lv_font_montserrat_14, C_ERR, "face assets failed");
+        tabs_build(scr, 1);
+        return;
     }
 
-    /* 腮红（呼吸式明暗，让脸"活"起来） */
-    s_cheek[0] = mk_obj(scr, 62, 144, 36, 28, C_BLUSH, 95, C_BLUSH, 0, LV_RADIUS_CIRCLE);
-    s_cheek[1] = mk_obj(scr, 222, 144, 36, 28, C_BLUSH, 95, C_BLUSH, 0, LV_RADIUS_CIRCLE);
+    for (int i = 0; i < 2; i++) {
+        const lv_coord_t x = (i == 0) ? EYE_LX : EYE_RX;
+        s_gaze_x[i] = x;
 
-    /* 笑弧：只留背景弧，指示器与旋钮隐藏 */
+        s_eye_open[i] = lv_img_create(scr);
+        lv_img_set_src(s_eye_open[i], &s_eye_dsc[i][0]);
+        lv_obj_align(s_eye_open[i], LV_ALIGN_TOP_LEFT, x, EYE_Y);
+        lv_obj_clear_flag(s_eye_open[i], LV_OBJ_FLAG_CLICKABLE);
+
+        /* 闭合眼睑帧：叠在同一位置，平时全透明 */
+        s_eye_lid[i] = lv_img_create(scr);
+        lv_img_set_src(s_eye_lid[i], &s_eye_dsc[i][1]);
+        lv_obj_align(s_eye_lid[i], LV_ALIGN_TOP_LEFT, x, EYE_Y);
+        lv_obj_clear_flag(s_eye_lid[i], LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_opa(s_eye_lid[i], 0, LV_PART_MAIN);
+
+        /* 眉毛：细圆弧（bg_angles 200~340 = 上凸弧） */
+        s_brow[i] = lv_arc_create(scr);
+        lv_obj_set_size(s_brow[i], BROW_W, BROW_H);
+        lv_obj_align(s_brow[i], LV_ALIGN_TOP_LEFT,
+                     (i == 0) ? BROW_LX : BROW_RX, BROW_Y);
+        lv_arc_set_bg_angles(s_brow[i], 200, 340);
+        lv_obj_set_style_arc_width(s_brow[i], 6, LV_PART_MAIN);
+        lv_obj_set_style_arc_color(s_brow[i], lv_color_hex(0x4E3B2C), LV_PART_MAIN);
+        lv_obj_set_style_arc_opa(s_brow[i], 0, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(s_brow[i], LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(s_brow[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(s_brow[i], 0, LV_PART_MAIN);
+        lv_obj_remove_style(s_brow[i], NULL, LV_PART_KNOB);
+        lv_obj_clear_flag(s_brow[i], LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    /* 腮红 */
+    s_cheek[0] = mk_obj(scr, 52, CHEEK_Y, 38, 28, C_BLUSH, 95, C_BLUSH, 0, LV_RADIUS_CIRCLE);
+    s_cheek[1] = mk_obj(scr, 230, CHEEK_Y, 38, 28, C_BLUSH, 95, C_BLUSH, 0, LV_RADIUS_CIRCLE);
+
+    /* 笑弧 */
     s_mouth = lv_arc_create(scr);
     lv_obj_set_size(s_mouth, MOUTH_W, MOUTH_W);
     lv_obj_align(s_mouth, LV_ALIGN_TOP_LEFT, MOUTH_X, MOUTH_Y);
     lv_arc_set_bg_angles(s_mouth, 25, 155);
     lv_obj_set_style_arc_width(s_mouth, 5, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(s_mouth, C_INK, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_mouth, lv_color_hex(0x4A382C), LV_PART_MAIN);
     lv_obj_set_style_arc_opa(s_mouth, 0, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(s_mouth, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(s_mouth, 0, LV_PART_MAIN);
@@ -646,18 +928,19 @@ static void page_face_build(void)
     lv_obj_remove_style(s_mouth, NULL, LV_PART_KNOB);
     lv_obj_clear_flag(s_mouth, LV_OBJ_FLAG_CLICKABLE);
 
-    /* O 嘴：惊讶时淡入（初始全透明） */
-    s_mouth_o = mk_obj(scr, 147, 138, 26, 26, C_BG, LV_OPA_TRANSP, C_INK, 5,
-                       LV_RADIUS_CIRCLE);
+    /* O 嘴（惊讶） */
+    s_mouth_o = mk_obj(scr, 147, 138, 26, 26, C_BG, LV_OPA_TRANSP,
+                       lv_color_hex(0x4A382C), 5, LV_RADIUS_CIRCLE);
     if (s_mouth_o != NULL) {
         lv_obj_set_style_opa(s_mouth_o, 0, LV_PART_MAIN);
     }
 
     tabs_build(scr, 1);
 
-    face_open_set(100);
-    s_next_blink_ms  = lv_tick_get() + 900;
-    s_next_action_ms = lv_tick_get() + 2600;
+    face_lids_set(0);
+    face_brows_set(0);
+    s_next_blink_ms  = lv_tick_get() + 800;
+    s_next_action_ms = lv_tick_get() + 2200;
 }
 
 /* ---------------- 表情调度（只在 FACE 页运行） ---------------- */
@@ -666,14 +949,23 @@ static void face_timer_cb(lv_timer_t *t)
     BSP_UNUSED(t);
 
     if (s_page != 1U) {
-        return;                          /* 不在 FACE 页：完全不产生动画与重绘 */
+        s_face_visited = false;
+        return;                          /* 不在 FACE 页：零动画零重绘 */
     }
 
     const uint32_t now = lv_tick_get();
 
+    /* 刚切到本页：做一次"睁眼"唤醒动画 */
+    if (!s_face_visited) {
+        s_face_visited = true;
+        face_wakeup();
+        return;
+    }
+
     if (s_face_busy) {
         if ((int32_t)(now - s_busy_until_ms) >= 0) {
             s_face_busy = false;
+            face_brows_set(0);
         }
         return;
     }
@@ -685,16 +977,17 @@ static void face_timer_cb(lv_timer_t *t)
 
     if ((int32_t)(now - s_next_action_ms) >= 0) {
         const uint32_t r = esp_random() % 100U;
-        if (r < 12U) {
+        if (r < 14U) {
             face_happy();
-        } else if (r < 20U) {
+        } else if (r < 22U) {
             face_surprise();
         } else {
-            face_look();
+            face_gaze();
         }
-        s_next_action_ms = now + 1800U + (esp_random() % 2400U);
+        s_next_action_ms = now + 1600U + (esp_random() % 2200U);
     }
 }
+
 /* ================================================================
  *                        数据刷新（含平滑与死区）
  * ================================================================ */

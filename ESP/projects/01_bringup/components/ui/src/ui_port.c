@@ -502,7 +502,7 @@ static void ui_debug_shot_cb(lv_timer_t *t)
             ui_dashboard_request(1);       /* HOME -> FACE */
         }
         stage = 1;
-        lv_timer_set_period(self, 1500);
+        lv_timer_set_period(self, 2500);   /* 等唤醒动画跑完再抓，避免抓到闭眼帧 */
         return;
     }
     if (stage == 1) {
