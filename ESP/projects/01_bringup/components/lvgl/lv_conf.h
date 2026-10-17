@@ -141,7 +141,7 @@
 #define LV_USE_FFMPEG     0
 
 /*==================== 杂项 ====================*/
-#define LV_USE_SNAPSHOT   0
+#define LV_USE_SNAPSHOT   1      /* on: screen snapshot over UART for visual regression */
 #define LV_USE_MONKEY     0
 #define LV_USE_GRIDNAV    0
 #define LV_USE_FRAGMENT   0

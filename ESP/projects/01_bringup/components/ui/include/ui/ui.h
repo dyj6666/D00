@@ -40,6 +40,12 @@ uint32_t ui_get_fps(void);
 uint8_t ui_get_page_index(void);
 
 /**
+ * @brief  当前屏幕截图（RGB565 原始流）经控制台串口回传，供主机转 PNG 做视觉回归
+ * @note   输出：文本头 "DUMP <w> <h>" + 换行 + w*h*2 字节 RGB565(小端) + 回车换行 + "DUMP_END"
+ */
+void ui_debug_dump_screen(void);
+
+/**
  * @brief  切到下一页（按键 K1 调用）
  */
 void ui_next_page(void);

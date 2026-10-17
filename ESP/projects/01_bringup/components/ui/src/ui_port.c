@@ -24,6 +24,9 @@
  *   - LVGL 任务独占 core1，应用逻辑留 core0；
  *   - 时基用 esp_timer（LV_TICK_CUSTOM），没有 1ms 定时器中断开销。
  * ================================================================ */
+#include <stdio.h>
+#include <string.h>
+
 #include "ui/ui.h"
 #include "ui_internal.h"
 
@@ -47,6 +50,7 @@ static const char *TAG = "UI";
 #define UI_TASK_STACK       (12 * 1024)
 #define UI_TASK_PRIO        5
 #define UI_TASK_CORE        1                           /* UI 独占 core1 */
+#define UI_DEBUG_SHOT       0    /* 1=上电自动切 FACE 页并回传一张截图（配合 tools/shot.py 做视觉回归） */
 #define UI_STARTUP_BENCH    1                           /* 上电跑一次性能基准（回归对比用；量产可关） */
 
 /* ---------------- 显示缓冲（内部 RAM，DMA 可达） ---------------- */
@@ -72,6 +76,32 @@ static volatile uint8_t  s_inflight[UI_MAX_INFLIGHT];
 static volatile uint32_t s_in_head = 0;
 static volatile uint32_t s_in_tail = 0;
 static volatile uint8_t  s_buf_busy[2] = { 0, 0 };
+
+/* ---------------- 调试截图：把 flush 的每块拼成整帧（PSRAM） ----------------
+ * 本 LVGL 副本没有 snapshot 模块，所以用"抓 DMA 前的那块渲染结果"来合成整帧：
+ *   flush_cb 里按行 memcpy 到全屏缓冲 → 触发一次整屏重绘 → 串口回传 → 主机转 PNG。
+ * 仅在 ui_debug_dump_screen() 期间生效，平时零开销。
+ */
+static uint16_t *s_shot;                 /* 320x240 RGB565，PSRAM，按需分配 */
+static volatile bool s_shot_active;
+
+static void ui_debug_shot_cb(lv_timer_t *t);
+
+static void shot_capture(const lv_area_t *area, const uint16_t *px)
+{
+    if (!s_shot_active || (s_shot == NULL)) {
+        return;
+    }
+    const lv_coord_t w = lv_area_get_width(area);
+    for (lv_coord_t y = area->y1; y <= area->y2; y++) {
+        if (y < 0 || y >= BSP_LCD_HEIGHT) {
+            continue;
+        }
+        memcpy(&s_shot[(size_t)y * BSP_LCD_WIDTH + (size_t)area->x1],
+               &px[(size_t)(y - area->y1) * (size_t)w],
+               (size_t)w * sizeof(uint16_t));
+    }
+}
 
 /* ---------------- 耗时归因（每次 flush 内部 / 两次 flush 之间的渲染）---------------- */
 static volatile uint64_t s_flush_us_acc  = 0;   /* flush_cb 内部总耗时（含等待/提交） */
@@ -101,6 +131,8 @@ static void IRAM_ATTR ui_flush_done_isr(void)
 static void ui_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *px_map)
 {
     const uint64_t t_enter = esp_timer_get_time();
+    shot_capture(area, (const uint16_t *)px_map);     /* 调试截图：只在抓帧期间生效 */
+
     if (s_last_exit_us != 0U) {
         s_render_us_acc += t_enter - s_last_exit_us;   /* 上一笔提交完 → 本次渲染结束 */
     }
@@ -366,6 +398,9 @@ esp_err_t ui_start(void)
     }
 
     lv_timer_create(ui_fps_timer_cb, 1000, NULL);
+#if UI_DEBUG_SHOT
+    lv_timer_create(ui_debug_shot_cb, 6000, NULL);
+#endif
     lv_timer_create(ui_perf_selftest_cb, 3000, NULL);   /* 上电自测一次 */
 
     /* 界面在创建刷新任务之前构建（此刻 LVGL 单线程，天然安全） */
@@ -410,6 +445,71 @@ uint32_t ui_get_fps(void)
 uint8_t ui_get_page_index(void)
 {
     return ui_dashboard_page();
+}
+
+/* ================================================================
+ *  调试：整屏截图经串口回传（视觉回归用）
+ * ================================================================ */
+void ui_debug_dump_screen(void)
+{
+    const size_t bytes = (size_t)BSP_LCD_WIDTH * BSP_LCD_HEIGHT * sizeof(uint16_t);
+
+    if (s_shot == NULL) {
+        s_shot = (uint16_t *)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_shot == NULL) {
+            ESP_LOGE(TAG, "shot buffer alloc failed");
+            return;
+        }
+    }
+
+    s_shot_active = true;
+    lv_obj_invalidate(lv_scr_act());
+    lv_refr_now(NULL);                     /* 整屏重绘一次，flush_cb 里合成整帧 */
+    for (int i = 0; i < 50 && s_buf_busy[0]; i++) {   /* 等最后一块 DMA 落地 */
+        (void)bsp_lcd_wait_flush_done(100);
+    }
+    s_shot_active = false;
+
+    esp_log_level_set("*", ESP_LOG_NONE);   /* 二进制流期间静音所有日志，避免插入破坏 */
+    printf("\nDUMP %u %u\n", (unsigned)BSP_LCD_WIDTH, (unsigned)BSP_LCD_HEIGHT);
+    fflush(stdout);
+
+    const uint8_t *src = (const uint8_t *)s_shot;
+    for (size_t off = 0; off < bytes; off += 512U) {
+        size_t n = bytes - off;
+        if (n > 512U) {
+            n = 512U;
+        }
+        fwrite(src + off, 1, n, stdout);
+        fflush(stdout);
+        vTaskDelay(pdMS_TO_TICKS(1));      /* 让出 CPU，别饿死其它任务 */
+    }
+    printf("\nDUMP_END\n");
+    fflush(stdout);
+    esp_log_level_set("*", ESP_LOG_INFO);  /* 恢复日志 */
+    ESP_LOGI(TAG, "screen dumped (%ux%u, %u B)",
+             (unsigned)BSP_LCD_WIDTH, (unsigned)BSP_LCD_HEIGHT, (unsigned)bytes);
+}
+
+/* 上电后自动切到 FACE 页并抓一张图（仅调试构建；UI_DEBUG_SHOT=0 即关闭） */
+
+static void ui_debug_shot_cb(lv_timer_t *t)
+{
+    static int stage;
+    lv_timer_t *self = t;
+    if (stage == 0) {
+        if (ui_dashboard_page() == 0U) {
+            ui_dashboard_request(1);       /* HOME -> FACE */
+        }
+        stage = 1;
+        lv_timer_set_period(self, 1500);
+        return;
+    }
+    if (stage == 1) {
+        ui_debug_dump_screen();
+        stage = 2;
+    }
+    lv_timer_del(self);
 }
 
 void ui_next_page(void)
