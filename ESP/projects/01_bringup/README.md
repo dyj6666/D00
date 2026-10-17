@@ -377,3 +377,52 @@ bsp_selftest(true);                       // 只读自检，谁在线一目了�
 - 绘制 API 在 BSP 里：`bsp_lcd_text()` / `bsp_lcd_textf()` / `bsp_lcd_text_right()`，
   未收录的字会画成实心方块（缺字一眼可见，而不是静默不显示）；
 - 改了屏幕上的文案后，重跑一次 `gen_ui_font.py` 即可（不需要改任何 C 代码）。
+
+---
+
+## 十一、LVGL 8.3.5 移植与性能调优（界面层）
+
+### 11.1 架构
+
+`
+components/lvgl/          LVGL 8.3.5 源码（vendored，与 D00 的 STM32 侧同版本，纯可移植 C）
+├── lv_conf.h             性能向配置（65KB 内存池 / 15ms 刷新 / 输入 20ms / IRAM 热路径）
+└── CMakeLists.txt        GLOB src/*.c，公开 LV_CONF_INCLUDE_SIMPLE
+
+components/ui/            端口层 + 应用界面
+├── src/ui_port.c         显示双缓冲 + 异步 DMA 重叠、触摸输入、时基、core1 刷新任务、帧率统计
+└── src/ui_dashboard.c    三页仪表盘（HOME 时钟/温度/光照/IMU、IMU 实时曲线、SYS 内存与模块）
+`
+
+### 11.2 实测性能（真机 COM9 日志）
+
+| 指标 | 数值 | 说明 |
+| --- | --- | --- |
+| 全屏重绘 | **21 ms/帧 → 47 fps** | 总线理论 15.4ms/65fps（10MHz、8bit），剩 5.6ms 为渲染 |
+| 局部刷新 | 单块 38.4KB / 3.8ms | 时间/温度/光照每 250ms 更新，视觉无延迟 |
+| LVGL 堆 | 16.4KB / 64KB（26%） | 静态池在内部 RAM |
+| 内部 RAM 余量 | 172 KB | 双缓冲 76.8KB + LVGL 池 64KB + IRAM 热路径 ~15KB |
+| APP 体积 | 743,200 B | 分区余量 63%（1.29MB） |
+| 启动耗时 | ~3.0 s 到界面可用 | 其中 PSRAM 8MB 全片测试约 0.46s（可关） |
+
+### 11.3 为什么能跑这么快（三个关键决策）
+
+1. **双缓冲放内部 RAM**（2 × 320×60×2B）：PSRAM 写带宽不足，CPU 渲染写 PSRAM 会拖慢；
+2. **异步提交 + DMA 完成中断里 lv_disp_flush_ready()**：渲染下一块与搬运本块重叠；
+   BSP 为此新增 sp_lcd_draw_bitmap_async() + sp_lcd_set_flush_done_callback()；
+3. **LV_ATTRIBUTE_FAST_MEM = IRAM_ATTR**：LVGL 热路径脱离 flash XIP，渲染 26ms→21ms。
+
+### 11.4 交互
+
+- 触摸：底部三页签点击切换（FADE_ON 180ms）；按键 K1 上一页 / K2 下一页（MOVE 220ms）；
+- 屏幕右下角有 LVGL 性能监视器（FPS + CPU%），系统页有内存条与在线模块清单；
+- 上电 3s 后自动打印一次 PERF full-screen redraw 基准值。
+
+### 11.5 下一步可调的旋钮
+
+| 旋钮 | 现值 | 影响 |
+| --- | --- | --- |
+| BSP_LCD_PCLK_HZ（bsp_pinmap.h） | 10 MHz | 15MHz → 理论 98fps 上限；需示波器/肉眼确认无花屏（ST7789 写周期下限 66ns） |
+| UI_BUF_LINES（ui_port.c） | 60 行 | 加大可减少分块数，但已实测无收益（瓶颈在渲染） |
+| CONFIG_SPIRAM_MEMTEST | y | 关闭可省 ~0.46s 启动时间 |
+| LV_USE_PERF_MONITOR（lv_conf.h） | 1 | 量产可关，省一点 CPU |

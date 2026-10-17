@@ -32,8 +32,10 @@
 #include "nvs_flash.h"
 
 #include "bsp/bsp.h"
+#include "bsp/key.h"
 
 #include "boot_ui.h"
+#include "ui/ui.h"
 
 /* ---------------- 常量 ---------------- */
 static const char *TAG = "BRINGUP";
@@ -164,11 +166,12 @@ static void heartbeat_task(void *arg)
 
     for (;;) {
         beat++;
-        ESP_LOGI(TAG, "[BEAT ] #%lu uptime=%lld s | heap free=%u B min=%u B",
+        ESP_LOGI(TAG, "[BEAT ] #%lu uptime=%lld s | heap free=%u B min=%u B | UI fps=%lu",
                  (unsigned long)beat,
                  esp_timer_get_time() / 1000000,
                  (unsigned)esp_get_free_heap_size(),
-                 (unsigned)esp_get_minimum_free_heap_size());
+                 (unsigned)esp_get_minimum_free_heap_size(),
+                 (unsigned long)ui_get_fps());
         vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_PERIOD_MS));   /* 让出 CPU，验证调度 */
     }
 }
@@ -176,6 +179,26 @@ static void heartbeat_task(void *arg)
 /* ================================================================
  *                        入口
  * ================================================================ */
+
+/**
+ * @brief  按键回调（BSP 按键任务上下文）
+ * @note   K1(KEY0) = 上一页，K2(KEY1) = 下一页。
+ *         LVGL 不是线程安全的，这里只投递请求，真正的切页在 UI 任务里执行。
+ */
+static void app_key_cb(bsp_key_id_t key, bsp_key_event_t event, uint32_t hold_ms, void *ctx)
+{
+    BSP_UNUSED(hold_ms);
+    BSP_UNUSED(ctx);
+
+    if (event != BSP_KEY_EVENT_CLICK) {
+        return;
+    }
+    if (key == BSP_KEY_0) {
+        ui_prev_page();
+    } else if (key == BSP_KEY_1) {
+        ui_next_page();
+    }
+}
 
 /**
  * @brief  应用入口：bringup 自检
@@ -213,8 +236,21 @@ void app_main(void)
         return;
     }
 
-    ESP_LOGI(TAG, "bringup done. 屏幕上的开机动画会逐项自检，无需串口。");
+    /* ---- 按键：K1 上一页 / K2 下一页（LVGL 跨任务请求由 UI 内部串行化） ---- */
+    esp_err_t kerr = bsp_key_set_callback(app_key_cb, NULL);
+    if (kerr != ESP_OK) {
+        ESP_LOGW(TAG, "[KEY ] callback register failed: %s", esp_err_to_name(kerr));
+    }
 
-    /* ---- 开机自检动画（屏幕独占，日志照常打印） ---- */
-    boot_ui_start();
+    /* ---- LVGL 界面：双缓冲 + 异步 DMA + core1 独占刷新任务 ---- */
+    esp_err_t uerr = ui_start();
+    if (uerr != ESP_OK) {
+        /* LVGL 起不来不影响自检：退回点阵自检动画，屏幕仍有内容 */
+        ESP_LOGE(TAG, "[UI  ] LVGL start failed (%s), fallback to boot_ui",
+                 esp_err_to_name(uerr));
+        boot_ui_start();
+        return;
+    }
+
+    ESP_LOGI(TAG, "bringup done. LVGL dashboard running -> swipe tabs or press K1/K2.");
 }

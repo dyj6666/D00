@@ -45,6 +45,9 @@ static SemaphoreHandle_t         s_flush_sem = NULL;
 static uint16_t                 *s_fb = NULL;
 static bool                      s_backlight_on = false;
 
+/* 应用层完成回调（ISR 上下文调用；LVGL 用它做渲染/DMA 重叠） */
+static bsp_lcd_flush_done_cb_t    s_done_cb = NULL;
+
 /* ---------------- 内部函数声明 ---------------- */
 
 static esp_err_t lcd_new_bus_and_panel(void);
@@ -69,6 +72,13 @@ static bool IRAM_ATTR lcd_color_trans_done_cb(esp_lcd_panel_io_handle_t panel_io
     if (s_flush_sem != NULL) {
         xSemaphoreGiveFromISR(s_flush_sem, &woken);
     }
+
+    /* 应用层（LVGL）的完成通知：必须在 ISR 里立刻回调，
+     * 这样"渲染下一块"可以与"本块 DMA 搬运"完整重叠。 */
+    if (s_done_cb != NULL) {
+        s_done_cb();
+    }
+
     return (woken == pdTRUE);
 }
 
@@ -264,6 +274,31 @@ esp_err_t bsp_lcd_draw_bitmap(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1
 
     /* 阻塞到 DMA 真正搬完：返回后调用方可以安全复用/释放 pixels */
     return bsp_lcd_wait_flush_done(BSP_FLUSH_TIMEOUT_MS);
+}
+
+esp_err_t bsp_lcd_draw_bitmap_async(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
+                                    const uint16_t *pixels)
+{
+    if (s_panel == NULL || pixels == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (x0 >= x1 || y0 >= y1 || x1 > BSP_LCD_WIDTH || y1 > BSP_LCD_HEIGHT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* 清掉残留完成信号，避免上一笔的回调被误当成本笔的 */
+    (void)xSemaphoreTake(s_flush_sem, 0);
+
+    esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, x0, y0, x1, y1, pixels);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "draw_bitmap_async failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+void bsp_lcd_set_flush_done_callback(bsp_lcd_flush_done_cb_t cb)
+{
+    s_done_cb = cb;
 }
 
 esp_err_t bsp_lcd_fill(uint16_t color)

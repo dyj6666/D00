@@ -479,3 +479,88 @@ init_device 里也 `cs_high()` —— 该做的都做了，**但在这块板 + �
    比反复怀疑代码、反复换卡快得多 —— 本例一眼就看出"探测能让卡活"这个关键线索。
 3. **规范的硬性时序要求，自己补一遍最保险**：74 时钟成本 1ms，却能避免一整类
    "偶发/依赖具体卡"的挂载失败。
+
+---
+
+## 6. LVGL 移植与显示性能调优：从 37fps 到 47fps 的根因定位
+
+### 现象（目标）
+
+要求"LVGL 移植 + 界面丝滑"。硬件是 320x240 ST7789、**8080 并口 8bit @10MHz**，
+即总线带宽 10MB/s，全屏 150KB 理论 15.4ms ≈ **65fps 上限**。
+首版跑通后实测全屏重绘 26ms/帧（38fps），距上限还有 10.6ms 不知去向。
+
+### 影响面
+
+页面切换动画（MOVE_LEFT 每帧都是全屏重绘）与整屏滚动会明显掉帧；
+静态页面无感，动态体验不达标。
+
+### 排查思路
+
+把"每帧 26ms"拆成两段：**总线搬运**（已知 15.4ms，可算）与**软件渲染**（未知）。
+只可能从这两处下手，所以先做一个可复现的量化自测，再逐项排除。
+
+### 排查过程（三轮实测，数据驱动）
+
+自测方法：上电 3s 后跑一次 lv_obj_invalidate(全屏) + lv_refr_now() × 20 次，
+用 esp_timer 计时取平均（结果打印为 PERF full-screen redraw）。
+
+| 轮次 | 改动 | 全屏重绘 | 结论 |
+| --- | --- | --- | --- |
+| ① 基线 | 缓冲 320x40 x2（内部 RAM），双缓冲 + 异步 DMA | **26 ms → 38 fps** | 渲染耗时 ≈ 10.6ms，占主导 |
+| ② 加大缓冲 | 320x40 → 320x60（每帧 6 块 → 3 块） | **27 ms → 37 fps** | **无改善 → 排除"分块开销"假设** |
+| ③ 热路径入 IRAM | LV_ATTRIBUTE_FAST_MEM = IRAM_ATTR | **21 ms → 47 fps** | **确认根因：flash XIP 取指 cache miss** |
+
+（③ 的代价：内部 RAM 少 ~15KB，仍余 172KB；flash +0.6KB。）
+
+被推翻的方向：**"分块太多导致每次 flush 有固定开销"**——把每帧分块数减半后
+帧率不升反降 1ms，说明瓶颈不在提交/中断次数，而在每像素的 CPU 时间。
+
+### 根因
+
+LVGL 的混合/字形/填充函数默认放在 flash 里执行（XIP）。8080 并口搬运期间
+CPU 正在渲染下一块，此时大量指令 cache miss 会把渲染时间推到 10ms 量级，
+把本该 15.4ms 的帧硬生生拖到 26ms。LVGL 官方为此预留了 LV_ATTRIBUTE_FAST_MEM
+标注，但默认定义为空；ESP32 上把它映射成 IRAM_ATTR 即可让热点代码常驻 IRAM。
+
+### 解决方案
+
+`c
+/* components/lvgl/lv_conf.h */
+#include <esp_attr.h>
+#define LV_ATTRIBUTE_FAST_MEM  IRAM_ATTR
+`
+
+刷新通路（components/ui/src/ui_port.c）同时固定为：
+
+1. **双缓冲放内部 RAM**（2 × 320×60 × 2B = 76.8KB），PSRAM 写带宽不足；
+2. **异步提交 + 完成回调**：sp_lcd_draw_bitmap_async() 提交后立即返回，
+   DMA 完成中断里 lv_disp_flush_ready() —— 渲染下一块与搬运本块重叠；
+3. **单笔在途约束**：flush_cb 内若上一笔未完成则等 BSP 完成信号量（保证不踩缓冲）；
+4. **LVGL 任务独占 core1**（prio 5，12KB 栈），应用逻辑留 core0；
+5. 时基用 LV_TICK_CUSTOM + esp_timer_get_time()，省掉 1ms 定时器中断。
+
+### 验证
+
+`
+I (2983) UI: LVGL 8.3.5 ready: 320x240, buf=320x60 x2 (internal RAM), core1
+I (6357) UI: PERF full-screen redraw: 21 ms/frame -> 47 fps (bus limit ~65 fps @10MHz)
+I (6358) UI: PERF mem: internal heap free=172679 B | LVGL heap 26% used (16424/65536 B)
+I (7923) BRINGUP: [BEAT ] #2 uptime=7 s | heap free=8364496 B | UI fps=22
+`
+
+- 全屏重绘 47fps、局部刷新（时间/温度/光照每 250ms）几乎零延迟；
+- APP 体积 739,984 B + LVGL 后 743,200 B，分区余量 63%（1.29MB）;
+- 上电流程、三页仪表盘、触摸点击页签、K1/K2 切页均正常。
+
+### 经验沉淀
+
+1. **先量化再优化**：把"慢"拆成可算的（总线）与不可算的（渲染），
+   三步就能锁定 IRAM 这个根因；否则容易在"双缓冲/分块策略"上反复折腾。
+2. **一次只改一个变量并记录数字**：②轮"加大缓冲"是反直觉的失败实验，
+   但正是它排除了错误方向——失败实验同样要进日志。
+3. **ESP32 上凡是"CPU 密集 + flash 常驻"的库，都要考虑 IRAM 化**：
+   LVGL 有现成开关，mbedtls/音频算法同理（代价是内部 RAM）。
+4. **8080 并口屏的帧率天花板由总线算得出**：16bit 像素 × 8bit 并口 = 2 拍/像素，
+   10MHz 下 65fps；想再高只能提 pclk（15MHz → 约 98fps 理论上限，
+   但 ST7789 写周期下限 66ns，且需示波器确认信号完整性）。

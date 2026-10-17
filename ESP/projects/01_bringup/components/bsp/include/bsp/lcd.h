@@ -98,6 +98,31 @@ esp_err_t bsp_lcd_flush(void);
  */
 esp_err_t bsp_lcd_flush_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h);
 
+/* ---------------- 异步提交（LVGL / 高帧率刷新）---------------- */
+
+/**
+ * @brief  传输完成回调（**中断上下文**，只能做 ISR 安全操作）
+ * @note   i80 面板 IO 提交即返回：本回调在 DMA 真正搬完时触发。
+ *         上层（如 LVGL 的 lv_disp_flush_ready）在此立刻推进绘制流水线，
+ *         实现"渲染下一块"与"搬运本块"重叠。
+ */
+typedef void (*bsp_lcd_flush_done_cb_t)(void);
+
+/**
+ * @brief  注册传输完成回调（传 NULL 取消）
+ */
+void bsp_lcd_set_flush_done_callback(bsp_lcd_flush_done_cb_t cb);
+
+/**
+ * @brief  异步推送一块 RGB565 位图（提交后立即返回，不等 DMA）
+ * @param  x0,y0 左上角（含）；x1,y1 右下角（不含）
+ * @param  pixels 像素数据；**在传输完成回调触发前不可被改写**
+ * @return ESP_OK 已提交；其它为失败
+ * @note   一次只应有一笔在途；连续提交前请先等上一次完成回调。
+ */
+esp_err_t bsp_lcd_draw_bitmap_async(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1,
+                                    const uint16_t *pixels);
+
 /* ---------------- 直接绘制（不经过帧缓冲）---------------- */
 
 /**

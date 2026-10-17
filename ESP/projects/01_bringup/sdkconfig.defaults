@@ -48,3 +48,12 @@ CONFIG_FREERTOS_HZ=1000
 
 # ---------------- Log: INFO level by default ----------------
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---------------- Performance: LVGL / UI smoothness ----------------
+# -O2 (performance) instead of -Os: LVGL rendering loops benefit a lot
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+# main task runs ui_start() -> dashboard build(); give it headroom
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# LVGL task stack is internal RAM (created in ui_port.c, 12KB)
+CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH=4096
+
