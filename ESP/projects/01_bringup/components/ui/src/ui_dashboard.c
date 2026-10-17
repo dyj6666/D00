@@ -561,22 +561,32 @@ static void face_do_blink(void)
     }
 
     /* 25% 概率连眨两下 */
-    if ((esp_random() % 100U) < 25U) {
+    const uint32_t rnd = esp_random() % 100U;
+    if (rnd < 30U) {
         for (int i = 0; i < 2; i++) {
             face_anim_size(&s_sz_eye[i], 100, EYE_GAP_BLINK, 70, 330, lv_anim_path_ease_in);
             face_anim_size(&s_sz_eye[i], EYE_GAP_BLINK, 100, 130, 410, lv_anim_path_ease_out);
         }
         s_busy_until_ms += 300;
+
+        /* 12% 再补一次：三连眨（像被吓了一跳） */
+        if (rnd < 12U) {
+            for (int i = 0; i < 2; i++) {
+                face_anim_size(&s_sz_eye[i], 100, EYE_GAP_BLINK, 65, 560, lv_anim_path_ease_in);
+                face_anim_size(&s_sz_eye[i], EYE_GAP_BLINK, 100, 120, 630, lv_anim_path_ease_out);
+            }
+            s_busy_until_ms += 260;
+        }
     }
 
-    s_next_blink_ms = lv_tick_get() + 2000U + (esp_random() % 2600U);
+    s_next_blink_ms = lv_tick_get() + 1100U + (esp_random() % 1400U);
 }
 
 /** 开心：笑眼(∩∩) + 张嘴 + 腮红加深 + 整张脸往上蹦一下 */
 static void face_happy(void)
 {
     s_face_busy = true;
-    s_busy_until_ms = lv_tick_get() + 1900;
+    s_busy_until_ms = lv_tick_get() + 1250;
 
     for (int i = 0; i < 2; i++) {
         face_anim_opa(s_eye[i], 255, 0, 150, 0, lv_anim_path_ease_out);
@@ -592,30 +602,30 @@ static void face_happy(void)
 
     /* 复原 */
     for (int i = 0; i < 2; i++) {
-        face_anim_opa(s_eye[i], 0, 255, 220, 1500, lv_anim_path_ease_in);
-        face_anim_opa(s_eye_happy[i], 255, 0, 180, 1450, lv_anim_path_ease_in);
-        face_anim_opa(s_blush[i], 150, 95, 240, 1500, lv_anim_path_ease_in);
+        face_anim_opa(s_eye[i], 0, 255, 200, 1150, lv_anim_path_ease_in);
+        face_anim_opa(s_eye_happy[i], 255, 0, 170, 1120, lv_anim_path_ease_in);
+        face_anim_opa(s_blush[i], 150, 95, 230, 1150, lv_anim_path_ease_in);
     }
-    face_anim_opa(s_mouth, 0, 255, 200, 1500, lv_anim_path_ease_in);
-    face_anim_opa(s_mouth_open, 255, 0, 160, 1480, lv_anim_path_ease_in);
+    face_anim_opa(s_mouth, 0, 255, 190, 1150, lv_anim_path_ease_in);
+    face_anim_opa(s_mouth_open, 255, 0, 150, 1140, lv_anim_path_ease_in);
 }
 
 /** 惊讶：眼睛放大 + O 嘴 + 脸往上一弹 + 腮红变淡 */
 static void face_surprise(void)
 {
     s_face_busy = true;
-    s_busy_until_ms = lv_tick_get() + 1500;
+    s_busy_until_ms = lv_tick_get() + 1050;
 
     for (int i = 0; i < 2; i++) {
         face_anim_size(&s_sz_eye[i], 100, 120, 140, 0, lv_anim_path_ease_out);
-        face_anim_size(&s_sz_eye[i], 120, 100, 260, 900, lv_anim_path_ease_in);
+        face_anim_size(&s_sz_eye[i], 120, 100, 230, 780, lv_anim_path_ease_in);
         face_anim_opa(s_blush[i], 95, 55, 200, 0, lv_anim_path_ease_out);
-        face_anim_opa(s_blush[i], 55, 95, 240, 1000, lv_anim_path_ease_in);
+        face_anim_opa(s_blush[i], 55, 95, 220, 820, lv_anim_path_ease_in);
     }
     face_anim_opa(s_mouth, 255, 0, 120, 0, lv_anim_path_ease_in);
     face_anim_opa(s_mouth_o, 0, 255, 140, 20, lv_anim_path_ease_out);
-    face_anim_opa(s_mouth, 0, 255, 200, 1000, lv_anim_path_ease_in);
-    face_anim_opa(s_mouth_o, 255, 0, 160, 980, lv_anim_path_ease_in);
+    face_anim_opa(s_mouth, 0, 255, 190, 820, lv_anim_path_ease_in);
+    face_anim_opa(s_mouth_o, 255, 0, 150, 800, lv_anim_path_ease_in);
 
     face_anim_y(s_face_box, FACE_BOX_Y - 9, 120, 0, lv_anim_path_ease_out);
     face_anim_y(s_face_box, FACE_BOX_Y - 3, 260, 120, lv_anim_path_ease_in_out);
@@ -645,15 +655,15 @@ static void face_wiggle(void)
 static void face_wakeup(void)
 {
     s_face_busy = true;
-    s_busy_until_ms = lv_tick_get() + 900;
+    s_busy_until_ms = lv_tick_get() + 720;
 
     for (int i = 0; i < 2; i++) {
         face_size_cb(&s_sz_eye[i], 8);                 /* 先压成一条 */
-        face_anim_size(&s_sz_eye[i], 8, 110, 240, 80, lv_anim_path_ease_out);
-        face_anim_size(&s_sz_eye[i], 110, 100, 160, 320, lv_anim_path_ease_in_out);
+        face_anim_size(&s_sz_eye[i], 8, 110, 190, 60, lv_anim_path_ease_out);
+        face_anim_size(&s_sz_eye[i], 110, 100, 140, 250, lv_anim_path_ease_in_out);
     }
-    s_next_blink_ms  = lv_tick_get() + 2400U;
-    s_next_action_ms = lv_tick_get() + 2800U;
+    s_next_blink_ms  = lv_tick_get() + 900U;
+    s_next_action_ms = lv_tick_get() + 1300U;
 }
 
 /* ---------------- 页构建 ---------------- */
@@ -816,7 +826,7 @@ static void face_timer_cb(lv_timer_t *t)
         } else {
             face_wiggle();
         }
-        s_next_action_ms = now + 1500U + (esp_random() % 2000U);
+        s_next_action_ms = now + 800U + (esp_random() % 1100U);
     }
 }
 
@@ -1035,7 +1045,7 @@ void ui_dashboard_build(void)
     lv_scr_load(s_scr[0]);
 
     lv_timer_create(home_timer_cb, 250, NULL);
-    lv_timer_create(face_timer_cb, 200, NULL);
+    lv_timer_create(face_timer_cb, 120, NULL);
     lv_timer_create(motion_timer_cb, 100, NULL);
     lv_timer_create(system_timer_cb, 1000, NULL);
     lv_timer_create(nav_timer_cb, 40, NULL);
